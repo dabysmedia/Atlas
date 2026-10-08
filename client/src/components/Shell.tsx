@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
-import { BookOpen, ChevronLeft, ChevronRight, ChevronsUpDown, Flag, Hexagon, LogOut, ScrollText, Search, Settings, Swords } from 'lucide-react';
+import { BookOpen, ChevronLeft, ChevronRight, ChevronsUpDown, Flag, Hexagon, LogOut, ScrollText, Search, Settings, Swords, Sun } from 'lucide-react';
 import { api, ApiError, qk } from '../api';
 import type { World } from '../types';
 import { WorldCtx } from '../world';
@@ -26,7 +26,7 @@ const NAV = [
   { to: 'factions', label: 'Factions', icon: Swords },
   { to: 'chronicle', label: 'Chronicle', icon: ScrollText },
   { to: 'campaigns', label: 'Campaigns', icon: Flag },
-  { to: 'settings', label: 'World', icon: Settings },
+  { to: 'settings', label: 'World settings', icon: Settings },
 ];
 
 export function Shell({ noWorld }: { noWorld?: boolean }) {
@@ -87,46 +87,50 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
               {w?.name ?? 'Choose a world'}
             </motion.span>
           </AnimatePresence>
-          <ChevronsUpDown size={14} className="faint" />
+          <ChevronsUpDown size={13} className="faint" />
         </button>
+        <div className="spacer" />
         {w && (
-          <nav className="nav">
-            {NAV.map((n) => (
-              <NavLink key={n.to} to={`/w/${w.id}/${n.to}`} className={({ isActive }) => (isActive ? 'active' : '')}>
+          <button className="searchbox" onClick={() => setPalette(true)} title="Search the atlas (Ctrl+K)">
+            <Search size={14} /> <span className="grow">Search the atlas</span> <span className="kbd">Ctrl K</span>
+          </button>
+        )}
+        <div className="spacer" />
+        {w && (
+          <div className="clock" title="World clock (in-game day)">
+            <button onClick={() => day.mutate(-1)} aria-label="Previous day"><ChevronLeft size={14} /></button>
+            <Sun size={13} className="clock-icon" />
+            <span className="day"><small>Day</small> {w.currentDay}</span>
+            <button onClick={() => day.mutate(1)} aria-label="Next day"><ChevronRight size={14} /></button>
+          </div>
+        )}
+        <button className="iconbtn" onClick={logout} title="Sign out" aria-label="Sign out"><LogOut size={15} /></button>
+      </header>
+      <div className="body">
+        {w && (
+          <nav className="rail" aria-label="Sections">
+            {NAV.map((n, i) => (
+              <NavLink key={n.to} to={`/w/${w.id}/${n.to}`} className={({ isActive }) => `${isActive ? 'active' : ''} ${i === NAV.length - 1 ? 'end' : ''}`} data-tip={n.label} aria-label={n.label}>
                 {({ isActive }) => (
                   <>
-                    {isActive && <motion.span layoutId="nav-pill" className="nav-pill" transition={{ type: 'spring', stiffness: 500, damping: 38 }} />}
-                    <n.icon size={15} /> {n.label}
+                    {isActive && <motion.span layoutId="rail-mark" className="rail-mark" transition={{ type: 'spring', stiffness: 500, damping: 38 }} />}
+                    <n.icon size={19} strokeWidth={1.6} />
                   </>
                 )}
               </NavLink>
             ))}
           </nav>
         )}
-        <div className="spacer" />
-        {w && (
-          <>
-            <button className="btn ghost" onClick={() => setPalette(true)} title="Search the wiki (Ctrl+K)">
-              <Search size={15} /> <span className="kbd">Ctrl K</span>
-            </button>
-            <div className="daybox" title="World clock (in-game day)">
-              <button className="btn ghost icon sm" onClick={() => day.mutate(-1)} aria-label="Previous day"><ChevronLeft size={15} /></button>
-              <span className="day"><small>Day</small>{w.currentDay}</span>
-              <button className="btn ghost icon sm" onClick={() => day.mutate(1)} aria-label="Next day"><ChevronRight size={15} /></button>
-            </div>
-          </>
-        )}
-        <button className="btn ghost icon" onClick={logout} title="Sign out"><LogOut size={16} /></button>
-      </header>
-      <main className="main">
-        {w && (
-          <WorldCtx.Provider value={w}>
-            {/* Keyed by world: switching worlds remounts instead of cross-animating two worlds' routes. */}
-            <WorldRoutes key={w.id} />
-            <CommandPalette open={palette} onClose={() => setPalette(false)} />
-          </WorldCtx.Provider>
-        )}
-      </main>
+        <main className="main">
+          {w && (
+            <WorldCtx.Provider value={w}>
+              {/* Keyed by world: switching worlds remounts instead of cross-animating two worlds' routes. */}
+              <WorldRoutes key={w.id} />
+              <CommandPalette open={palette} onClose={() => setPalette(false)} />
+            </WorldCtx.Provider>
+          )}
+        </main>
+      </div>
       <WorldSwitcher open={switcher} onClose={() => setSwitcher(false)} currentId={worldId} forced={!!noWorld} />
     </div>
   );

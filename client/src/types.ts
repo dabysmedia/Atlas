@@ -8,6 +8,7 @@ export type WorldSummary = {
   id: string; name: string; description: string; accent: string; currentDay: number; updatedAt: string; createdAt: string;
   pageCount: number; factionCount: number; campaignCount: number; hexCount: number;
   terrainMix: { terrain: string; n: number }[]; terrainTypes: TerrainType[];
+  artVersion: number | null;
 };
 export type World = {
   id: string; name: string; description: string; accent: string; currentDay: number;
@@ -36,8 +37,10 @@ export type Settlement = {
 };
 export type FactionLite = { id: string; name: string; color: string };
 export type CampaignLite = { id: string; name: string };
+export type ArtPlacement = { x: number; y: number; w: number; h: number; opacity: number };
+export type MapArt = { version: number; width: number; height: number; mime: string; placement: ArtPlacement; updatedAt: string };
 export type MapData = {
-  map: { id: string; name: string; layout: MapLayout; backgroundUrl: string | null };
+  map: { id: string; name: string; layout: MapLayout; art: MapArt | null };
   hexes: Hex[]; claims: Claim[]; tokens: Token[]; settlements: Settlement[]; factions: FactionLite[]; campaigns: CampaignLite[];
 };
 

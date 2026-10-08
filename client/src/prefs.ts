@@ -11,3 +11,6 @@ export const lastWorld = store<string>('atlas.lastWorld');
 export const fogCampaign = (worldId: string) => store<string | null>(`atlas.fogCampaign.${worldId}`);
 export const cameraPref = (worldId: string) => store<{ x: number; y: number; zoom: number }>(`atlas.camera.${worldId}`);
 export const lastPage = (worldId: string) => store<string>(`atlas.lastPage.${worldId}`);
+export const layerPrefs = (worldId: string) =>
+  store<Partial<{ terrainOverlay: number; grid: boolean; territory: boolean }>>(`atlas.layers.${worldId}`);
+export const panelPrefs = store<{ territories?: boolean }>('atlas.panels');

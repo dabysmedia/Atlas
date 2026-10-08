@@ -55,7 +55,9 @@ export function WorldSwitcher({ open, onClose, currentId, forced }: { open: bool
                         whileHover={{ y: -4 }} transition={{ type: 'spring', stiffness: 380, damping: 28 }}>
                         <div role="button" tabIndex={0} className={`world-card ${w.id === currentId ? 'current' : ''}`}
                           onClick={() => choose(w)} onKeyDown={(e) => { if (e.key === 'Enter') choose(w); }} style={{ ['--accent' as string]: w.accent }}>
-                          <div className="art"><WorldArt world={w} /></div>
+                          <div className="art">{w.artVersion != null
+                            ? <img src={`/api/worlds/${w.id}/map/art?v=${w.artVersion}`} alt="" loading="lazy" />
+                            : <WorldArt world={w} />}</div>
                           <div className="menu">
                             <button className="btn sm icon" title="Rename" onClick={(e) => { e.stopPropagation(); setRenaming(w); }}><Pencil size={13} /></button>
                             <button className="btn sm icon danger" title="Delete" onClick={(e) => { e.stopPropagation(); setDeleting(w); }}><Trash2 size={13} /></button>

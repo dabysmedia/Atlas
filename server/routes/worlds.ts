@@ -28,6 +28,8 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
         (select coalesce(json_agg(t), '[]') from (
            select h.terrain, count(*)::int as n from hexes h join maps m on m.id = h.map_id
            where m.world_id = w.id and m.parent_hex_id is null group by h.terrain order by n desc limit 5) t) as "terrainMix",
+        (select a.version from map_art a join maps m on m.id = a.map_id
+           where m.world_id = w.id and m.parent_hex_id is null limit 1) as "artVersion",
         w.terrain_types as "terrainTypes"
       from worlds w order by w.sort_order, w.created_at`);
     return rows.rows;

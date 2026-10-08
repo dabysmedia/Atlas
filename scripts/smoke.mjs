@@ -2,6 +2,7 @@
 // Usage: BASE_URL=http://localhost:3001 ATLAS_USER=gm ATLAS_PASS=... SHOTS=/tmp/shots node scripts/smoke.mjs
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:3001';
 const DIR = process.env.SHOTS ?? './shots';
@@ -13,9 +14,12 @@ const p = await ctx.newPage();
 const errs = [];
 p.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('401')) errs.push(m.text()); });
 p.on('pageerror', (e) => errs.push('pageerror: ' + e.message));
+let failed = 0;
 const step = async (name, fn) => {
-  try { await fn(); console.log('ok  ', name); } catch (e) { console.log('FAIL', name, e.message.split('\n')[0]); await p.screenshot({ path: S('fail-' + name) }); }
+  try { await fn(); console.log('ok  ', name); } catch (e) { failed++; console.log('FAIL', name, e.message.split('\n')[0]); await p.screenshot({ path: S('fail-' + name) }); }
 };
+const nav = (label) => p.click(`.rail a[aria-label="${label}"]`);
+const ART = fileURLToPath(new URL('../server/assets/demo-map.webp', import.meta.url));
 
 await step('login', async () => {
   await p.goto(BASE);
@@ -44,7 +48,9 @@ await step('inspect-hex', async () => {
   await p.waitForSelector('.inspector');
   await p.waitForTimeout(500);
   await p.screenshot({ path: S('05-inspector') });
+  await p.click('.inspector .prop:has(.prop-label:text-is("Terrain")) .prop-value');
   await p.click('.inspector .terrain-opt:has-text("Swamp")');
+  await p.click('.inspector .notes-read');
   await p.fill('.inspector textarea.textarea', 'Bog witch lives here.');
   await p.waitForTimeout(1200);
   await p.screenshot({ path: S('06-inspector-edited') });
@@ -87,8 +93,32 @@ await step('create-world', async () => {
   await p.screenshot({ path: S('10-blank-world') });
 });
 
+await step('map-art', async () => {
+  await p.click('button[aria-label="Layers"]');
+  await p.waitForSelector('.layers .dropzone');
+  await p.setInputFiles('.mapview input[type=file]', ART);
+  // A fresh upload opens straight into alignment.
+  await p.waitForSelector('.alignbar', { timeout: 20000 });
+  await p.waitForTimeout(1200);
+  await p.screenshot({ path: S('10b-art-uploaded') });
+  await p.mouse.move(700, 500); await p.mouse.down();
+  for (let i = 1; i <= 8; i++) await p.mouse.move(700 + i * 6, 500 + i * 3);
+  await p.mouse.up();
+  await p.waitForTimeout(300);
+  await p.screenshot({ path: S('10c-aligning') });
+  await p.click('.alignbar button:has-text("Fit to grid")');
+  await p.waitForTimeout(400);
+  await p.click('.alignbar button:has-text("Save alignment")');
+  await p.waitForSelector('.alignbar', { state: 'detached' });
+  await p.waitForTimeout(600);
+  await p.screenshot({ path: S('10d-art-saved') });
+  await p.click('button[aria-label="Layers"]');
+  await p.waitForSelector('.layers .art-thumb img');
+  await p.click('button[aria-label="Layers"]');
+});
+
 await step('wiki-new-world', async () => {
-  await p.click('.nav a:has-text("Wiki")');
+  await nav('Wiki');
   await p.waitForTimeout(500);
   await p.click('.wiki-side button[title="New page"]');
   await p.waitForSelector('.ProseMirror');
@@ -120,7 +150,7 @@ await step('demo-wiki', async () => {
   await p.waitForTimeout(600);
   await p.click('.world-card:has-text("The Sundered Reach")');
   await p.waitForTimeout(1000);
-  await p.click('.nav a:has-text("Wiki")');
+  await nav('Wiki');
   await p.waitForTimeout(500);
   await p.click('.wiki-item:has-text("The Ashen Covenant")');
   await p.waitForTimeout(800);
@@ -128,19 +158,36 @@ await step('demo-wiki', async () => {
 });
 
 await step('factions', async () => {
-  await p.click('.nav a:has-text("Factions")');
+  await nav('Factions');
   await p.waitForTimeout(1000);
   await p.screenshot({ path: S('16-factions') });
+  await p.click('.fr-head:has-text("House Valcourt")');
+  await p.waitForSelector('.faction-row.open .meter');
+  const before = await p.textContent('.faction-row.open .meter:has-text("Morale") .val');
+  await p.click('.faction-row.open .meter:has-text("Morale") .adj button:has-text("+1")');
+  await p.waitForFunction((b) => document.querySelector('.faction-row.open .meter .val')?.textContent !== b, before, { timeout: 5000 }).catch(() => {});
+  await p.screenshot({ path: S('16b-faction-open') });
   await p.click('.tabs button:has-text("Roll tables")');
   await p.waitForTimeout(500);
   await p.screenshot({ path: S('17-rolltables') });
 });
 
 await step('chronicle', async () => {
-  await p.click('.nav a:has-text("Chronicle")');
+  await nav('Chronicle');
   await p.waitForTimeout(800);
   await p.screenshot({ path: S('18-chronicle') });
 });
 
+await step('search-to-map', async () => {
+  await p.keyboard.press('Control+k');
+  await p.keyboard.type('Port Halvard');
+  await p.waitForSelector('.palette li .cat:text-is("Settlement")');
+  await p.keyboard.press('Enter');
+  await p.waitForSelector('.inspector.token-panel');
+  await p.waitForTimeout(900);
+  await p.screenshot({ path: S('19-search-to-map') });
+});
+
 console.log('console errors:', errs.length ? '\n' + errs.join('\n') : 'none');
 await b.close();
+if (failed || errs.length) process.exit(1);

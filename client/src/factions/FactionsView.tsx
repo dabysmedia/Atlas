@@ -1,8 +1,8 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
-import { BookOpen, Check, Dices, History, Plus, Trash2, X } from 'lucide-react';
+import { BookOpen, Check, ChevronDown, Dices, History, Plus, Trash2, X } from 'lucide-react';
 import { api, qk } from '../api';
 import type { Faction, FactionMeter, MeterBand, MeterChange, MeterDef, RollEntry, RollTable } from '../types';
 import { useWorld } from '../world';
@@ -10,6 +10,7 @@ import { isLowTone } from '../../../shared/meters';
 import { usePageIndex } from '../wiki/usePages';
 import { Dialog } from '../components/Dialog';
 import { toast, toastError } from '../components/toast';
+import { Diamond } from '../map/panels';
 
 const PALETTE = ['#c0392b', '#3b6fd4', '#2e9e6a', '#8e44ad', '#d68910', '#16a3b8', '#b8466e', '#7f8c8d', '#c2a83e', '#5d6dbe'];
 
@@ -46,20 +47,28 @@ function FactionList() {
   const qc = useQueryClient();
   const { factions, meters, tables, loading } = useFactionData();
   const [creating, setCreating] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const openId = params.get('f');
+  const setOpen = (id: string | null) => setParams((p) => { const n = new URLSearchParams(p); if (id) n.set('f', id); else n.delete('f'); return n; }, { replace: true });
+  // Arriving from the map with ?f= scrolls the opened faction into view.
+  useEffect(() => {
+    if (!openId || loading) return;
+    const t = setTimeout(() => document.getElementById(`faction-${openId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    return () => clearTimeout(t);
+  }, [openId, loading]); // eslint-disable-line react-hooks/exhaustive-deps
   if (loading) return null;
   return (
     <>
-      <div className="faction-grid">
+      <div className="faction-list">
         <AnimatePresence>
           {(factions ?? []).map((f, i) => (
-            <motion.div key={f.id} layout initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0, transition: { delay: i * 0.04 } }} exit={{ opacity: 0, scale: 0.96 }}>
-              <FactionCard faction={f} meters={meters ?? []} tables={tables ?? []} />
+            <motion.div key={f.id} layout="position" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0, transition: { delay: i * 0.03 } }} exit={{ opacity: 0, scale: 0.98 }}>
+              <FactionRow faction={f} meters={meters ?? []} tables={tables ?? []} open={openId === f.id} onToggle={() => setOpen(openId === f.id ? null : f.id)} />
             </motion.div>
           ))}
         </AnimatePresence>
-        <button className="card" style={{ minHeight: 160, borderStyle: 'dashed', background: 'transparent', cursor: 'pointer', color: 'var(--text-dim)', display: 'grid', placeItems: 'center' }}
-          onClick={() => setCreating(true)}>
-          <span className="row"><Plus size={18} /> New faction</span>
+        <button className="btn ghost" style={{ alignSelf: 'flex-start', marginTop: 4 }} onClick={() => setCreating(true)}>
+          <Plus size={16} /> New faction
         </button>
       </div>
       <NewFactionDialog open={creating} onClose={() => setCreating(false)} meters={meters ?? []} onCreated={() => {
@@ -112,7 +121,7 @@ function NewFactionDialog({ open, onClose, meters, onCreated }: { open: boolean;
   );
 }
 
-function FactionCard({ faction, meters, tables }: { faction: Faction; meters: MeterDef[]; tables: RollTable[] }) {
+function FactionRow({ faction, meters, tables, open, onToggle }: { faction: Faction; meters: MeterDef[]; tables: RollTable[]; open: boolean; onToggle: () => void }) {
   const world = useWorld();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -135,48 +144,77 @@ function FactionCard({ faction, meters, tables }: { faction: Faction; meters: Me
     } catch (e) { toastError(e); }
   };
   const sigs = meters.filter((m) => m.kind === 'signature');
+  // Collapsed rows show the signature meter first, then the next bounded meters.
+  const summary = faction.meters
+    .map((fm) => ({ fm, def: meters.find((m) => m.id === fm.meterId) }))
+    .filter((x): x is { fm: FactionMeter; def: MeterDef } => !!x.def && x.def.min != null && x.def.max != null)
+    .sort((a, b) => Number(b.def.id === faction.signatureMeterId) - Number(a.def.id === faction.signatureMeterId))
+    .slice(0, 3);
   return (
-    <div className="card">
-      <div className="card-head">
-        <label style={{ position: 'relative', cursor: 'pointer' }} title="Faction color">
-          <span className="faction-banner" style={{ background: faction.color, display: 'block', height: 34 }} />
-          <input type="color" value={faction.color} onChange={(e) => patch({ color: e.target.value })} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
-        </label>
+    <div className={`faction-row ${open ? 'open' : ''}`} id={`faction-${faction.id}`}>
+      <button className="fr-head" onClick={onToggle} aria-expanded={open}>
+        <span className="fr-crest"><Diamond color={faction.color} size={18} /></span>
         <div className="grow">
-          <input className="input bare display" style={{ fontSize: 19, fontWeight: 600, padding: 0 }} value={name}
-            onChange={(e) => setName(e.target.value)} onBlur={() => name.trim() && name !== faction.name && patch({ name: name.trim() })}
-            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
-          <div className="row faint" style={{ fontSize: 12, gap: 10 }}>
-            <span>{faction.claims.control ?? 0} hexes held</span>
-            {!!faction.claims.contested && <span>{faction.claims.contested} contested</span>}
-          </div>
+          <div className="fr-name">{faction.name}</div>
+          <div className="fr-sub">{faction.claims.control ?? 0} hexes held{faction.claims.contested ? ` · ${faction.claims.contested} contested` : ''}</div>
         </div>
-        {faction.wikiPageId
-          ? <button className="btn ghost icon" title="Open wiki page" onClick={() => navigate(`/w/${world.id}/wiki/${faction.wikiPageId}`)}><BookOpen size={15} /></button>
-          : (
-            <select className="select" style={{ width: 34, padding: 4 }} title="Link a wiki page" value="" onChange={(e) => e.target.value && patch({ wikiPageId: e.target.value })}>
-              <option value="">📖</option>
-              {(pages.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
-            </select>
-          )}
-        <button className="btn ghost icon danger" title="Delete faction" onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
-      </div>
-      <div className="card-body">
-        <div className="row" style={{ marginBottom: 6 }}>
-          <span className="label" style={{ margin: 0 }}>Signature</span>
-          <select className="select" style={{ width: 'auto', padding: '2px 8px', fontSize: 12 }} value={faction.signatureMeterId ?? ''}
-            onChange={(e) => patch({ signatureMeterId: e.target.value || null })}>
-            <option value="">None</option>
-            {sigs.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
+        <div className="fr-meters">
+          {summary.map(({ fm, def }) => (
+            <div key={def.id} className="fr-meter" title={fm.band?.label}>
+              <span>{def.name} <b className={`tone-${fm.band?.tone ?? 'neutral'}`}>{fm.value}</b></span>
+              <div className="mini-bar"><span className={`bg-${fm.band?.tone ?? 'neutral'}`} style={{ width: `${Math.max(2, ((fm.value - def.min!) / (def.max! - def.min!)) * 100)}%` }} /></div>
+            </div>
+          ))}
         </div>
-        {faction.meters.map((fm) => {
-          const def = meters.find((m) => m.id === fm.meterId);
-          if (!def) return null;
-          const table = fm.band ? tables.find((t) => t.factionId === faction.id && t.meterId === def.id && t.band === fm.band!.label) : undefined;
-          return <MeterRow key={fm.meterId} faction={faction} def={def} fm={fm} table={table} />;
-        })}
-      </div>
+        <ChevronDown size={18} className="fr-chev" />
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }} style={{ overflow: 'hidden' }}>
+            <div className="card" style={{ border: 0, borderRadius: 0, background: 'transparent', boxShadow: 'none', borderTop: '1px solid var(--line-soft)' }}>
+            <div className="card-head" style={{ flexWrap: 'wrap', gap: 14 }}>
+              <label className="row" style={{ gap: 8 }}>
+                <span className="label" style={{ margin: 0 }}>Name</span>
+                <input className="input" style={{ width: 220, padding: '4px 8px' }} value={name} aria-label="Faction name"
+                  onChange={(e) => setName(e.target.value)} onBlur={() => name.trim() && name !== faction.name && patch({ name: name.trim() })}
+                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
+              </label>
+              <label className="row" style={{ gap: 8, position: 'relative', cursor: 'pointer' }} title="Faction color">
+                <span className="label" style={{ margin: 0 }}>Color</span>
+                <span className="swatch" style={{ background: faction.color, width: 22, height: 22, borderRadius: 5 }} />
+                <input type="color" value={faction.color} onChange={(e) => patch({ color: e.target.value })} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
+              </label>
+              <label className="row" style={{ gap: 8 }}>
+                <span className="label" style={{ margin: 0 }}>Signature</span>
+                <select className="select" style={{ width: 'auto', padding: '3px 8px', fontSize: 12.5 }} value={faction.signatureMeterId ?? ''}
+                  onChange={(e) => patch({ signatureMeterId: e.target.value || null })}>
+                  <option value="">None</option>
+                  {sigs.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              </label>
+              <div className="spacer" />
+              {faction.wikiPageId
+                ? <button className="btn ghost sm" title="Open wiki page" onClick={() => navigate(`/w/${world.id}/wiki/${faction.wikiPageId}`)}><BookOpen size={14} /> Wiki</button>
+                : (
+                  <select className="select" style={{ width: 'auto', padding: '3px 8px', fontSize: 12.5 }} title="Link a wiki page" value="" onChange={(e) => e.target.value && patch({ wikiPageId: e.target.value })}>
+                    <option value="">Link wiki page…</option>
+                    {(pages.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+                  </select>
+                )}
+              <button className="btn ghost icon danger" title="Delete faction" onClick={() => setConfirmDelete(true)}><Trash2 size={14} /></button>
+            </div>
+            <div className="card-body">
+              {faction.meters.map((fm) => {
+                const def = meters.find((m) => m.id === fm.meterId);
+                if (!def) return null;
+                const table = fm.band ? tables.find((t) => t.factionId === faction.id && t.meterId === def.id && t.band === fm.band!.label) : undefined;
+                return <MeterRow key={fm.meterId} faction={faction} def={def} fm={fm} table={table} />;
+              })}
+            </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)} title="Delete faction">
         <p className="muted" style={{ marginTop: 0 }}>Delete {faction.name}? Its claims, meter values and history are removed; borders redraw without it.</p>
         <div className="actions">

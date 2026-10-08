@@ -14,7 +14,7 @@ import { wikiRoutes } from './routes/wiki.js';
 import { mapRoutes } from './routes/map.js';
 import { factionRoutes } from './routes/factions.js';
 import { chronicleRoutes } from './routes/chronicle.js';
-import { seedDemoWorld } from './worlds.js';
+import { seedDemoWorld, upgradeDemo } from './worlds.js';
 import { worlds } from './db/schema.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -79,6 +79,8 @@ async function main() {
   if (process.env.SEED_DEMO !== 'false' && (await db.$count(worlds)) === 0) {
     await seedDemoWorld(db);
     app.log.info('seeded demo world');
+  } else if (process.env.SEED_DEMO !== 'false') {
+    for (const note of await upgradeDemo(db)) app.log.info(note);
   }
   await app.listen({ host: '0.0.0.0', port: Number(process.env.PORT ?? 3000) });
 }

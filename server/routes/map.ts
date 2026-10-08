@@ -2,10 +2,11 @@ import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Db } from '../db/index.js';
-import { campaignFog, campaigns, claims, factions, hexes, maps, settlements, tokens } from '../db/schema.js';
+import { campaignFog, campaigns, claims, factions, hexes, mapArt, maps, settlements, tokens, type ArtPlacement } from '../db/schema.js';
 import { badRequest, logEvent, notFound, worldDay } from '../history.js';
 import { getWorld, Uuid } from './worlds.js';
-import { hexLabel } from '../../shared/hex.js';
+import { gridBounds, hexLabel, type Orientation } from '../../shared/hex.js';
+import { imageSize } from '../imagesize.js';
 
 type P = { w: string; id: string };
 
@@ -27,12 +28,25 @@ async function worldHexes(db: Db, worldId: string, ids: string[]) {
 
 const HexIds = z.array(Uuid).min(1).max(20_000);
 
+const artMeta = { version: mapArt.version, width: mapArt.width, height: mapArt.height, mime: mapArt.mime, placement: mapArt.placement, updatedAt: mapArt.updatedAt };
+
+/** Default placement: the art covers the whole grid, centered, keeping its aspect ratio. */
+export function coverPlacement(layout: { cols: number; rows: number; orientation: Orientation }, width: number, height: number): ArtPlacement {
+  const b = gridBounds(layout.cols, layout.rows, layout.orientation);
+  const gw = b.maxX - b.minX, gh = b.maxY - b.minY;
+  const s = Math.max(gw / width, gh / height);
+  const w = width * s, h = height * s;
+  return { x: b.minX - (w - gw) / 2, y: b.minY - (h - gh) / 2, w, h, opacity: 1 };
+}
+
+export const MAX_ART_BYTES = 25 * 1024 * 1024;
+
 export function mapRoutes(app: FastifyInstance, db: Db) {
   /** Everything the map view needs in one round trip. Fog comes separately per campaign. */
   app.get('/api/worlds/:w/map', async (req) => {
     const w = await getWorld(db, (req.params as P).w);
     const map = await rootMap(db, w.id);
-    const [hexRows, claimRows, tokenRows, settlementRows, factionRows, campaignRows] = await Promise.all([
+    const [hexRows, claimRows, tokenRows, settlementRows, factionRows, campaignRows, artRows] = await Promise.all([
       db.select({
         id: hexes.id, q: hexes.q, r: hexes.r, terrain: hexes.terrain, state: hexes.state, name: hexes.name,
         notes: hexes.notes, wikiPageId: hexes.wikiPageId, data: hexes.data,
@@ -43,8 +57,9 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
       db.select().from(settlements).where(eq(settlements.worldId, w.id)),
       db.select({ id: factions.id, name: factions.name, color: factions.color }).from(factions).where(eq(factions.worldId, w.id)),
       db.select({ id: campaigns.id, name: campaigns.name }).from(campaigns).where(eq(campaigns.worldId, w.id)),
+      db.select(artMeta).from(mapArt).where(eq(mapArt.mapId, map.id)),
     ]);
-    return { map, hexes: hexRows, claims: claimRows, tokens: tokenRows, settlements: settlementRows, factions: factionRows, campaigns: campaignRows };
+    return { map: { ...map, art: artRows[0] ?? null }, hexes: hexRows, claims: claimRows, tokens: tokenRows, settlements: settlementRows, factions: factionRows, campaigns: campaignRows };
   });
 
   const HexPatch = z.object({
@@ -251,6 +266,63 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     if (tok.settlementId) await db.delete(settlements).where(eq(settlements.id, tok.settlementId));
     else await db.delete(tokens).where(eq(tokens.id, tok.id));
     await logEvent(db, { worldId: w.id, kind: 'token.removed', summary: `${cap(tok.kind)} "${tok.name}" removed`, payload: { token: tok } });
+    return { ok: true };
+  });
+
+  // ---------------------------------------------------------------- map art
+  app.addContentTypeParser(/^image\//, { parseAs: 'buffer', bodyLimit: MAX_ART_BYTES }, (_req, body, done) => done(null, body));
+
+  /** Upload or replace the art under the grid. A new image starts covering the whole grid. */
+  app.put('/api/worlds/:w/map/art', { bodyLimit: MAX_ART_BYTES }, async (req) => {
+    const w = await getWorld(db, (req.params as P).w);
+    const map = await rootMap(db, w.id);
+    const body = req.body;
+    if (!Buffer.isBuffer(body) || !body.length) throw badRequest('Send the image file as the request body.');
+    const info = imageSize(body);
+    if (!info) throw badRequest('That file is not a PNG, JPEG, WebP or GIF image.');
+    if (info.width < 64 || info.height < 64 || info.width > 16384 || info.height > 16384) throw badRequest('Images must be between 64 and 16384 pixels on each side.');
+    const placement = coverPlacement(map.layout, info.width, info.height);
+    const prev = await db.query.mapArt.findFirst({ where: eq(mapArt.mapId, map.id), columns: { version: true } });
+    const values = { mime: info.mime, bytes: body, width: info.width, height: info.height, placement, updatedAt: new Date() };
+    const [row] = await db.insert(mapArt).values({ mapId: map.id, ...values, version: 1 })
+      .onConflictDoUpdate({ target: mapArt.mapId, set: { ...values, version: (prev?.version ?? 0) + 1 } })
+      .returning(artMeta);
+    await logEvent(db, { worldId: w.id, kind: 'map.art', summary: `${prev ? 'Replaced' : 'Added'} the map art (${info.width}×${info.height})`, payload: { version: row.version } });
+    return row;
+  });
+
+  app.get('/api/worlds/:w/map/art', async (req, reply) => {
+    const w = await getWorld(db, (req.params as P).w);
+    const map = await rootMap(db, w.id);
+    const art = await db.query.mapArt.findFirst({ where: eq(mapArt.mapId, map.id) });
+    if (!art) throw notFound('Map art');
+    const v = (req.query as { v?: string }).v;
+    // Versioned URLs never change content, so the browser can keep them for good.
+    reply.header('cache-control', v && Number(v) === art.version ? 'private, max-age=31536000, immutable' : 'private, no-cache');
+    reply.header('etag', `"art-${map.id}-${art.version}"`);
+    return reply.type(art.mime).send(art.bytes);
+  });
+
+  const Placement = z.object({
+    x: z.number().finite(), y: z.number().finite(), w: z.number().finite().positive(), h: z.number().finite().positive(),
+    opacity: z.number().min(0).max(1),
+  }).partial();
+  app.patch('/api/worlds/:w/map/art', async (req) => {
+    const w = await getWorld(db, (req.params as P).w);
+    const map = await rootMap(db, w.id);
+    const art = await db.query.mapArt.findFirst({ where: eq(mapArt.mapId, map.id), columns: { placement: true, width: true, height: true } });
+    if (!art) throw notFound('Map art');
+    const body = req.body as { placement?: unknown; reset?: boolean };
+    const placement = body.reset ? coverPlacement(map.layout, art.width, art.height) : { ...art.placement, ...Placement.parse(body.placement ?? {}) };
+    const [row] = await db.update(mapArt).set({ placement, updatedAt: new Date() }).where(eq(mapArt.mapId, map.id)).returning(artMeta);
+    return row;
+  });
+
+  app.delete('/api/worlds/:w/map/art', async (req) => {
+    const w = await getWorld(db, (req.params as P).w);
+    const map = await rootMap(db, w.id);
+    const gone = await db.delete(mapArt).where(eq(mapArt.mapId, map.id)).returning({ v: mapArt.version });
+    if (gone.length) await logEvent(db, { worldId: w.id, kind: 'map.art', summary: 'Removed the map art' });
     return { ok: true };
   });
 }

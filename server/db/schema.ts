@@ -17,6 +17,7 @@ import type { MeterBand } from '../../shared/meters.js';
 export type { MeterBand };
 
 const tsvector = customType<{ data: string }>({ dataType: () => 'tsvector' });
+const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
 
 const id = () => uuid('id').primaryKey().defaultRandom();
 const created = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
@@ -53,6 +54,8 @@ export const worlds = pgTable('worlds', {
   terrainTypes: jsonb('terrain_types').$type<TerrainType[]>().notNull(),
   hexStates: jsonb('hex_states').$type<HexStateType[]>().notNull(),
   accent: text('accent').notNull().default('#c8a24a'),
+  /** Which bundled demo produced this world, if any (lets a later release upgrade an untouched demo). */
+  demo: text('demo'),
   sortOrder: integer('sort_order').notNull().default(0),
   createdAt: created(),
   updatedAt: updated(),
@@ -109,9 +112,26 @@ export const maps = pgTable('maps', {
   name: text('name').notNull(),
   layout: jsonb('layout').$type<MapLayout>().notNull(),
   parentHexId: uuid('parent_hex_id'),
-  backgroundUrl: text('background_url'),
   createdAt: created(),
 }, (t) => [index('maps_world_idx').on(t.worldId)]);
+
+/** Where the art sits under the grid, in map world units (hex circumradius = 40). */
+export type ArtPlacement = { x: number; y: number; w: number; h: number; opacity: number };
+
+/**
+ * Painted art under a map's hex grid. Stored in Postgres so it survives redeploys
+ * without a volume; `version` busts caches when the image is replaced.
+ */
+export const mapArt = pgTable('map_art', {
+  mapId: uuid('map_id').primaryKey().references(() => maps.id, { onDelete: 'cascade' }),
+  mime: text('mime').notNull(),
+  bytes: bytea('bytes').notNull(),
+  width: integer('width').notNull(),
+  height: integer('height').notNull(),
+  placement: jsonb('placement').$type<ArtPlacement>().notNull(),
+  version: integer('version').notNull().default(1),
+  updatedAt: updated(),
+});
 
 /**
  * Every hex on a map is a row (dense), keyed by axial coordinates.

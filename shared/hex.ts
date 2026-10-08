@@ -77,3 +77,23 @@ export function hexLabel(q: number, r: number, o: Orientation): string {
   const pad = (n: number) => String(n + 1).padStart(2, '0');
   return `${pad(col)}${pad(row)}`;
 }
+
+/** Hex circumradius in map world units, shared so art placement means the same thing everywhere. */
+export const HEX_SIZE = 40;
+
+/** World-space bounds of a rectangular grid of hexes. */
+export function gridBounds(cols: number, rows: number, o: Orientation, size = HEX_SIZE) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const corners = [0, 1, 2, 3, 4, 5].map((i) => corner(i, size, o));
+  // The extremes are on the outer rows and columns only.
+  const edge = (c: number, r: number) => c === 0 || r === 0 || c === cols - 1 || r === rows - 1 || c === 1 || r === 1;
+  for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
+    if (!edge(col, row)) continue;
+    const a = offsetToAxial(col, row, o), p = hexToPixel(a.q, a.r, size, o);
+    for (const k of corners) {
+      minX = Math.min(minX, p.x + k.x); maxX = Math.max(maxX, p.x + k.x);
+      minY = Math.min(minY, p.y + k.y); maxY = Math.max(maxY, p.y + k.y);
+    }
+  }
+  return { minX, minY, maxX, maxY };
+}

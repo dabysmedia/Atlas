@@ -15,8 +15,8 @@ a wiki, factions with meters, campaigns with party fog, and an append-only chron
 npm install
 cp .env.example .env                 # point DATABASE_URL at a local Postgres
 export $(grep -v '^#' .env | xargs)
-npm run dev:server                   # API on :3001 (set PORT=3001), runs migrations, seeds the demo world on an empty DB
-npm run dev:client                   # Vite on :5173, proxies /api to :3001
+npm run dev:server                   # API on :3000, runs migrations, seeds the demo world on an empty DB
+npm run dev:client                   # Vite on :5173, proxies /api to :3000
 ```
 
 Production build: `npm run build && npm start`.

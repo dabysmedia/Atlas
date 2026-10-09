@@ -1,8 +1,11 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
-import { BookOpen, ChevronLeft, ChevronRight, ChevronsUpDown, Flag, Hexagon, LogOut, Moon, Pause, Play, ScrollText, Search, Settings, Sunrise, Sunset, Swords, Sun } from 'lucide-react';
+import {
+  BookOpen, ChevronLeft, ChevronRight, ChevronsUpDown, Cloud, CloudDrizzle, CloudFog, CloudLightning, CloudMoon, CloudRain, CloudRainWind, CloudSun,
+  Dices, Flag, Hexagon, LogOut, Moon, Pause, Play, ScrollText, Search, Settings, Sunrise, Sunset, Swords, Sun, Wind, type LucideIcon,
+} from 'lucide-react';
 import { api, ApiError, qk } from '../api';
 import type { World } from '../types';
 import { WorldCtx } from '../world';
@@ -19,6 +22,7 @@ import { SettingsView } from './SettingsView';
 import { AmbientMap, useAmbientPref } from './AmbientMap';
 import { daySweep, formatHour, useHour } from '../daylight';
 import { DAY_SPEEDS, hoursNow, type Daylight, type DaySpeed } from '../../../shared/daylight';
+import { WEATHER, WEATHER_KINDS, type Weather, type WeatherKind } from '../../../shared/weather';
 import { partOfDay } from '../map3d/sky';
 
 // The editor is the heaviest dependency; load it on first visit to the wiki.
@@ -39,8 +43,9 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
   const qc = useQueryClient();
   const [switcher, setSwitcher] = useState(!!noWorld);
   const [palette, setPalette] = useState(false);
+  // Polled gently so weather, the day and the clock set from another screen reach this one; unchanged data doesn't re-render.
   const world = useQuery({
-    queryKey: qk.world(worldId ?? ''), enabled: !!worldId,
+    queryKey: qk.world(worldId ?? ''), enabled: !!worldId, refetchInterval: 30_000,
     queryFn: () => api<World>(`/api/worlds/${worldId}`),
   });
 
@@ -62,10 +67,14 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // A poll on its way could land after a change and put the old world back, so a change drops it first.
+  const hold = () => qc.cancelQueries({ queryKey: qk.world(worldId!), exact: true });
   const day = useMutation({
-    mutationFn: (advance: number) => api<{ currentDay: number }>(`/api/worlds/${worldId}/day`, { body: { advance } }),
-    onSuccess: (r) => {
-      qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, currentDay: r.currentDay } : w));
+    mutationFn: (advance: number) => api<{ currentDay: number; weather: Weather }>(`/api/worlds/${worldId}/day`, { body: { advance } }),
+    onSuccess: async (r) => {
+      await hold();
+      // A new day may bring new weather (when the world rolls its own each day).
+      qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, currentDay: r.currentDay, weather: r.weather } : w));
       qc.invalidateQueries({ queryKey: qk.events(worldId!) });
       qc.invalidateQueries({ queryKey: qk.worlds });
       daySweep.emit();
@@ -74,7 +83,26 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
   });
   const daylight = useMutation({
     mutationFn: (body: { hour?: number; speed?: DaySpeed }) => api<{ daylight: Daylight }>(`/api/worlds/${worldId}/daylight`, { method: 'PATCH', body }),
-    onSuccess: (r) => qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, daylight: r.daylight } : w)),
+    onSuccess: async (r) => { await hold(); qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, daylight: r.daylight } : w)); },
+    onError: toastError,
+  });
+  const putWeather = (weather: Weather) => qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, weather } : w));
+  const weatherDone = async (r: { weather: Weather }) => { await hold(); putWeather(r.weather); qc.invalidateQueries({ queryKey: qk.events(worldId!) }); };
+  // Picking a kind shows at once (the map starts easing into it); a failed save puts the old weather back.
+  const weather = useMutation({
+    mutationFn: (body: { kind?: WeatherKind; auto?: boolean }) => api<{ weather: Weather }>(`/api/worlds/${worldId}/weather`, { method: 'PATCH', body }),
+    onMutate: async (body) => {
+      await hold();
+      const prev = qc.getQueryData<World>(qk.world(worldId!))?.weather;
+      if (prev) putWeather({ ...prev, ...body });
+      return prev;
+    },
+    onSuccess: weatherDone,
+    onError: (e, _b, prev) => { if (prev) putWeather(prev); toastError(e); },
+  });
+  const rollWeather = useMutation({
+    mutationFn: () => api<{ weather: Weather }>(`/api/worlds/${worldId}/weather/roll`, { method: 'POST' }),
+    onSuccess: weatherDone,
     onError: toastError,
   });
 
@@ -89,8 +117,9 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
       if (busy || hoursNow(dl) < 24) return;
       busy = true;
       try {
-        const r = await api<{ currentDay: number; daylight: Daylight }>(`/api/worlds/${worldId}/day`, { body: { rollover: { from: current } } });
-        qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, currentDay: r.currentDay, daylight: r.daylight } : w));
+        const r = await api<{ currentDay: number; daylight: Daylight; weather: Weather }>(`/api/worlds/${worldId}/day`, { body: { rollover: { from: current } } });
+        await hold();
+        qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, currentDay: r.currentDay, daylight: r.daylight, weather: r.weather } : w));
         qc.invalidateQueries({ queryKey: qk.events(worldId!) });
       } catch { /* the next tick retries */ } finally { busy = false; }
     }, 1000);
@@ -123,7 +152,7 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
         </button>
         <div className="spacer" />
         {w && (
-          <button className="searchbox" onClick={() => setPalette(true)} title="Search the atlas (Ctrl+K)">
+          <button className="searchbox" onClick={() => setPalette(true)} title="Search the atlas (Ctrl+K)" aria-label="Search the atlas">
             <Search size={14} /> <span className="grow">Search the atlas</span> <span className="kbd">Ctrl K</span>
           </button>
         )}
@@ -133,6 +162,7 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
             <button onClick={() => day.mutate(-1)} aria-label="Previous day"><ChevronLeft size={14} /></button>
             <span className="day"><small>Day</small> {w.currentDay}</span>
             <TimeOfDay daylight={w.daylight} onChange={(b) => daylight.mutate(b)} />
+            <WeatherControl weather={w.weather} daylight={w.daylight} onChange={(b) => weather.mutate(b)} onRoll={() => rollWeather.mutate()} rolling={rollWeather.isPending} />
             <button onClick={() => day.mutate(1)} aria-label="Next day"><ChevronRight size={14} /></button>
           </div>
         )}
@@ -234,6 +264,77 @@ function TimeOfDay({ daylight, onChange }: { daylight: Daylight; onChange: (b: {
               ))}
             </div>
             <p className="faint tod-note">For this world. A running clock starts the next day at midnight.</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </span>
+  );
+}
+
+const WEATHER_ICON: Record<WeatherKind, LucideIcon> = {
+  clear: Sun, fair: CloudSun, overcast: Cloud, fog: CloudFog, drizzle: CloudDrizzle, rain: CloudRain, downpour: CloudRainWind, thunderstorm: CloudLightning, gale: Wind,
+};
+
+/** Today's weather on the world clock (a per-world DM setting): pick a kind, roll one, or let each new day roll its own. */
+function WeatherControl({ weather, daylight, onChange, onRoll, rolling }: {
+  weather: Weather; daylight: Daylight; onChange: (b: { kind?: WeatherKind; auto?: boolean }) => void; onRoll: () => void; rolling: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const btn = useRef<HTMLButtonElement>(null);
+  const grid = useRef<HTMLDivElement>(null);
+  // Clear and fair skies show the moon at night, next to the clock's own moon.
+  const night = partOfDay(useHour(daylight, 15_000)) === 'Night';
+  const icon = (k: WeatherKind) => (night && k === 'clear' ? Moon : night && k === 'fair' ? CloudMoon : WEATHER_ICON[k]);
+  const Icon = icon(weather.kind);
+  const info = WEATHER[weather.kind];
+  useEffect(() => {
+    if (!open) return;
+    grid.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus({ preventScroll: true });
+    const close = (e: PointerEvent) => { if (!(e.target as HTMLElement).closest('.wx')) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); btn.current?.focus(); } };
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('keydown', esc);
+    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('keydown', esc); };
+  }, [open]);
+  // Arrows move through the grid and Enter or Space picks, so looking around doesn't change the sky (and the chronicle) at every step.
+  const onKey = (e: React.KeyboardEvent) => {
+    const step = ({ ArrowRight: 1, ArrowLeft: -1, ArrowDown: 3, ArrowUp: -3 } as Record<string, number>)[e.key];
+    if (!step || !grid.current) return;
+    e.preventDefault();
+    const items = [...grid.current.querySelectorAll<HTMLElement>('[role="radio"]')];
+    items[(items.indexOf(document.activeElement as HTMLElement) + step + items.length) % items.length]?.focus();
+  };
+  return (
+    <span className="wx">
+      <button ref={btn} className="wx-btn" onClick={() => setOpen((o) => !o)} aria-label={`Weather: ${info.label}`} aria-expanded={open} aria-haspopup="dialog"
+        title={`${info.label} · ${info.note}${weather.auto ? ' · new weather each day' : ''}`}>
+        <Icon size={14} className="clock-icon" />
+        <span className="wx-label">{info.label}</span>
+        {weather.auto && <Dices size={10} className="faint" />}
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div className="panel tod-pop wx-pop" role="dialog" aria-label="Weather" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.14 }}>
+            <div>
+              <div className="tod-head"><Icon size={15} /> <b>{info.label}</b></div>
+              <div className="faint wx-sub">{info.note}</div>
+            </div>
+            <div className="tod-title" id="wx-today">Today's weather</div>
+            <div className="wx-kinds" role="radiogroup" aria-labelledby="wx-today" ref={grid} onKeyDown={onKey}>
+              {WEATHER_KINDS.map((k) => {
+                const K = icon(k), on = weather.kind === k;
+                return (
+                  <button key={k} role="radio" aria-checked={on} tabIndex={on ? 0 : -1} className={`wx-kind ${on ? 'on' : ''}`} title={WEATHER[k].note} onClick={() => onChange({ kind: k })}>
+                    {on && <motion.span layoutId="wx-mark" className="wx-mark" transition={{ type: 'spring', stiffness: 520, damping: 40 }} />}
+                    <K size={18} strokeWidth={1.6} />
+                    <span>{WEATHER[k].label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <button className={`wx-roll ${rolling ? 'rolling' : ''}`} onClick={onRoll} disabled={rolling}><Dices size={14} /> Roll today's weather</button>
+            <label className="toggle"><input type="checkbox" checked={weather.auto} onChange={(e) => onChange({ auto: e.target.checked })} /> Roll new weather each day</label>
+            <p className="faint tod-note">For this world. Shown on the 3D map.</p>
           </motion.div>
         )}
       </AnimatePresence>

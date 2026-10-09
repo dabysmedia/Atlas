@@ -61,3 +61,26 @@ export function rollWeather(prev?: WeatherKind | null, rnd: () => number = Math.
   }
   return WEATHER_KINDS[WEATHER_KINDS.length - 1];
 }
+
+/** How the chronicle tells of the weather: as it arrives, and when it holds for another day. */
+const TOLD: Record<WeatherKind, [arrives: string, holds: string]> = {
+  clear: ['The skies clear', 'Clear skies again'],
+  fair: ['The weather turns fair', 'Another fair day'],
+  overcast: ['A grey overcast closes over the sky', 'The grey overcast lingers'],
+  fog: ['Thick fog rolls in off the sea', 'The fog lingers'],
+  drizzle: ['A fine drizzle sets in', 'The drizzle keeps on'],
+  rain: ['Rain sets in', 'The rain keeps falling'],
+  downpour: ['The heavens open in heavy rain', 'The heavy rain goes on'],
+  thunderstorm: ['A thunderstorm rolls in', 'The storm rages on'],
+  gale: ['A gale blows up', 'The gale still howls'],
+};
+
+/** One line for the chronicle when the weather changes (or holds) from one kind to another. */
+export function weatherSummary(to: WeatherKind, from?: WeatherKind | null): string {
+  if (from === to) return TOLD[to][1];
+  if (from && (to === 'clear' || to === 'fair')) {
+    const before = from === 'fog' ? 'The fog lifts' : from === 'gale' ? 'The wind drops' : WEATHER[from].look.rain > 0.1 ? 'The rain passes' : '';
+    if (before) return `${before} and ${to === 'clear' ? 'the skies clear' : 'the day turns fair'}`;
+  }
+  return TOLD[to][0];
+}

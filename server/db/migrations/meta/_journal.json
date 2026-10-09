@@ -43,6 +43,13 @@
       "when": 1791523252115,
       "tag": "0005_model_archive",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791530447396,
+      "tag": "0006_weather",
+      "breakpoints": true
     }
   ]
 }

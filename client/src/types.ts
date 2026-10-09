@@ -1,5 +1,6 @@
 import type { Daylight } from '../../shared/daylight';
 import type { MeterBand } from '../../shared/meters';
+import type { Weather } from '../../shared/weather';
 export type { MeterBand };
 
 export type TerrainType = { key: string; name: string; color: string; glyph?: string };
@@ -15,6 +16,7 @@ export type World = {
   id: string; name: string; description: string; accent: string; currentDay: number;
   terrainTypes: TerrainType[]; hexStates: HexStateType[];
   daylight: Daylight;
+  weather: Weather;
 };
 
 export type PageIndex = { id: string; title: string; category: string; updatedAt: string };

@@ -13,6 +13,7 @@ import {
   uniqueIndex, index, primaryKey, bigserial, customType, check,
 } from 'drizzle-orm/pg-core';
 import type { MeterBand } from '../../shared/meters.js';
+import type { Weather } from '../../shared/weather.js';
 
 export type { MeterBand };
 
@@ -56,6 +57,8 @@ export const worlds = pgTable('worlds', {
   accent: text('accent').notNull().default('#c8a24a'),
   /** Time of day on the 3D map: the hour (0-24) at an instant, and how fast it runs (see shared/daylight.ts). */
   daylight: jsonb('daylight').$type<{ hour: number; speed: string; at: string }>(),
+  /** Today's weather on the 3D map, set by the DM or rolled each new day (see shared/weather.ts). */
+  weather: jsonb('weather').$type<Weather>(),
   /** Which bundled demo produced this world, if any (lets a later release upgrade an untouched demo). */
   demo: text('demo'),
   sortOrder: integer('sort_order').notNull().default(0),

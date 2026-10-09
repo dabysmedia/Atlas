@@ -9,7 +9,7 @@ import { toastError } from '../components/toast';
 
 const FILTERS = [
   { id: '', label: 'Everything' }, { id: 'note', label: 'GM notes' }, { id: 'meter', label: 'Meters' }, { id: 'claim', label: 'Claims' },
-  { id: 'hex', label: 'Hexes' }, { id: 'token', label: 'Tokens' }, { id: 'roll', label: 'Rolls' }, { id: 'fog', label: 'Fog' },
+  { id: 'hex', label: 'Hexes' }, { id: 'token', label: 'Tokens' }, { id: 'roll', label: 'Rolls' }, { id: 'fog', label: 'Fog' }, { id: 'weather', label: 'Weather' },
 ];
 
 export function ChronicleView() {
@@ -58,7 +58,7 @@ export function ChronicleView() {
                 <div key={e.id} className="chron-entry">
                   <span className="k">{e.kind.replace('.', ' ')}</span>
                   <span className="grow">{e.summary}{e.kind.startsWith('roll.') && typeof e.payload.text === 'string' && <span className="muted"> {e.payload.text}</span>}</span>
-                  <span className="faint" style={{ fontSize: 11 }} title={new Date(e.createdAt).toLocaleString()}>{e.actor !== 'gm' ? e.actor : ''}</span>
+                  <span className="faint" style={{ fontSize: 11 }} title={new Date(e.createdAt).toLocaleString()}>{[e.actor !== 'gm' && e.actor, e.payload.rolled === true && 'rolled'].filter(Boolean).join(' · ')}</span>
                 </div>
               ))}
             </div>

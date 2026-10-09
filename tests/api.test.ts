@@ -14,6 +14,7 @@ import { logEvent } from '../server/history';
 import { readFileSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
 import { wikiPages, wikiLinks, mapModel, maps, appMeta } from '../server/db/schema';
+import { WEATHER_KINDS } from '../shared/weather';
 
 const URL = process.env.TEST_DATABASE_URL ?? 'postgres://postgres@localhost:5432/atlas_test';
 let app: FastifyInstance;
@@ -414,6 +415,119 @@ describe('3D map', () => {
     expect((await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day } })).body.currentDay).toBe(day + 1);
     const evs = (await call('GET', `/api/worlds/${w.id}/events`)).body as { kind: string; actor: string }[];
     expect(evs.filter((e) => e.kind === 'day.changed' && e.actor === 'system')).toHaveLength(1);
+  });
+});
+
+describe('weather', () => {
+  type Ev = { kind: string; summary: string; payload: Record<string, unknown>; actor: string; gameDay: number };
+  const weatherEvents = async (id: string) => (await call('GET', `/api/worlds/${id}/events?kind=weather`)).body as Ev[];
+
+  it('starts fair, is set by hand with a chronicle line, and toggles auto quietly', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Stormy', cols: 4, rows: 4 })).body;
+    const fresh = (await call('GET', `/api/worlds/${w.id}`)).body;
+    expect(fresh.weather).toMatchObject({ kind: 'fair', auto: false, day: fresh.currentDay });
+    // Filled once and kept, not made up again on every read.
+    expect((await call('GET', `/api/worlds/${w.id}`)).body.weather.at).toBe(fresh.weather.at);
+    const other = (await call('POST', '/api/worlds', { name: 'Calm', cols: 4, rows: 4 })).body;
+
+    const set = await call('PATCH', `/api/worlds/${w.id}/weather`, { kind: 'thunderstorm' });
+    expect(set.status).toBe(200);
+    expect(set.body.weather).toMatchObject({ kind: 'thunderstorm', auto: false, day: fresh.currentDay });
+    expect((await call('GET', `/api/worlds/${w.id}`)).body.weather.kind).toBe('thunderstorm');
+    expect((await call('GET', `/api/worlds/${other.id}`)).body.weather.kind).toBe('fair');
+    const evs = await weatherEvents(w.id);
+    expect(evs).toHaveLength(1);
+    expect(evs[0]).toMatchObject({ kind: 'weather.changed', summary: 'A thunderstorm rolls in', actor: 'gm', gameDay: fresh.currentDay, payload: { from: 'fair', to: 'thunderstorm' } });
+    // Clearing after rain reads as the rain passing.
+    await call('PATCH', `/api/worlds/${w.id}/weather`, { kind: 'clear' });
+    expect((await weatherEvents(w.id))[0].summary).toBe('The rain passes and the skies clear');
+
+    // Picking the same kind again, or switching auto, changes no weather and logs nothing.
+    await call('PATCH', `/api/worlds/${w.id}/weather`, { kind: 'clear' });
+    const auto = (await call('PATCH', `/api/worlds/${w.id}/weather`, { auto: true })).body.weather;
+    expect(auto).toMatchObject({ kind: 'clear', auto: true });
+    expect((await call('PATCH', `/api/worlds/${w.id}/weather`, { auto: false })).body.weather.auto).toBe(false);
+    expect(await weatherEvents(w.id)).toHaveLength(2);
+
+    // Two changes sent together (a kind picked, auto switched on) both land.
+    await Promise.all([call('PATCH', `/api/worlds/${w.id}/weather`, { kind: 'gale' }), call('PATCH', `/api/worlds/${w.id}/weather`, { auto: true })]);
+    expect((await call('GET', `/api/worlds/${w.id}`)).body.weather).toMatchObject({ kind: 'gale', auto: true });
+    await call('PATCH', `/api/worlds/${w.id}/weather`, { kind: 'clear', auto: false });
+    expect(await weatherEvents(w.id)).toHaveLength(4);
+
+    expect((await call('PATCH', `/api/worlds/${w.id}/weather`, { kind: 'blizzard' })).status).toBe(400);
+    expect((await call('PATCH', `/api/worlds/${w.id}/weather`, { auto: 'yes' })).status).toBe(400);
+    expect((await call('GET', `/api/worlds/${w.id}`)).body.weather.kind).toBe('clear');
+  });
+
+  it('rolls today\'s weather on request', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Dice weather', cols: 4, rows: 4 })).body;
+    const { currentDay } = (await call('GET', `/api/worlds/${w.id}`)).body;
+    await call('PATCH', `/api/worlds/${w.id}/weather`, { kind: 'fog' });
+    const rolled = await call('POST', `/api/worlds/${w.id}/weather/roll`);
+    expect(rolled.status).toBe(200);
+    expect(WEATHER_KINDS).toContain(rolled.body.weather.kind);
+    expect(rolled.body.weather).toMatchObject({ auto: false, day: currentDay });
+    expect((await call('GET', `/api/worlds/${w.id}`)).body.weather.kind).toBe(rolled.body.weather.kind);
+    const [ev] = await weatherEvents(w.id);
+    expect(ev).toMatchObject({ actor: 'gm', gameDay: currentDay, payload: { from: 'fog', to: rolled.body.weather.kind, rolled: true } });
+    expect(ev.summary.length).toBeGreaterThan(5);
+  });
+
+  it('rolls new weather when a new day begins under auto weather, once', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Seasons', cols: 4, rows: 4 })).body;
+    const day = (await call('GET', `/api/worlds/${w.id}`)).body.currentDay as number;
+    await call('PATCH', `/api/worlds/${w.id}/weather`, { kind: 'rain', auto: true });
+    const before = (await call('GET', `/api/worlds/${w.id}`)).body.weather;
+
+    // Several days at once roll once, for the day the clock lands on.
+    const adv = (await call('POST', `/api/worlds/${w.id}/day`, { advance: 3 })).body;
+    expect(adv.currentDay).toBe(day + 3);
+    expect(adv.weather).toMatchObject({ auto: true, day: day + 3 });
+    expect(adv.weather.at).not.toBe(before.at);
+    expect(WEATHER_KINDS).toContain(adv.weather.kind);
+    expect((await call('GET', `/api/worlds/${w.id}`)).body.weather).toEqual(adv.weather);
+    let evs = await weatherEvents(w.id);
+    expect(evs).toHaveLength(2);
+    expect(evs[0]).toMatchObject({ actor: 'gm', gameDay: day + 3, payload: { from: 'rain', to: adv.weather.kind, rolled: true } });
+
+    // Midnight on a running clock rolls too, as the system; a second tab asking for the same midnight doesn't.
+    const [a, b] = await Promise.all([
+      call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day + 3 } }),
+      call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day + 3 } }),
+    ]);
+    expect(a.body.currentDay).toBe(day + 4);
+    expect(b.body.currentDay).toBe(day + 4);
+    const rolled = (await call('GET', `/api/worlds/${w.id}`)).body.weather;
+    expect(rolled.day).toBe(day + 4);
+    expect(a.body.weather).toEqual(rolled);
+    expect(b.body.weather).toEqual(rolled);
+    evs = await weatherEvents(w.id);
+    expect(evs).toHaveLength(3);
+    expect(evs[0]).toMatchObject({ actor: 'system', gameDay: day + 4, payload: { from: adv.weather.kind, to: rolled.kind, rolled: true } });
+    const days = ((await call('GET', `/api/worlds/${w.id}/events?kind=day`)).body as Ev[]).filter((e) => e.actor === 'system');
+    expect(days).toHaveLength(1);
+    // A stale rollover still answers with the weather.
+    expect((await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day } })).body.weather).toEqual(rolled);
+
+    // Going back a day keeps today's weather.
+    const back = (await call('POST', `/api/worlds/${w.id}/day`, { advance: -1 })).body;
+    expect(back.currentDay).toBe(day + 3);
+    expect(back.weather).toEqual(rolled);
+    expect(await weatherEvents(w.id)).toHaveLength(3);
+  });
+
+  it('keeps the weather across days when auto is off', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Doldrums', cols: 4, rows: 4 })).body;
+    const day = (await call('GET', `/api/worlds/${w.id}`)).body.currentDay as number;
+    const set = (await call('PATCH', `/api/worlds/${w.id}/weather`, { kind: 'overcast' })).body.weather;
+    const next = (await call('POST', `/api/worlds/${w.id}/day`, { advance: 1 })).body;
+    expect(next.currentDay).toBe(day + 1);
+    expect(next.weather).toEqual(set);
+    const later = (await call('POST', `/api/worlds/${w.id}/day`, { day: day + 10 })).body;
+    expect(later.weather).toEqual(set);
+    expect((await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day + 10 } })).body.weather).toEqual(set);
+    expect(await weatherEvents(w.id)).toHaveLength(1);
   });
 });
 

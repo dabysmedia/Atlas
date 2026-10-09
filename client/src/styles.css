@@ -175,7 +175,7 @@ h1, h2, h3, h4 { font-weight: 600; }
 }
 .world-button {
   display: flex; align-items: center; gap: 10px; padding: 4px 10px 4px 5px; border-radius: 9px;
-  border: 1px solid transparent; background: transparent; cursor: pointer; max-width: 320px;
+  border: 1px solid transparent; background: transparent; cursor: pointer; max-width: 320px; min-width: 0;
 }
 .world-button:hover { background: var(--ink-3); border-color: var(--line); }
 .world-sigil { width: 30px; height: 30px; flex: none; }
@@ -201,6 +201,8 @@ h1, h2, h3, h4 { font-weight: 600; }
 .clock .tod-btn { width: auto; border-radius: 999px; padding: 0 8px 0 4px; gap: 5px; display: inline-flex; align-items: center; color: var(--text); }
 .tod .hour { font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--text-dim); }
 .tod-pop { position: absolute; top: 38px; right: -40px; width: 268px; padding: 12px; z-index: 40; display: flex; flex-direction: column; gap: 10px; }
+/* Near-opaque: these open over the map's own panels, whose text would otherwise show through. */
+.tod-pop { background: linear-gradient(180deg, rgba(17, 29, 36, 0.98), rgba(11, 19, 24, 0.97)); }
 .tod-head { display: flex; align-items: center; gap: 7px; font-family: var(--font-display); letter-spacing: 0.04em; }
 .tod-head .faint { margin-left: auto; font-variant-numeric: tabular-nums; }
 .tod-title { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-faint); }
@@ -209,6 +211,41 @@ h1, h2, h3, h4 { font-weight: 600; }
 .clock .tod-pop .brush.on { border-color: var(--gold); color: var(--gold-hi); background: var(--gold-soft); }
 .tod-note { margin: 0; font-size: 11.5px; }
 .clock .day small { color: var(--text-faint); font-weight: 500; margin-right: 4px; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; }
+/* Today's weather, beside the hour: the kind, and a popover of all nine to pick from or roll. */
+.wx { position: relative; display: inline-flex; }
+.clock .wx-btn { width: auto; border-radius: 999px; padding: 0 8px 0 2px; gap: 5px; display: inline-flex; align-items: center; color: var(--text); }
+.wx-btn .wx-label { font-size: 12.5px; color: var(--text-dim); white-space: nowrap; }
+.wx-pop { right: -32px; width: 292px; }
+.wx-sub { font-size: 12px; margin: 2px 0 0 22px; }
+.wx-kinds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.clock .wx-pop .wx-kind {
+  position: relative; width: auto; height: auto; border-radius: 8px; padding: 9px 4px 7px; border: 1px solid var(--line-soft);
+  display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11.5px; line-height: 1.2; white-space: nowrap;
+}
+.clock .wx-pop .wx-kind.on { color: var(--gold-hi); border-color: transparent; }
+.wx-kind > svg, .wx-kind > span:not(.wx-mark) { position: relative; }
+.wx-mark { position: absolute; inset: -1px; border-radius: 8px; border: 1px solid var(--gold); background: var(--gold-soft); box-shadow: 0 0 14px rgba(214,176,106,0.12); }
+.clock .wx-pop .wx-roll {
+  width: 100%; height: 30px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--ink-3); color: var(--text);
+  display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 12.5px; box-shadow: var(--hair);
+}
+.clock .wx-pop .wx-roll:disabled { cursor: default; }
+.wx-roll.rolling svg { animation: wx-tumble 0.5s ease-in-out infinite; }
+@keyframes wx-tumble { 50% { transform: rotate(180deg) scale(0.85); } 100% { transform: rotate(360deg); } }
+
+/* Narrow screens keep the whole clock: the weather label and search text give way first, then the world's name. */
+@media (max-width: 760px) {
+  .wx-btn .wx-label { display: none; }
+  .clock .wx-btn { padding: 0 6px 0 2px; }
+  .searchbox { width: 32px; flex: none; padding: 0; justify-content: center; }
+  .searchbox .grow, .searchbox .kbd { display: none; }
+}
+@media (max-width: 520px) {
+  .topbar { gap: 4px; padding: 0 6px 0 4px; }
+  .world-button { padding: 4px; gap: 0; }
+  .world-button .name, .world-button > svg:not(.world-sigil) { display: none; }
+  .clock .day { min-width: 0; padding: 0 4px; }
+}
 
 .shell > .body { display: flex; min-height: 0; }
 .rail {
@@ -615,8 +652,15 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 .chron-day > div:last-child { border-left: 1px solid var(--line); position: relative; }
 .chron-day > div:last-child::before { content: ''; position: absolute; left: -4px; top: 11px; width: 7px; height: 7px; transform: rotate(45deg); background: var(--gold); box-shadow: 0 0 6px rgba(214,176,106,0.6); }
 .chron-entry { display: flex; gap: 12px; align-items: baseline; padding: 6px 12px 6px 18px; }
-.chron-entry .k { font-size: 10.5px; color: var(--text-faint); min-width: 112px; flex: none; text-transform: uppercase; letter-spacing: 0.08em; }
+.chron-entry .k { font-size: 10.5px; color: var(--text-faint); min-width: 124px; flex: none; text-transform: uppercase; letter-spacing: 0.08em; }
 .chron-entry .grow { font-family: var(--font-prose); font-size: 16.5px; color: #ddd3bd; }
+@media (max-width: 600px) {
+  .chron-day { grid-template-columns: 1fr; gap: 4px; }
+  .chron-day .d { text-align: left; }
+  .chron-entry { flex-wrap: wrap; gap: 0 10px; }
+  .chron-entry .k { min-width: 0; }
+  .chron-entry .grow { flex-basis: 100%; order: 3; }
+}
 
 .toast-wrap { position: fixed; bottom: 86px; left: 50%; transform: translateX(-50%); z-index: 500; display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .toast { background: #111d24; border: 1px solid var(--line); border-radius: 10px; padding: 9px 14px; box-shadow: var(--shadow); font-size: 13px; }

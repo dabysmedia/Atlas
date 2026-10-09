@@ -1,20 +1,24 @@
 /**
  * The sea. Its waves come from a spectral ocean simulated on the GPU (ocean.ts): a few tiles of
- * incommensurate sizes, each holding one band of a measured ocean spectrum, so the surface is a
- * random sea with no repeating pattern and no regular interference between a few wave trains.
+ * incommensurate sizes, each holding one band of a measured ocean spectrum. The finer tiles would
+ * still repeat in a lattice plain to see from the air, so the sea reads them over a triangle grid,
+ * each corner from its own random place in the tile, blended so the waves keep their variance:
+ * the surface is a random sea with no repeating pattern and no regular interference anywhere.
  *
  * Around the point looked at, a dense grid follows the camera (sized to the view, snapped to its
  * own cells so it never swims) and is moved by the long waves, so close views have real 3D swell.
- * Past it a flat plane carries the same shading; the two meet where the grid's waves have died
- * away, so no seam shows. Shading is per pixel from the same textures: slopes and their variance
- * (mipmapped, so waves too small for a pixel widen the sun's glitter instead of aliasing), foam,
- * and crest height. Wave groups, gusts and glassy slicks vary the sea over hundreds of units.
+ * Past it a flat plane carries the same shading, each pixel finding its own point on the sea from
+ * its view ray; the two overlap by a hair where the grid's waves have died away, so no seam shows.
+ * Shading is per pixel from the same textures: slopes and their variance (mipmapped, so waves too
+ * small for a pixel widen the sun's glitter instead of aliasing), foam, and crest height. Wave
+ * groups, gusts and glassy slicks vary the sea over hundreds of units.
  *
  * Color comes from depth (a distance-to-land shelf): pale turquoise over sand, teal over the reef,
  * blue, then ink navy far out. The surface reflects the sky and the clouds by a Fresnel term that
- * accounts for roughness, the sun or moon glitters on it by the slope distribution, light shines
- * through backlit crests, whitecaps break where the surface folds, foam lines roll in to the shore,
- * cloud shadows cross it, mist lies on it, and rain rings it.
+ * accounts for roughness, the sun or moon glitters on it by the slope distribution, a low sun
+ * shines through the crests in front of it, whitecaps break where the surface folds and a gale
+ * draws their foam out into streaks, foam lines roll in to the shore, cloud shadows cross it, mist
+ * lies on it, and rain rings it.
  */
 import * as THREE from 'three';
 import type { HeightField } from './heightfield';
@@ -27,12 +31,12 @@ const GRID = 256, GRID_LOW = 128;
 
 // Shared by the vertex and fragment shaders: cascade lookup, depth, and the sea's slow variations.
 const SEA_GLSL = /* glsl */`
-uniform sampler2D uDisp0, uDisp1, uDisp2, uDepth;
+uniform sampler2D uDisp0, uDisp1, uDepth;
 uniform vec4 uCasc[3]; // per cascade: tile heading (cos, sin), 1/size, height correction
 uniform vec3 uCascOn;
 uniform vec4 uDepthRect;
 uniform vec2 uWindDir;
-uniform float uTime, uWaves, uChop, uSimN, uGroupSpeed, uSimOn;
+uniform float uTime, uWaves, uChop, uSimN, uGroupSpeed, uSimOn, uDrift;
 ${CHOP_GLSL}
 vec2 cuv(vec2 p, vec4 c) { return vec2(dot(p, c.xy), dot(p, vec2(-c.y, c.x))) * c.z; }
 vec2 toWind(vec2 p) { return vec2(dot(p, uWindDir), dot(p, vec2(-uWindDir.y, uWindDir.x))); }
@@ -62,6 +66,43 @@ float seaShort(vec2 p) {
   #endif
   return (0.35 + 1.3 * g) * (1.0 - 0.75 * smoothstep(0.56, 0.68, sl));
 }
+// Each tile would repeat in a lattice that shows from the air (the finer ones plainly), every copy
+// moving in step. So each is read at the corners of a triangle grid laid over the sea (sides 0.42
+// of the tile), each corner from its own random place in the tile, and the reads are blended
+// across the triangle and rescaled to keep their variance (Heitz & Neyret 2018). The fields are
+// Gaussian, so the blend is the same kind of sea everywhere: nothing repeats and no triangle
+// shows. Weights are sharpened so each corner rules the middle of its own patch, where one read
+// does, and three are needed only near the triangles' centres.
+struct Tri { vec3 w; float n; vec2 a, b, c; };
+vec2 triOff(vec2 v, float seed) {
+  v = mod(v, 289.0) + seed;
+  // Without the simulation (uDrift > 0), each corner's copy also drifts its own way, so a still
+  // frame of the sea keeps changing.
+  return vec2(atmHash(v), atmHash(v + 31.7)) + uDrift * (vec2(atmHash(v + 5.1), atmHash(v + 9.4)) - 0.5);
+}
+Tri triGrid(vec2 p, float side, float seed) {
+  vec2 q = p * (0.81649658 / side);
+  vec2 s = q + (q.x + q.y) * 0.36602540; // skewed so the triangles are equilateral
+  vec2 b = floor(s), f = s - b;
+  Tri t;
+  vec3 w = vec3(1.0 - max(f.x, f.y), abs(f.x - f.y), min(f.x, f.y));
+  w *= w; w *= w;
+  w /= w.x + w.y + w.z;
+  w *= step(0.02, w);
+  t.w = w / (w.x + w.y + w.z);
+  t.n = inversesqrt(dot(t.w, t.w));
+  t.a = triOff(b, seed); t.b = triOff(b + (f.x > f.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0)), seed); t.c = triOff(b + 1.0, seed);
+  return t;
+}
+float triSide(vec4 c) { return 0.42 / c.z; }
+// Displacement and height rescaled to keep their variance; foam just blended.
+vec4 triLod(sampler2D t, vec2 uv, Tri r, float lod) {
+  vec4 d = vec4(0.0);
+  if (r.w.x > 0.0) d += textureLod(t, uv + r.a, lod) * r.w.x;
+  if (r.w.y > 0.0) d += textureLod(t, uv + r.b, lod) * r.w.y;
+  if (r.w.z > 0.0) d += textureLod(t, uv + r.c, lod) * r.w.z;
+  return vec4(d.xyz * r.n, d.w);
+}
 `;
 
 export function makeWater(atmos: Record<string, THREE.IUniform>) {
@@ -74,12 +115,14 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
     uZenith: { value: new THREE.Color() }, uHorizon: { value: new THREE.Color() },
     uDepth: { value: null }, uDepthRect: { value: new THREE.Vector4(0, 0, 1, 1) },
     uOverlay: { value: null }, uOverlayRect: { value: new THREE.Vector4(0, 0, 1, 1) }, uOverlayGlow: { value: 0.1 },
-    uNight: { value: 0 }, uPixAngle: { value: 0.001 }, uHole: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uNight: { value: 0 }, uPixAngle: { value: 0.001 },
+    uHole: { value: new THREE.Vector4(0, 0, 0, 0) }, uHoleE: { value: 0.05 }, uSeaLevel: { value: 0 }, uViewport: { value: new THREE.Vector4(0, 0, 1, 1) },
     uWaves: { value: 1 }, uChop: { value: 0.5 }, uFoamAmt: { value: 0.5 }, uRain: { value: 0 },
-    uDisp0: { value: null }, uDisp1: { value: null }, uDisp2: { value: null },
+    uDisp0: { value: null }, uDisp1: { value: null },
     uMom0: { value: null }, uMom1: { value: null }, uMom2: { value: null },
     uCasc: { value: [new THREE.Vector4(1, 0, 1, 1), new THREE.Vector4(1, 0, 1, 1), new THREE.Vector4(1, 0, 1, 1)] },
     uCascOn: { value: new THREE.Vector3(1, 1, 1) }, uSimN: { value: 256 }, uSimOn: { value: 0 },
+    uDrift: { value: 0 },
     uWindDir: { value: wind }, uCapVar: { value: new THREE.Vector2(0.008, 0.006) },
     uHs: { value: 1 }, uGroupSpeed: { value: 0.5 * Math.sqrt(OCEAN_G / oceanSpec(false).kp) },
     uGridCell: { value: 1 }, uFoamTex: { value: foamTexture() },
@@ -93,21 +136,23 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
     uniform float uGridCell;
     varying vec3 vWp;
     varying vec2 vBase;
-    // One cascade's displacement, filtered to the grid's spacing so finer waves don't alias.
-    vec3 cascDisp(sampler2D t, vec2 p, vec4 c, float a) {
-      vec4 d = textureLod(t, cuv(p, c), max(0.0, log2(uGridCell * uSimN * c.z) + 0.5));
+    // A cascade's displacement (read at the grid's spacing so finer waves don't alias) in the world.
+    float gridLod(vec4 c) { return max(0.0, log2(uGridCell * uSimN * c.z) + 0.5); }
+    vec3 cascDisp(vec4 d, vec4 c, float a) {
       vec2 h = vec2(c.x * d.x - c.y * d.z, c.y * d.x + c.x * d.z) * chopK(uChop);
       return vec3(h.x, d.y, h.y) * a * c.w;
     }
     void main() {
       vec4 wp = modelMatrix * vec4(position, 1.0);
-      vBase = wp.xz;
+      vec2 p = wp.xz;
+      vBase = p;
       #ifdef NEAR
         // Swell dies in the shallows and toward the edge of the grid, where it meets the flat far sea.
-        float k = uSimOn * smoothstep(1.5, 22.0, seaDepth(wp.xz)) * smoothstep(0.48, 0.4, max(abs(position.x), abs(position.z)));
+        float k = uSimOn * smoothstep(1.5, 22.0, seaDepth(p)) * smoothstep(0.48, 0.4, max(abs(position.x), abs(position.z)));
         if (k > 0.0) {
-          wp.xyz += cascDisp(uDisp0, wp.xz, uCasc[0], seaGroups(wp.xz) * k);
-          wp.xyz += cascDisp(uDisp1, wp.xz, uCasc[1], seaShort(wp.xz) * k * uCascOn.y);
+          vec4 c0 = uCasc[0], c1 = uCasc[1];
+          wp.xyz += cascDisp(triLod(uDisp0, cuv(p, c0), triGrid(p, triSide(c0), 113.0), gridLod(c0)), c0, seaGroups(p) * k);
+          wp.xyz += cascDisp(triLod(uDisp1, cuv(p, c1), triGrid(p, triSide(c1), 0.0), gridLod(c1)), c1, seaShort(p) * k * uCascOn.y);
         }
       #endif
       vWp = wp.xyz;
@@ -122,13 +167,33 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
     ${ATMOS_GLSL}
     ${SEA_GLSL}
     uniform sampler2D uMom0, uMom1, uMom2, uOverlay, uFoamTex;
-    uniform float uOverlayGlow, uNight, uPixAngle, uFoamAmt, uRain, uHs;
+    uniform float uOverlayGlow, uNight, uPixAngle, uFoamAmt, uRain, uHs, uSeaLevel, uHoleE;
     uniform vec3 uKeyDir, uKeyColor, uSunDir, uHemiSky, uHemiGround, uZenith, uHorizon;
-    uniform vec4 uOverlayRect, uHole;
+    uniform vec4 uOverlayRect, uHole, uViewport;
     uniform vec2 uCapVar;
+    #ifndef NEAR
+      uniform mat4 projectionMatrix;
+    #endif
     varying vec3 vWp;
     varying vec2 vBase;
     bool outside(vec2 uv) { return uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0; }
+
+    // Over the triangle grid: a cascade's displacement and foam, and its LEAN moments (mean slope,
+    // rescaled like the fields, and the variance below the pixel, blended by the same weights squared).
+    vec4 triGrad(sampler2D t, vec2 uv, vec2 gx, vec2 gy, Tri r) {
+      vec4 d = vec4(0.0);
+      if (r.w.x > 0.0) d += textureGrad(t, uv + r.a, gx, gy) * r.w.x;
+      if (r.w.y > 0.0) d += textureGrad(t, uv + r.b, gx, gy) * r.w.y;
+      if (r.w.z > 0.0) d += textureGrad(t, uv + r.c, gx, gy) * r.w.z;
+      return vec4(d.xyz * r.n, d.w);
+    }
+    void momAdd(vec4 m, float w, float n, inout vec2 mu, inout vec2 v) { mu += m.xy * (w * n); v += max(m.zw - m.xy * m.xy, 0.0) * (w * w * n * n); }
+    void triMom(sampler2D t, vec2 uv, vec2 gx, vec2 gy, Tri r, out vec2 mu, out vec2 v) {
+      mu = vec2(0.0); v = vec2(0.0);
+      if (r.w.x > 0.0) momAdd(textureGrad(t, uv + r.a, gx, gy), r.w.x, r.n, mu, v);
+      if (r.w.y > 0.0) momAdd(textureGrad(t, uv + r.b, gx, gy), r.w.y, r.n, mu, v);
+      if (r.w.z > 0.0) momAdd(textureGrad(t, uv + r.c, gx, gy), r.w.z, r.n, mu, v);
+    }
 
     // Ocean BRDF after Bruneton, Neyret & Holzschuch (2010): a Gaussian distribution of slopes
     // whose variance is what the textures couldn't resolve, with Smith shadowing.
@@ -168,13 +233,21 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
 
     void main() {
       #ifdef NEAR
-        if (uHole.z > 0.0 && (abs(vBase.x - uHole.x) > uHole.z || abs(vBase.y - uHole.y) > uHole.w)) discard;
+        vec3 wp = vWp;
+        vec2 p = vBase;
+        if (uHole.z > 0.0 && (abs(p.x - uHole.x) > uHole.z + uHoleE || abs(p.y - uHole.y) > uHole.w + uHoleE)) discard;
       #else
-        if (uHole.z > 0.0 && abs(vBase.x - uHole.x) < uHole.z && abs(vBase.y - uHole.y) < uHole.w) discard;
+        // The far sea is two vast triangles, across which interpolated positions drift by whole
+        // units. So each pixel finds its own point on the sea from its view ray, and the far sea
+        // meets the wave grid exactly: the two overlap by uHoleE, and the grid, drawn first, wins.
+        vec2 ndc = (gl_FragCoord.xy - uViewport.xy) / uViewport.zw * 2.0 - 1.0;
+        vec3 rd = vec3((ndc.x + projectionMatrix[2][0]) / projectionMatrix[0][0], (ndc.y + projectionMatrix[2][1]) / projectionMatrix[1][1], -1.0) * mat3(viewMatrix);
+        vec3 wp = cameraPosition + rd * ((uSeaLevel - cameraPosition.y) / min(rd.y, -1e-6));
+        vec2 p = wp.xz;
+        if (uHole.z > 0.0 && abs(p.x - uHole.x) < uHole.z - uHoleE && abs(p.y - uHole.y) < uHole.w - uHoleE) discard;
       #endif
-      vec2 p = vBase;
       float depth = seaDepth(p);
-      vec3 toEye = cameraPosition - vWp;
+      vec3 toEye = cameraPosition - wp;
       float dist = length(toEye);
       vec3 V = toEye / dist;
       // World units per pixel here (smooth across the wave grid, unlike derivatives of a displaced mesh).
@@ -185,7 +258,9 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
       float a0 = uCasc[0].w * grp * calm * uSimOn;
       float a1 = uCasc[1].w * sh * calmS * uCascOn.y * uSimOn;
       float a2 = uCasc[2].w * sh * calmS * uCascOn.z * uSimOn;
-      vec2 uv0 = cuv(p, uCasc[0]), uv1 = cuv(p, uCasc[1]), uv2 = cuv(p, uCasc[2]);
+      vec2 uv0 = cuv(p, uCasc[0]), uv1 = cuv(p, uCasc[1]);
+      vec2 g0x = dFdx(uv0), g0y = dFdy(uv0), g1x = dFdx(uv1), g1y = dFdy(uv1);
+      Tri t0 = triGrid(p, triSide(uCasc[0]), 113.0), t1 = triGrid(p, triSide(uCasc[1]), 0.0);
       // The long tile's texels are several units wide: read it a little off true, by a noise, so
       // its whitecaps have ragged edges instead of bilinear blobs (and crest heights don't care).
       #ifdef LOW
@@ -193,11 +268,21 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
       #else
         vec2 jit = (vec2(atmNoise(p * 0.23), atmNoise(p * 0.23 + 17.3)) - 0.5) * 7.0;
       #endif
-      vec4 d0 = texture(uDisp0, cuv(p + jit, uCasc[0])), d1 = texture(uDisp1, uv1);
-      vec4 m0 = texture(uMom0, uv0), m1 = texture(uMom1, uv1), m2 = texture(uMom2, uv2);
+      vec4 d0 = triGrad(uDisp0, cuv(p + jit, uCasc[0]), g0x, g0y, t0);
+      // The short waves' heights and foam only show while they span a pixel or so.
+      vec4 d1 = pix < 1.3 ? triGrad(uDisp1, uv1, g1x, g1y, t1) * (1.0 - smoothstep(0.9, 1.3, pix)) : vec4(0.0);
       // LEAN: mean slope, and the variance the filtered texels hold, per cascade, in the wind's frame.
-      vec2 mu = a0 * m0.xy + a1 * m1.xy + a2 * m2.xy;
-      vec2 s2 = a0 * a0 * max(m0.zw - m0.xy * m0.xy, 0.0) + a1 * a1 * max(m1.zw - m1.xy * m1.xy, 0.0) + a2 * a2 * max(m2.zw - m2.xy * m2.xy, 0.0);
+      vec2 mu0, v0, mu1, v1, mu2 = vec2(0.0), v2 = vec2(0.0);
+      triMom(uMom0, uv0, g0x, g0y, t0, mu0, v0);
+      triMom(uMom1, uv1, g1x, g1y, t1, mu1, v1);
+      #ifndef LOW
+        vec2 uv2 = cuv(p, uCasc[2]), g2x = dFdx(uv2), g2y = dFdy(uv2);
+        // Once the ripples' whole tile is under a few pixels, only their variance is left.
+        if (pix < 8.0) triMom(uMom2, uv2, g2x, g2y, triGrid(p, triSide(uCasc[2]), 57.0), mu2, v2);
+        else { vec4 m2 = textureLod(uMom2, uv2, 8.0); v2 = max(m2.zw - m2.xy * m2.xy, 0.0); }
+      #endif
+      vec2 mu = a0 * mu0 + a1 * mu1 + a2 * mu2;
+      vec2 s2 = a0 * a0 * v0 + a1 * a1 * v1 + a2 * a2 * v2;
       float ac = sh * calmS;
       s2 += uCapVar * ac * ac + 2e-5;
 
@@ -205,12 +290,12 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
       vec3 rain = vec3(0.0);
       if (uRain > 0.002) {
         // Each layer fades out before its rings shrink below a couple of pixels.
-        float v1 = 1.0 - smoothstep(0.03, 0.09, pix / 3.2), v2 = 1.0 - smoothstep(0.03, 0.09, pix / 5.0), v3 = 1.0 - smoothstep(0.03, 0.09, pix / 7.5);
+        float r1 = 1.0 - smoothstep(0.03, 0.09, pix / 3.2), r2 = 1.0 - smoothstep(0.03, 0.09, pix / 5.0), r3 = 1.0 - smoothstep(0.03, 0.09, pix / 7.5);
         #ifndef LOW
-        if (v3 > 0.0) rain = ripple(p, 3.2, 0.83, 0.0) * v1 + ripple(p + 0.37, 5.0, 0.61, 41.0) * v2 + ripple(p - 0.71, 7.5, 0.47, 83.0) * v3;
+        if (r3 > 0.0) rain = ripple(p, 3.2, 0.83, 0.0) * r1 + ripple(p + 0.37, 5.0, 0.61, 41.0) * r2 + ripple(p - 0.71, 7.5, 0.47, 83.0) * r3;
         #endif
         rain *= uRain;
-        s2 += uRain * 0.035 * (1.0 - v2 * 0.6);
+        s2 += uRain * 0.035 * (1.0 - r2 * 0.6);
       }
 
       vec2 muW = vec2(uWindDir.x * mu.x - uWindDir.y * mu.y, uWindDir.y * mu.x + uWindDir.x * mu.y) + rain.xy * 0.3;
@@ -218,7 +303,7 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
       vec3 Tx = normalize(vec3(uWindDir.x, 0.0, uWindDir.y) - n * dot(n, vec3(uWindDir.x, 0.0, uWindDir.y)));
       vec3 Ty = cross(Tx, n);
       vec3 L = normalize(uKeyDir);
-      float cs = cloudShadowAt(vWp);
+      float cs = cloudShadowAt(wp);
 
       // Body color by depth: sand-pale turquoise, reef teal, open-sea blue, then ink navy far out.
       vec3 sand = vec3(0.09, 0.30, 0.26), reef = vec3(0.012, 0.13, 0.15), blue = vec3(0.004, 0.035, 0.085), navy = vec3(0.0016, 0.0075, 0.03);
@@ -230,11 +315,12 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
       float NL = max(dot(n, L), 0.0);
       vec3 col = body * (amb * 1.1 + uKeyColor * (0.12 + 0.55 * NL) * cs);
 
-      // Light through the crests when looking low across the water toward the sun or moon.
-      float back = pow(max(dot(-V.xz / max(length(V.xz), 1e-3), L.xz / max(length(L.xz), 1e-3)), 0.0), 3.0) * pow(1.0 - V.y, 3.0);
+      // Light through the crests: a low sun or moon behind the waves, seen across the water, shines
+      // through their thin tops. Forward scattering, so it is gone once the light stands high.
+      float back = pow(max(dot(-V, L), 0.0), 4.0);
       float hgt = (a0 * d0.y + a1 * d1.y) / (uHs * max(uWaves, 0.3));
-      float crest = smoothstep(-0.1, 0.8, hgt);
-      col += vec3(0.01, 0.1, 0.08) * uKeyColor * (back * 0.7 + 0.03) * crest * crest * smoothstep(4.0, 30.0, depth) * cs;
+      float crest = smoothstep(0.0, 0.9, hgt);
+      col += vec3(0.01, 0.1, 0.08) * uKeyColor * back * crest * crest * smoothstep(4.0, 30.0, depth) * cs;
 
       // The rings' crests and the splashes catch the sky's light.
       col += (amb * 0.5 + uKeyColor * 0.1 * cs) * min(rain.z, 1.0) * 0.35;
@@ -251,7 +337,7 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
       R.y = abs(R.y);
       vec3 sky = mix(uHorizon, uZenith, smoothstep(0.0, 0.5 + sigV, R.y));
       if (R.y > 0.02) {
-        vec2 cp = vWp.xz + R.xz * ((uCloudTile.w - vWp.y) / R.y);
+        vec2 cp = wp.xz + R.xz * ((uCloudTile.w - wp.y) / R.y);
         vec3 cloud = uHemiSky * 0.85 + uKeyColor * 0.16 * max(L.y, 0.0);
         sky = mix(sky, cloud, cloudCoverAt(cp) * 0.55 * smoothstep(0.03, 0.25, R.y));
       }
@@ -274,62 +360,61 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
         float laceF = texture(uFoamTex, wq * vec2(0.14, 0.2) + vec2(0.37 + uTime * 0.03, 0.61)).r;
         float laceM = texture(uFoamTex, wq * vec2(0.028, 0.045) + vec2(0.71 + uTime * 0.01, 0.13)).r;
       #endif
-      float farK = smoothstep(1.2, 5.0, pix);
       // Short waves break mostly on the crests of the long ones.
       float onCrest = 0.35 + 0.65 * smoothstep(-0.3, 0.7, a0 * d0.y / (uHs * max(uWaves, 0.3)));
       // The long waves' foam thins soon after it breaks (the power), so its patches stay a few units
       // across; thin old foam is clear enough to see through (the toe); and the short waves'
       // whitecaps, a unit or two across, fade as the view draws back instead of turning to specks.
-      float caps = smoothstep(0.12, 1.0, pow(d0.w, 2.2) * smoothstep(0.5, 1.3, grp) * calm
+      float caps = smoothstep(0.12, 1.0, pow(d0.w, mix(2.2, 1.5, uFoamAmt)) * smoothstep(0.5, 1.3, grp) * calm
         + d1.w * onCrest * calmS * uCascOn.y * (1.0 - smoothstep(0.35, 1.2, pix))) * uSimOn;
       float fn = depth < 14.0 ? atmFbm(p * 0.09 + vec2(uTime * 0.05, -uTime * 0.03)) : 0.5; // only the shore needs it
       float toShore = fract(depth * 0.085 - uTime * 0.11 + (fn - 0.5) * 0.35);
       float lines = smoothstep(0.8, 0.97, toShore) * (1.0 - smoothstep(2.0, 13.0, depth)) * smoothstep(0.25, 0.6, fn + 0.15);
       float swash = (1.0 - smoothstep(0.0, 1.6, depth)) * (0.55 + 0.45 * sin(uTime * 0.9 + fn * 6.0));
       float shore = clamp(lines * 0.9 + swash * 0.8, 0.0, 1.0);
-      // Thin foam is a translucent lace, thick foam an opaque sheet; from afar, its average. The
-      // whitecaps' lace has three scales: fine close up, a coarser one drawn out along the wind at
-      // middle range (where the fine one is below a pixel and its threshold would give hard solid
-      // blobs, so a whitecap still breaks into a ragged patch and trail), then the fraction covered.
-      float capF = mix(smoothstep(1.0 - caps, 1.3 - caps, laceF), smoothstep(1.0 - caps, 1.3 - caps, laceM), smoothstep(0.15, 0.6, pix));
-      capF = mix(capF, caps, smoothstep(0.9, 2.8, pix));
+      // Whitecaps are a lace whose threshold falls as the foam thickens, but never to a solid sheet:
+      // even a fresh cap keeps holes and a ragged rim and lets a little sea through. The lace has
+      // three scales: fine close up, a coarser one drawn out along the wind at middle range (where
+      // the fine one is below a pixel), and past a few units a pixel, the share of surface covered.
+      float cov = 0.7 * caps;
+      float capF = mix(smoothstep(1.0 - cov, 1.25 - cov, laceF), smoothstep(1.0 - cov, 1.25 - cov, laceM), smoothstep(0.15, 0.6, pix));
+      capF = mix(capF, cov * 0.8, smoothstep(2.5, 5.0, pix));
       float shoreF = mix(smoothstep(1.0 - shore, 1.3 - shore, lace), shore, smoothstep(0.4, 1.5, pix));
-      float foam = max(capF * smoothstep(0.0, 0.06, caps) * (0.45 + 0.55 * caps), shoreF * smoothstep(0.0, 0.06, shore) * (0.45 + 0.55 * shore));
+      float foam = max(capF * smoothstep(0.0, 0.06, caps) * (0.45 + 0.4 * caps), shoreF * smoothstep(0.0, 0.06, shore) * (0.45 + 0.55 * shore));
       // From afar a whitecap fills only part of the texels that carry it: an average, not a speck.
-      float foamFar = max(caps * mix(0.6, 0.3, smoothstep(2.0, 8.0, pix)), shore * 0.7);
+      float foamFar = max(caps * mix(0.5, 0.3, smoothstep(2.0, 8.0, pix)), shore * 0.7);
       float gale = smoothstep(1.35, 2.1, uWaves) * uFoamAmt * calm;
       if (gale > 0.0) {
-        // Streaks: in lanes along the wind (bent gently, so they waver), each lane holding one line
-        // at its own offset that comes and goes along its length, so streaks run long and thin,
-        // start and end, and never loop. A line has a width in world units and is antialiased:
-        // thinner than a pixel it fades by its coverage instead of breaking into dots, and once the
-        // lanes near a pixel apart it gives way to its average.
-        vec2 sq = wq + vec2(0.0, (atmNoise(wq * vec2(0.003, 0.012) + 3.0) - 0.5) * 36.0);
-        float streak = 0.0;
-        for (int i = 0; i < 2; i++) {
-          float sp = i == 0 ? 9.0 : 4.3, lw = i == 0 ? 1.1 : 0.6;
-          float y = sq.y / sp + (i == 0 ? 0.0 : 0.43), id = floor(y);
-          float h = atmHash(vec2(id, 5.0 + float(i))), on = step(i == 0 ? 0.45 : 0.62, atmHash(vec2(id, 11.0 + float(i))));
-          float seg = on * smoothstep(0.55, 0.8, atmNoise(vec2(sq.x * (i == 0 ? 0.005 : 0.011) + h * 37.0 - uTime * 0.012, id * 1.7)));
-          float off = 0.25 + 0.5 * h + (atmNoise(vec2(sq.x * 0.02, id * 2.3 + 0.5)) - 0.5) * 0.3; // each line wanders in its lane
-          float w = lw * (0.3 + 0.7 * seg) * 0.5 / pix; // half width in pixels, tapering at the ends
-          float dpx = abs(fract(y) - off) / max(fwidth(y), 1e-5);
-          float line = clamp(1.0 - dpx / max(w, 0.7), 0.0, 1.0) * min(1.0, w * 1.4) * seg;
-          line *= (0.55 + 0.45 * atmNoise(vec2(sq.x * 0.12, id * 3.1))) * (0.35 + 0.65 * atmNoise(vec2(sq.x * 0.03, id * 1.3 + 7.0))); // filaments, and fading along
-          line = mix(line, 0.12 * lw / sp, smoothstep(0.15, 0.4, pix / sp));
-          streak += line * (i == 0 ? 0.6 : 0.4);
-        }
-        float dens = smoothstep(0.35, 0.75, atmNoise(wq * vec2(0.002, 0.006) + 9.0));
-        foam = max(foam, min(streak, 1.0) * dens * gale * 0.8);
-        foamFar = max(foamFar, 0.012 * dens * gale);
+        // Streaks: foam torn from the breaking crests and drawn out downwind. From the air they are
+        // long, thin lines along the wind a few units wide that waver, converge and part, stop and
+        // start. So the sea across the wind is cut into lanes, a few holding one streak each, which
+        // bends within its lane on its own; each streak's width changes along it, its edge is
+        // fuzzy, the lace breaks it into bubbles and gaps, and it lies only downwind of crests that
+        // are breaking. Thinner than a pixel it fades by its coverage; once a pixel is a few units,
+        // only the average is left.
+        vec2 sq = wq + vec2(0.0, (atmNoise(wq * vec2(0.004, 0.011) + 3.0) - 0.5) * 22.0);
+        float lane = sq.y / 9.0, id = floor(lane);
+        float mid = 0.25 + 0.5 * atmHash(vec2(id, 3.1)) + 0.25 * (atmNoise(vec2(sq.x * 0.007, id * 1.37)) - 0.5);
+        float sd = abs(fract(lane) - mid) * 9.0; // world units to the streak's middle
+        float hw = 0.35 + 1.6 * atmNoise(vec2(sq.x * 0.012, id * 2.11 + 0.5)); // its half width
+        float vein = (1.0 - smoothstep(0.2 * hw, hw + 0.7 * pix, sd)) * hw / (hw + 0.35 * pix);
+        float on = step(atmHash(vec2(id, 8.9)), 0.7) * smoothstep(0.4, 0.62, atmNoise(vec2(sq.x / (50.0 + 60.0 * atmHash(vec2(id, 1.3))), id * 3.7)));
+        float bub = mix(smoothstep(0.15, 0.7, texture(uFoamTex, sq * vec2(0.012, 0.11) + vec2(0.31, 0.77)).r), 0.5, smoothstep(0.3, 1.2, pix));
+        float brk = triLod(uDisp0, cuv(p - uWindDir * 40.0, uCasc[0]), t0, 4.5).w;
+        // Streaks gather in broad bands and each fades in and out along its length.
+        float dens = smoothstep(0.5, 1.2, sh) * (0.2 + 0.8 * smoothstep(0.005, 0.04, brk)) * (0.25 + 0.75 * smoothstep(0.25, 0.65, atmNoise(sq * vec2(0.0035, 0.014) + 9.1)));
+        float tone = 0.3 + 0.7 * atmNoise(vec2(sq.x * 0.02, id * 5.1 + 2.0));
+        float streak = mix(vein * on * tone * (0.25 + 0.75 * bub), 0.04, smoothstep(1.8, 4.0, pix));
+        foam = max(foam, streak * dens * gale * 0.65);
+        foamFar = max(foamFar, 0.04 * dens * gale * 0.65);
       }
-      foam = mix(foam, foamFar, farK) * (1.0 - ov.a * 0.5);
+      foam = mix(foam, foamFar, smoothstep(3.0, 8.0, pix)) * (1.0 - ov.a * 0.5);
       vec3 foamCol = (amb * 1.15 + uKeyColor * 0.55 * max(L.y, 0.2) * cs + uOverlayGlow * 0.15) * (0.8 + 0.2 * foam);
       col = mix(col, foamCol, foam);
 
       float alpha = mix(0.4, 1.0, smoothstep(0.0, 18.0, depth));
       alpha = max(alpha, max(foam, ov.a));
-      float mist = mistAt(vWp, cameraPosition);
+      float mist = mistAt(wp, cameraPosition);
       col = mix(col, uMistColor, mist);
       alpha = max(alpha, mist);
       gl_FragColor = vec4(col, alpha);
@@ -338,24 +423,32 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
       #include <fog_fragment>
     }`;
 
-  const make = (near: boolean) => new THREE.ShaderMaterial({ uniforms, fog: true, transparent: true, vertexShader, fragmentShader, defines: near ? { NEAR: 1 } : {} });
+  const make = (near: boolean) => new THREE.ShaderMaterial({
+    uniforms, fog: true, transparent: true, vertexShader, fragmentShader, defines: near ? { NEAR: 1 } : {},
+    // The far sea sits a hair behind the grid where the two overlap, so the grid wins there.
+    polygonOffset: !near, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+  });
   const mats = () => [near.material, far.material] as THREE.ShaderMaterial[];
   const grid = (n: number) => new THREE.PlaneGeometry(1, 1, n, n).rotateX(-Math.PI / 2);
-  let low = false;
+  let low = false, noFloat = false, precise = false;
   const near = new THREE.Mesh(grid(GRID), make(true));
   const far = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), make(false));
-  near.renderOrder = 2; far.renderOrder = 1;
+  near.renderOrder = 1; far.renderOrder = 2;
   near.frustumCulled = false; far.frustumCulled = false;
+  // The far sea finds its points from the pixel's view ray, so it needs the viewport it is drawn into.
+  far.onBeforeRender = (r) => { r.getCurrentViewport(uniforms.uViewport.value as THREE.Vector4); };
   const mesh = new THREE.Group();
-  mesh.add(far, near);
+  mesh.add(near, far);
 
   let sim: OceanSim | null = null;
   let seaY = 0;
   let holeEnabled = true;
+  let lastStep = -1;
 
   /** Center the far sea on the map and size it; the wave grid follows the camera (update). */
   const place = (cx: number, cz: number, sea: number, span: number) => {
     seaY = sea;
+    uniforms.uSeaLevel.value = sea;
     far.position.set(cx, sea, cz); far.scale.set(span * 16, 1, span * 16);
     near.position.y = sea;
   };
@@ -387,13 +480,16 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
   };
 
   const dir = new THREE.Vector3();
+  const dispU = [uniforms.uDisp0, uniforms.uDisp1], momU = [uniforms.uMom0, uniforms.uMom1, uniforms.uMom2];
+  const cascU = uniforms.uCasc.value as THREE.Vector4[], cascOn = uniforms.uCascOn.value as THREE.Vector3;
   /**
    * Once per rendered frame, before drawing: advance the waves to `time` (seconds), skipping the
    * cascades whose waves are all below a pixel from this camera, and move the wave grid under the
-   * view. `light` gives the true sun and moon for the glitter.
+   * view. `light` gives the true sun and moon for the glitter. With `step` false the waves stay as
+   * they are and only the grid moves (a still drawn from another camera between frames).
    */
-  const update = (gl: THREE.WebGLRenderer, time: number, camera: THREE.Camera, light?: Lighting) => {
-    if (!sim) sim = new OceanSim(gl, uniforms as unknown as SeaState, low);
+  const update = (gl: THREE.WebGLRenderer, time: number, camera: THREE.Camera, light?: Lighting, step = true) => {
+    if (!sim) sim = new OceanSim(gl, uniforms as unknown as SeaState, low, noFloat, precise);
     const spec = sim.spec, nc = spec.cascades.length;
     uniforms.uTime.value = time;
     // The nearest sea is at least the camera's height away; a cascade whose longest waves are
@@ -401,21 +497,25 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
     const pixMin = Math.max(camera.position.y - seaY, 1) * uniforms.uPixAngle.value;
     let active = 1;
     while (active < nc && (2 * Math.PI) / spec.cascades[active].kLo > pixMin * 1.5) active++;
-    sim.step(time, active);
+    // Where the long waves travel under half a pixel in a thirtieth of a second, thirty updates a
+    // second look the same as sixty and cost half as much.
+    if (step && (pixMin < 0.8 || !(time - lastStep < 0.03 && time >= lastStep))) { sim.step(time, active); lastStep = time; }
 
     const W = Math.max(uniforms.uWaves.value, 0);
-    uniforms.uSimOn.value = sim.ok ? 1 : 0;
+    uniforms.uSimOn.value = sim.disp(0) ? 1 : 0;
+    // Without the simulation, the still frame drifts.
+    uniforms.uDrift.value = sim.ok ? 0 : time * 0.01;
     uniforms.uSimN.value = spec.N;
     for (let c = 0; c < 3; c++) {
-      const cs = spec.cascades[c], v = (uniforms.uCasc.value as THREE.Vector4[])[c];
-      (uniforms.uCascOn.value as THREE.Vector3).setComponent(c, cs ? 1 : 0);
-      const tex = (k: string, t: THREE.Texture | null) => { uniforms[k].value = t; };
-      tex(`uDisp${c}`, cs ? sim.disp(c) : null); tex(`uMom${c}`, cs ? sim.moments(c) : null);
+      const cs = spec.cascades[c];
+      cascOn.setComponent(c, cs ? 1 : 0);
+      if (c < 2) dispU[c].value = cs ? sim.disp(c) : null;
+      momU[c].value = cs ? sim.moments(c) : null;
       if (!cs) continue;
       const a = WIND_ANGLE + cs.rot;
-      v.set(Math.cos(a), Math.sin(a), 1 / cs.L, sim.baked[c] > 1e-3 ? W / sim.baked[c] : 1);
+      cascU[c].set(Math.cos(a), Math.sin(a), 1 / cs.L, sim.baked[c] > 1e-3 ? W / sim.baked[c] : 1);
     }
-    const { cap } = sim.stats(W, !sim.ok);
+    const { cap } = sim.stats(W);
     (uniforms.uCapVar.value as THREE.Vector2).set(cap[0], cap[1]);
     uniforms.uHs.value = spec.hs;
     if (light) (uniforms.uSunDir.value as THREE.Vector3).copy(light.sunUp ? light.sunDir : light.moonDir);
@@ -436,10 +536,15 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
     uniforms.uGridCell.value = cell;
     const h = S * 0.48;
     (uniforms.uHole.value as THREE.Vector4).set(near.position.x, near.position.z, near.visible ? h : 0, h);
+    uniforms.uHoleE.value = 0.02 + h * 2e-4;
   };
 
-  /** Check the GPU's transform against a direct CPU sum of the same spectrum (tests). */
-  const verify = () => sim?.verify() ?? { ok: false };
+  /** Check the GPU's transform against a direct CPU sum of the same spectrum (tests), at wave height W. */
+  const verify = (W = 1) => sim?.verify(3.7, W) ?? { ok: false };
+  /** Tests: drop to the still sea a GPU without float render targets gets. */
+  const debugNoFloat = () => { sim?.dispose(); sim = null; noFloat = true; };
+  /** Tests: run the transform in float32 (where the GPU can), to measure what half floats cost. */
+  const debugPrecise = (on = true) => { sim?.dispose(); sim = null; precise = on; };
 
   const dispose = () => {
     sim?.dispose(); sim = null;
@@ -448,7 +553,7 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
     (near.material as THREE.Material).dispose(); (far.material as THREE.Material).dispose();
   };
 
-  return { mesh, near, far, uniforms, place, holeOn, setSea, setQuality, update, verify, dispose, get sim() { return sim; } };
+  return { mesh, near, far, uniforms, place, holeOn, setSea, setQuality, update, verify, debugNoFloat, debugPrecise, dispose, get sim() { return sim; } };
 }
 
 /**

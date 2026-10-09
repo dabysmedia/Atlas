@@ -765,6 +765,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
       this.applyLight(performance.now());
       this.updateOverlay(performance.now(), true);
       this.fitShadow();
+      this.water.update(this.gl, performance.now() / 1000, this.camera, this.light, false);
       this.gl.render(this.scene, this.camera);
       this.drawHud(performance.now());
       const ctx = out.getContext('2d')!;
@@ -777,6 +778,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
       this.updateCamera();
       this.updateOverlay(performance.now(), true);
       this.fitShadow();
+      this.water.update(this.gl, performance.now() / 1000, this.camera, this.light, false);
       this.gl.render(this.scene, this.camera);
       this.drawHud(performance.now());
     }

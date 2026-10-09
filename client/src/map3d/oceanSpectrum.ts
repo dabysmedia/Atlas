@@ -81,9 +81,10 @@ export function oceanSpec(low: boolean): OceanSpec {
  * from fair to gale the two spectra blend (t); past a gale the gale spectrum grows.
  * The GPU applies the same law (ocean.ts).
  */
-export function seaMix(W: number) {
+export function seaMix(W: number, out = { t: 0, scale: 1, calm: 1 }) {
   const w = Math.max(W, 1e-3);
-  return { t: Math.min(1, Math.max(0, (w - 1) / (GALE_WAVES - 1))), scale: Math.max(1, w / GALE_WAVES), calm: Math.min(1, w) };
+  out.t = Math.min(1, Math.max(0, (w - 1) / (GALE_WAVES - 1))); out.scale = Math.max(1, w / GALE_WAVES); out.calm = Math.min(1, w);
+  return out;
 }
 /** The calming gain for wave height W < 1 at wavenumber k (1 for W ≥ 1). */
 export function calmGain(k: number, kp: number, W: number) {
@@ -151,7 +152,12 @@ function rng(seed: number) {
   };
 }
 
-export type Band = { su2: number; sv2: number; m0: number; kSlope: number };
+/**
+ * A band's statistics: slope variance along and across the wind, height variance, the wavenumber
+ * its slopes are centred on, and the variance of dxx + dzz as the GPU measures it (by central
+ * differences of the displacement, which read the band's shortest waves low).
+ */
+export type Band = { su2: number; sv2: number; m0: number; kSlope: number; j2: number };
 
 /**
  * Initial amplitudes for every cascade, stacked in one N×(N·cascades) RGBA float atlas per sea
@@ -174,8 +180,9 @@ export function buildSpectrum(spec: OceanSpec, seed = 1777) {
       const r = Math.sqrt(-2 * Math.log(u1));
       xr[i] = r * Math.cos(2 * Math.PI * u2); xi[i] = r * Math.sin(2 * Math.PI * u2);
     }
+    const dx = c.L / N;
     for (const state of ['fair', 'gale'] as State[]) {
-      let su2 = 0, sv2 = 0, m0 = 0, kw = 0;
+      let su2 = 0, sv2 = 0, m0 = 0, kw = 0, j2 = 0;
       for (let m = 0; m < N; m++) for (let n = 0; n < N; n++) {
         const kx = (n < N / 2 ? n : n - N) * dk, kz = (m < N / 2 ? m : m - N) * dk;
         const k = Math.hypot(kx, kz);
@@ -188,13 +195,14 @@ export function buildSpectrum(spec: OceanSpec, seed = 1777) {
         // Slope variance in the wind's frame: along (cos θ) and across (sin θ).
         su2 += P * (k * Math.cos(th)) ** 2; sv2 += P * (k * Math.sin(th)) ** 2;
         kw += P * k ** 3;
+        j2 += P * ((Math.sin(kx * dx) * kx + Math.sin(kz * dx) * kz) / (k * dx)) ** 2;
       }
       const data = out[state], base = ci * N * N * 4;
       for (let m = 0; m < N; m++) for (let n = 0; n < N; n++) {
         const i = m * N + n, j = ((N - m) % N) * N + ((N - n) % N), o = base + i * 4;
         data[o] = xr[i] * amp[i]; data[o + 1] = xi[i] * amp[i]; data[o + 2] = xr[j] * amp[j]; data[o + 3] = -xi[j] * amp[j];
       }
-      bands[state].push({ su2, sv2, m0, kSlope: kw / Math.max(su2 + sv2, 1e-12) });
+      bands[state].push({ su2, sv2, m0, kSlope: kw / Math.max(su2 + sv2, 1e-12), j2 });
     }
   });
   return { data: out.fair, gale: out.gale, bands };
@@ -253,4 +261,56 @@ export function directFields(spec: OceanSpec, data: Float32Array, ci: number, x:
     out[7] += re(-kx * kz * ik, 0);
   }
   return out;
+}
+
+/** In-place inverse FFT (radix 2) of n complex values at stride s from offset o: x_j = Σ X_k e^{2πijk/n}. */
+function ifft(re: Float64Array, im: Float64Array, o: number, s: number, n: number) {
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      const a = o + i * s, b = o + j * s;
+      let t = re[a]; re[a] = re[b]; re[b] = t;
+      t = im[a]; im[a] = im[b]; im[b] = t;
+    }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const wr = Math.cos((2 * Math.PI) / len), wi = Math.sin((2 * Math.PI) / len), h = len >> 1;
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let j = 0; j < h; j++) {
+        const u = o + (i + j) * s, v = u + h * s;
+        const xr = re[v] * cr - im[v] * ci, xi = re[v] * ci + im[v] * cr;
+        re[v] = re[u] - xr; im[v] = im[u] - xi; re[u] += xr; im[u] += xi;
+        const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+      }
+    }
+  }
+}
+
+/**
+ * One cascade's surface at time 0 on the CPU, for a GPU that can't render to float targets: height,
+ * displacement x/z and slope x/z over its N×N grid, in the tile's own frame.
+ */
+export function surfaceAt(spec: OceanSpec, data: Float32Array, ci: number) {
+  const { N } = spec, dk = (2 * Math.PI) / spec.cascades[ci].L, base = ci * N * N * 4;
+  // Three transforms, two real fields each: h + i·dx, dz + i·sx, sz.
+  const f = [0, 1, 2].map(() => ({ re: new Float64Array(N * N), im: new Float64Array(N * N) }));
+  for (let m = 0; m < N; m++) for (let n = 0; n < N; n++) {
+    const i = m * N + n, o = base + i * 4;
+    const kx = (n < N / 2 ? n : n - N) * dk, kz = (m < N / 2 ? m : m - N) * dk, k = Math.hypot(kx, kz);
+    if (k === 0) continue;
+    const hr = data[o] + data[o + 2], hi = data[o + 1] + data[o + 3];
+    // i·h·a for a real multiplier a is (−hi·a, hr·a); adding i times that to b gives b − h·a.
+    const ux = kx / k, uz = kz / k;
+    f[0].re[i] = hr - hr * ux; f[0].im[i] = hi - hi * ux;
+    f[1].re[i] = -hi * uz - hr * kx; f[1].im[i] = hr * uz - hi * kx;
+    f[2].re[i] = -hi * kz; f[2].im[i] = hr * kz;
+  }
+  for (const { re, im } of f) {
+    for (let r = 0; r < N; r++) ifft(re, im, r * N, 1, N);
+    for (let col = 0; col < N; col++) ifft(re, im, col, N, N);
+  }
+  return { h: f[0].re, dx: f[0].im, dz: f[1].re, sx: f[1].im, sz: f[2].re };
 }

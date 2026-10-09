@@ -18,6 +18,7 @@ import { DIRS, key } from '../../../shared/hex';
 import type { HexMapRenderer3D } from '../map3d/renderer3d';
 import { is3d, load3d, webgl2Available } from '../map3d/support';
 import { daySweep } from '../daylight';
+import type { Weather } from '../../../shared/weather';
 
 const HAS_WEBGL2 = typeof document !== 'undefined' && webgl2Available();
 if (HAS_WEBGL2 && mapModePref.get() !== '2d') void load3d();
@@ -131,6 +132,9 @@ export function MapView() {
     r.setModel(model ? { url: `/api/worlds/${world.id}/map/model?v=${model.version}`, placement: model.placement } : null);
   }, [model?.version, model?.placement, !!data, gen, world.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { r3()?.setDaylight(world.daylight ?? null); }, [world.daylight, gen]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The day's weather eases in on every open map when the DM changes it or a new day rolls it.
+  const weather = (world as { weather?: Weather }).weather ?? null;
+  useEffect(() => { r3()?.setWeather(weather); }, [weather?.kind, weather?.at, gen]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => daySweep.subscribe(() => r3()?.sweepDay()), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Map art: load the versioned image once per version.
@@ -747,7 +751,7 @@ export function MapView() {
                   )}
                   <label className="toggle"><input type="checkbox" checked={layers.grid} onChange={(e) => setLayers({ ...layers, grid: e.target.checked })} /><Grid3x3 size={14} /> Hex grid</label>
                   <label className="toggle"><input type="checkbox" checked={layers.territory} onChange={(e) => setLayers({ ...layers, territory: e.target.checked })} /><Shield size={14} /> Territories and borders</label>
-                  {mode === '3d' && <label className="toggle"><input type="checkbox" checked={layers.atmosphere !== false} onChange={(e) => setLayers({ ...layers, atmosphere: e.target.checked })} /><CloudFog size={14} /> Clouds and mist</label>}
+                  {mode === '3d' && <label className="toggle"><input type="checkbox" checked={layers.atmosphere !== false} onChange={(e) => setLayers({ ...layers, atmosphere: e.target.checked })} /><CloudFog size={14} /> Weather and clouds</label>}
                 </div>
                 <div className="layer-group">
                   <div className="layer-title"><Mountain size={14} /> 3D terrain model</div>

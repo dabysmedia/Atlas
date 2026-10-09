@@ -7,6 +7,7 @@
  * the west. Light from the top of the map keeps relief reading the right way up from above.
  */
 import * as THREE from 'three';
+import type { WeatherLook } from '../../../shared/weather';
 
 export type Lighting = {
   hour: number;
@@ -14,6 +15,7 @@ export type Lighting = {
   moonDir: THREE.Vector3;
   keyDir: THREE.Vector3;
   keyColor: THREE.Color; // linear, intensity folded in
+  keyAbove: THREE.Color; // the key light above the clouds (cloud tops see it undimmed)
   hemiSky: THREE.Color;
   hemiGround: THREE.Color;
   hemiIntensity: number;
@@ -24,6 +26,7 @@ export type Lighting = {
   night: number; // 0 by day, 1 deep night
   overlayGlow: number; // how much draped overlays light themselves (readable at night)
   sunUp: boolean;
+  cloudShadow: number; // how much a cloud overhead takes from the key light (0..1)
 };
 
 type Key = { e: number; key: [number, number, number]; keyI: number; zen: [number, number, number]; hor: [number, number, number]; sky: [number, number, number]; gnd: [number, number, number]; hemi: number; fog: number; exp: number };
@@ -85,6 +88,7 @@ export function lightingAt(hour: number): Lighting {
     hour, sunDir, moonDir, sunUp,
     keyDir,
     keyColor: srgb(keyC, keyI),
+    keyAbove: srgb(keyC, keyI),
     hemiSky: srgb(lerp3(A.sky, B.sky, t)),
     hemiGround: srgb(lerp3(A.gnd, B.gnd, t)),
     hemiIntensity: A.hemi + (B.hemi - A.hemi) * t,
@@ -94,7 +98,55 @@ export function lightingAt(hour: number): Lighting {
     fogK: A.fog + (B.fog - A.fog) * t + morning * DAWN.fog,
     night,
     overlayGlow: 0.1 + night * 0.38,
+    cloudShadow: (sunUp ? 0.5 : 0.25) * smooth(0, 0.25, keyDir.y),
   };
+}
+
+// Scratch colors for weatherLight, so a frame allocates nothing.
+const grey = new THREE.Color(), tint = new THREE.Color(), flashC = new THREE.Color();
+const NEUTRAL = new THREE.Color(1, 1, 1), STORM = new THREE.Color(0.78, 0.93, 1.0);
+/** Lightning: a cold blue-white. */
+export const FLASH_COLOR = new THREE.Color(0.72, 0.8, 1.0);
+const lum = (c: THREE.Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+export const addScaled = (c: THREE.Color, d: THREE.Color, s: number) => { c.r += d.r * s; c.g += d.g * s; c.b += d.b * s; return c; };
+/** Pull a color toward a grey of the same brightness, tinted. */
+const greyOut = (c: THREE.Color, t: number, k = 1) => { const l = lum(c) * k; c.lerp(grey.setRGB(l * tint.r, l * tint.g, l * tint.b), t); };
+
+/**
+ * Weather over the light, in place. Cloud takes the direct sun (patchy under broken cloud, an even
+ * dimming under a full deck), lifts the ambient share, and greys the sky; storm cloud is darker and
+ * a little blue-green. Rain and fog thicken the haze. A lightning flash briefly lifts sky and ambient.
+ */
+export function weatherLight(L: Lighting, w: WeatherLook, flash = 0) {
+  const c = w.cover, k = w.dark;
+  // Shadows under broken cloud; under a full deck the sun is simply dimmed. The key is scaled so the
+  // light reaching the ground on average is the look's share of sun.
+  L.cloudShadow *= 1 - 0.85 * smooth(0.72, 1, c);
+  const keyK = clamp(w.sun / Math.max(0.05, 1 - L.cloudShadow * c), 0, 1);
+  // By night the moon is the map's only light, so cloud takes much less of it: the map still reads.
+  L.keyColor.multiplyScalar(keyK + (1 - keyK) * 0.6 * L.night);
+  tint.copy(NEUTRAL).lerp(STORM, k);
+  greyOut(L.hemiSky, c * 0.75);
+  greyOut(L.hemiGround, c * 0.5);
+  L.hemiSky.multiplyScalar(1 - 0.3 * k * c);
+  L.hemiGround.multiplyScalar(1 - 0.25 * k * c);
+  L.hemiIntensity *= 1 + 0.55 * c * (1 - 0.3 * k);
+  // An overcast sky is brighter overhead than at the horizon, and grey right across.
+  // Haze under a lid of cloud loses the low sun's color, and fog is pale through.
+  greyOut(L.horizon, Math.min(1, c * 0.95 + 0.25 * w.fog), 1 - 0.1 * c);
+  const hl = lum(L.horizon);
+  greyOut(L.zenith, c * 0.9);
+  L.zenith.lerp(grey.setRGB(hl * tint.r, hl * tint.g, hl * tint.b).multiplyScalar(1.12), c * 0.75);
+  const dim = 1 - 0.62 * k * c;
+  L.horizon.multiplyScalar(dim); L.zenith.multiplyScalar(dim * (1 - 0.12 * k));
+  L.exposure *= 1 - 0.08 * c - 0.05 * k;
+  L.fogK *= 1 + 0.5 * w.rain + 0.4 * w.fog;
+  L.overlayGlow += 0.14 * c * k;
+  if (flash > 0) {
+    flashC.copy(FLASH_COLOR).multiplyScalar(flash);
+    addScaled(L.hemiSky, flashC, 0.45); L.hemiIntensity += flash * 0.35;
+    addScaled(L.zenith, flashC, 0.16); addScaled(L.horizon, flashC, 0.1);
+  }
 }
 
 /** Names for the hours, for the clock. */
@@ -110,12 +162,12 @@ export function partOfDay(hour: number) {
   return 'Night';
 }
 
-/** A dome behind everything: sky gradient, sun and moon discs, a few stars at night. */
+/** A dome behind everything: sky gradient, sun and moon discs, a few stars at night; cloud hides the discs and stars. */
 export function makeSkyDome() {
   const uniforms = {
     uZenith: { value: new THREE.Color() }, uHorizon: { value: new THREE.Color() },
     uSunDir: { value: new THREE.Vector3() }, uMoonDir: { value: new THREE.Vector3() },
-    uSunColor: { value: new THREE.Color() }, uNight: { value: 0 },
+    uSunColor: { value: new THREE.Color() }, uNight: { value: 0 }, uCover: { value: 0 },
   };
   const mat = new THREE.ShaderMaterial({
     uniforms, side: THREE.BackSide, depthWrite: false, fog: false,
@@ -128,18 +180,20 @@ export function makeSkyDome() {
       }`,
     fragmentShader: /* glsl */`
       uniform vec3 uZenith, uHorizon, uSunDir, uMoonDir, uSunColor;
-      uniform float uNight;
+      uniform float uNight, uCover;
       varying vec3 vDir;
       float hash(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
       void main() {
         vec3 d = normalize(vDir);
         vec3 c = mix(uHorizon, uZenith, smoothstep(0.0, 0.55, max(d.y, 0.0)));
+        // Through broken cloud the discs still show; a full deck hides them, leaving a faint glow.
+        float clear = 1.0 - smoothstep(0.4, 0.88, uCover);
         float s = max(dot(d, uSunDir), 0.0);
-        c += uSunColor * (smoothstep(0.9993, 0.9997, s) * 6.0 + pow(s, 48.0) * 0.25) * (1.0 - uNight);
+        c += uSunColor * (smoothstep(0.9993, 0.9997, s) * 6.0 * clear + pow(s, 48.0) * 0.25 * (0.3 + 0.7 * clear)) * (1.0 - uNight);
         float m = max(dot(d, uMoonDir), 0.0);
-        c += vec3(0.85, 0.9, 1.0) * (smoothstep(0.99955, 0.9998, m) * 1.6 + pow(m, 90.0) * 0.08) * uNight;
+        c += vec3(0.85, 0.9, 1.0) * (smoothstep(0.99955, 0.9998, m) * 1.6 * clear + pow(m, 90.0) * 0.08) * uNight;
         vec3 q = floor(d * 420.0);
-        c += vec3(step(0.9985, hash(q)) * uNight * smoothstep(0.05, 0.3, d.y) * 0.9);
+        c += vec3(step(0.9985, hash(q)) * uNight * smoothstep(0.05, 0.3, d.y) * 0.9 * clear);
         gl_FragColor = vec4(c, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>

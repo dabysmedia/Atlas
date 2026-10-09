@@ -22,9 +22,11 @@ import { HexMapRenderer, HEX_SIZE, MAX_ZOOM, clamp, type Camera, type RenderInpu
 import type { ArtPlacement, ModelPlacement, TokenKind, Token } from '../types';
 import { hoursNow, type Daylight } from '../../../shared/daylight';
 import { HeightField, rasterizeMesh, reliefFromHexes } from './heightfield';
-import { lightingAt, makeSkyDome, partOfDay, type Lighting } from './sky';
+import { lightingAt, makeSkyDome, partOfDay, weatherLight, addScaled, FLASH_COLOR, type Lighting } from './sky';
 import { depthTexture, makeWater } from './water';
-import { ATMOS_GLSL, Atmosphere } from './atmosphere';
+import { ATMOS_GLSL, Atmosphere, type SkyWeather } from './atmosphere';
+import { WeatherFx, type WeatherView } from './weatherfx';
+import type { WeatherKind } from '../../../shared/weather';
 
 const FOV = 24; // degrees, vertical; narrow so the overhead view stays close to a flat map
 const MAX_TILT = 1.32;
@@ -50,6 +52,21 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected atmos = new Atmosphere();
   protected water = makeWater(this.atmos.uniforms);
   protected atmosSig = '';
+  // Weather: the eased look, rain and lightning; ground wetness for the drape.
+  protected wx = new WeatherFx();
+  protected wxUniforms = { uWet: { value: 0 }, uWetSky: { value: new THREE.Color() } };
+  protected wxSky: SkyWeather = { look: this.wx.look, flash: 0, flashX: 0, flashZ: 0, flashR: 1 };
+  protected wxView: WeatherView = {
+    camera: this.camera, camDist: 1, target: new THREE.Vector3(), sea: 0, cloudBase: 0, width: 1, height: 1,
+    strikePoint: (out) => {
+      if (!this.w || !this.h) return null;
+      const p = this.pick(this.w * (0.2 + Math.random() * 0.6), this.h * (0.2 + Math.random() * 0.55));
+      return out.copy(p);
+    },
+  };
+  protected seaState = { waves: 1, chop: 0.5, foam: 0.5, rain: 0 };
+  protected rainColor = new THREE.Color();
+  protected lastLight = 0;
   protected ground: THREE.Object3D | null = null;
   protected glows = new THREE.Group();
   protected glowTex = glowTexture();
@@ -112,7 +129,9 @@ export class HexMapRenderer3D extends HexMapRenderer {
 
     this.ovTex = this.makeOverlayTexture();
     this.scene.fog = this.fog3;
-    this.scene.add(this.sky.mesh, this.water.mesh, this.atmos.clouds, this.glows, this.hemi, this.key, this.key.target);
+    this.scene.add(this.sky.mesh, this.water.mesh, this.atmos.clouds, this.wx.rain, this.wx.bolt, this.glows, this.hemi, this.key, this.key.target);
+    const wind = this.atmos.uniforms.uWind.value;
+    this.wx.setWind(wind.x, wind.y);
     this.key.castShadow = true;
     this.key.shadow.mapSize.set(2048, 2048);
     this.key.shadow.bias = -0.0004;
@@ -176,6 +195,8 @@ export class HexMapRenderer3D extends HexMapRenderer {
     if (sig === this.atmosSig) return;
     this.atmosSig = sig;
     this.atmos.build(this.hf, this.sea, this.bounds, this.hexes, HEX_SIZE);
+    const wind = this.atmos.uniforms.uWind.value;
+    this.wx.setWind(wind.x, wind.y);
   }
 
   setTokens(tokens: Token[]) { super.setTokens(tokens); this.rebuildGlows(); }
@@ -255,10 +276,11 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected drape(mat: THREE.MeshStandardMaterial) {
     const U = this.ovUniforms;
     const A = this.atmos.uniforms;
+    const W = this.wxUniforms;
     mat.onBeforeCompile = (sh) => {
-      Object.assign(sh.uniforms, U, A);
+      Object.assign(sh.uniforms, U, A, W);
       sh.vertexShader = 'varying vec3 vWp;\n' + sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  vWp = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-      sh.fragmentShader = 'varying vec3 vWp;\nuniform sampler2D uOverlay;\nuniform vec4 uOverlayRect;\nuniform float uOverlayGlow;\n' + sh.fragmentShader
+      sh.fragmentShader = 'varying vec3 vWp;\nuniform sampler2D uOverlay;\nuniform vec4 uOverlayRect;\nuniform float uOverlayGlow, uWet;\nuniform vec3 uWetSky;\n' + sh.fragmentShader
         .replace('#include <common>', '#include <common>\n' + ATMOS_GLSL)
         .replace('#include <map_fragment>', `#include <map_fragment>
   vec2 ouv = (vWp.xz - uOverlayRect.xy) / uOverlayRect.zw;
@@ -266,15 +288,36 @@ export class HexMapRenderer3D extends HexMapRenderer {
   // Sand and rock darken where the sea wets them.
   float wet = 1.0 - smoothstep(uSeaY, uSeaY + uMistHeight * 0.18, vWp.y);
   diffuseColor.rgb *= 1.0 - 0.32 * wet;
+  // Rain soaks the ground darker and glossier, and puddles stand on flat low ground.
+  float atmPuddle = 0.0;
+  vec3 atmN = vec3(0.0, 1.0, 0.0);
+  if (uWet > 0.0) {
+    atmN = normalize(cross(dFdx(vWp), dFdy(vWp)));
+    atmN = atmN.y < 0.0 ? -atmN : atmN;
+    float flatGround = smoothstep(0.97, 0.995, atmN.y);
+    float low = 1.0 - smoothstep(0.08, 0.3, (vWp.y - uSeaY) / max(uCloudTile.w - uSeaY, 1.0));
+    atmPuddle = uWet * uWet * flatGround * low * smoothstep(0.42, 0.68, atmNoise(vWp.xz * 0.07)) * (1.0 - wet);
+    diffuseColor.rgb *= 1.0 - 0.34 * uWet - 0.3 * atmPuddle;
+  }
   diffuseColor.rgb = diffuseColor.rgb * (1.0 - ov.a) + ov.rgb;`)
+        .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+  roughnessFactor = mix(mix(roughnessFactor, 0.55, uWet * 0.7), 0.12, atmPuddle);`)
         .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
   float atmCs = cloudShadowAt(vWp);
   reflectedLight.directDiffuse *= atmCs; reflectedLight.directSpecular *= atmCs;`)
         .replace('#include <opaque_fragment>', `#include <opaque_fragment>
-  gl_FragColor.rgb = mix(gl_FragColor.rgb, uMistColor, mistAt(vWp, cameraPosition));`)
-        .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  totalEmissiveRadiance += ov.rgb * uOverlayGlow;');
+  // Borders and labels drawn on the ground show a little through mist and fog.
+  gl_FragColor.rgb = mix(gl_FragColor.rgb, uMistColor, mistAt(vWp, cameraPosition) * (1.0 - 0.4 * ov.a));`)
+        .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+  totalEmissiveRadiance += ov.rgb * uOverlayGlow;
+  // Wet ground and puddles catch the sky at a glancing angle; lightning lights the ground near a strike.
+  if (uWet > 0.0) {
+    float atmF = 0.04 + 0.96 * pow(1.0 - max(dot(atmN, normalize(cameraPosition - vWp)), 0.0), 5.0);
+    totalEmissiveRadiance += uWetSky * atmF * (uWet * 0.22 + atmPuddle * 0.9);
+  }
+  totalEmissiveRadiance += diffuseColor.rgb * uFlashCol * flashAt(vWp) * 0.8;`);
     };
-    mat.customProgramCacheKey = () => 'atlas-drape-atmos';
+    mat.customProgramCacheKey = () => 'atlas-drape-wx';
     mat.needsUpdate = true;
   }
 
@@ -547,8 +590,34 @@ export class HexMapRenderer3D extends HexMapRenderer {
     return hour;
   }
 
+  /**
+   * The day's weather: `kind` from the world (null for the default fair sky). A change eases in over
+   * a few seconds; the first call and `snap` jump straight to it.
+   */
+  setWeather(w: { kind: WeatherKind; at?: string } | null, opts?: { snap?: boolean }) {
+    this.wx.set(w?.kind ?? 'fair', !!opts?.snap, performance.now());
+    this.dirty = true;
+  }
+  /** Force a lightning strike, bolt and all, on the next frame (screenshots and tests). */
+  strike() { this.wx.strike(); }
+  /** For tests and the frame readout: the weather being drawn. */
+  weatherInfo() { return { kind: this.wx.kind, look: { ...this.wx.look }, wet: this.wx.wet, flash: this.wx.flash }; }
+
   protected applyLight(now: number) {
+    const on = this.layers.atmosphere !== false;
+    const wx = this.wx, w = wx.step(now, on);
+    const dt = this.lastLight ? clamp((now - this.lastLight) / 1000, 0, 0.25) : 0;
+    this.lastLight = now;
+    const view = this.wxView;
+    view.camDist = this.camDist();
+    view.target.set(this.cam.x, this.groundY, this.cam.y);
+    view.sea = this.sea;
+    view.cloudBase = this.atmos.uniforms.uCloudTile.value.w;
+    view.width = this.w * this.dpr; view.height = this.h * this.dpr;
+    wx.lightning(view, on);
+
     const L = (this.light = lightingAt(this.hourAt(now)));
+    weatherLight(L, w, wx.flash);
     this.shownHour = L.hour;
     this.key.color.copy(L.keyColor); this.key.intensity = 1;
     this.hemi.color.copy(L.hemiSky); this.hemi.groundColor.copy(L.hemiGround); this.hemi.intensity = L.hemiIntensity;
@@ -559,14 +628,28 @@ export class HexMapRenderer3D extends HexMapRenderer {
     const su = this.sky.uniforms;
     su.uZenith.value.copy(L.zenith); su.uHorizon.value.copy(L.horizon);
     su.uSunDir.value.copy(L.sunDir); su.uMoonDir.value.copy(L.moonDir); su.uSunColor.value.copy(L.keyColor); su.uNight.value = L.night;
+    su.uCover.value = w.cover;
     const wu = this.water.uniforms;
     wu.uKeyDir.value.copy(L.keyDir); wu.uKeyColor.value.copy(L.keyColor);
     wu.uHemiSky.value.copy(L.hemiSky).multiplyScalar(L.hemiIntensity); wu.uHemiGround.value.copy(L.hemiGround).multiplyScalar(L.hemiIntensity);
     wu.uZenith.value.copy(L.zenith); wu.uHorizon.value.copy(L.horizon); wu.uNight.value = L.night;
     wu.uTime.value = now / 1000;
     wu.uPixAngle.value = (2 * Math.tan(THREE.MathUtils.degToRad(FOV / 2))) / Math.max(1, this.h);
-    this.atmos.on = this.layers.atmosphere !== false;
-    this.atmos.update(now, L, this.camDist(), this.cam.zoom);
+    this.atmos.on = on;
+    const sw = this.wxSky;
+    sw.flash = wx.flash; sw.flashX = wx.flashPos.x; sw.flashZ = wx.flashPos.z; sw.flashR = wx.flashReach;
+    this.atmos.setOverlay(this.ovTex, this.ovUniforms.uOverlayRect.value);
+    this.atmos.update(now, dt, L, view.camDist, this.cam.zoom, this.groundY, sw);
+    // Rain catches the light of the sky around it, and the lightning.
+    this.rainColor.copy(L.horizon).multiplyScalar(0.8).lerp(L.hemiSky, 0.2);
+    addScaled(this.rainColor, FLASH_COLOR, wx.flash * 0.8);
+    wx.placeRain(view, this.rainColor, on);
+    // The sea follows the wind; rain pocks it.
+    const ss = this.seaState;
+    ss.waves = 0.55 + 1.65 * w.wind; ss.chop = 0.3 + 0.7 * w.wind; ss.foam = smooth(0.3, 1, w.wind); ss.rain = w.rain;
+    this.water.setSea(ss);
+    this.wxUniforms.uWet.value = on ? wx.wet : 0;
+    this.wxUniforms.uWetSky.value.copy(L.horizon).lerp(L.zenith, 0.35);
     this.ovUniforms.uOverlayGlow.value = L.overlayGlow;
     for (const s of this.glows.children as THREE.Sprite[]) (s.material as THREE.SpriteMaterial).opacity = L.night * (s.userData.strength as number);
     this.glows.visible = L.night > 0.01;

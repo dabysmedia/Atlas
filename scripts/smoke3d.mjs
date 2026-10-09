@@ -73,6 +73,25 @@ await step('orbit-pan-zoom', async () => {
   return { zoom: [before.zoom, zoomed], yaw: turned };
 });
 
+// Wheel zoom keeps the ground point under the cursor in place, off-centre too, in and out.
+await step('wheel-zoom-holds-cursor', async () => {
+  await R(() => { const r = window.__atlasMap; const f = r.fitCamera(); r.setCamera(f); r.advance(2); });
+  const out = [];
+  for (const [fx, fy, dy] of [[0.3, 0.3, -100], [0.75, 0.7, -100], [0.25, 0.75, 100], [0.7, 0.3, 100]]) {
+    const s = await R(([fx, fy]) => ({ x: window.__atlasMap.viewport.w * fx, y: window.__atlasMap.viewport.h * fy }), [fx, fy]);
+    const pg = await page(s);
+    await p.mouse.move(pg.x, pg.y);
+    await p.mouse.wheel(0, dy);
+    const a = await R(() => { const r = window.__atlasMap; return r.anchor && { ...r.anchor, y: r.anchorY }; });
+    expect(a, 'wheel set no zoom anchor');
+    await R(() => window.__atlasMap.advance(3));
+    const e = await R((a) => { const q = window.__atlasMap.projectPoint(a.wx, a.wy, a.y); return Math.hypot(q.x - a.sx, q.y - a.sy); }, a);
+    out.push(Math.round(e * 10) / 10);
+    expect(e < 3, `ground under the cursor slid ${e.toFixed(0)} px`);
+  }
+  return { slidePx: out };
+});
+
 await step('overhead-reads-flat', async () => {
   await R(() => { const r = window.__atlasMap; r.setOverhead(true); const f = r.fitCamera(); r.setCamera({ ...f, zoom: f.zoom * 1.6 }); r.advance(2); });
   await p.waitForTimeout(2500);

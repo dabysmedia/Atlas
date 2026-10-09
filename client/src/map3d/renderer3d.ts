@@ -492,9 +492,10 @@ export class HexMapRenderer3D extends HexMapRenderer {
       // Keep the ground point under the cursor where it is while the zoom eases.
       const s = this.projectPoint(this.anchor.wx, this.anchor.wy, this.anchorY);
       const dx = this.anchor.sx - s.x, dy = this.anchor.sy - s.y;
-      if (Math.abs(dx) + Math.abs(dy) > 0.05) { this.panRaw(-dx, -dy); this.updateCamera(); }
+      if (Math.abs(dx) + Math.abs(dy) > 0.05) { this.panRaw(dx, dy); this.updateCamera(); }
       this.target.x = this.cam.x; this.target.y = this.cam.y;
-      if (this.cam.zoom === this.target.zoom) this.anchor = null;
+      // Hold the anchor until the tilt that follows the zoom has settled too.
+      if (this.cam.zoom === this.target.zoom && this.tiltNow === tilt) this.anchor = null;
     } else {
       const dx = this.target.x - this.cam.x, dy = this.target.y - this.cam.y;
       if (Math.abs(dx) * this.cam.zoom > 0.3 || Math.abs(dy) * this.cam.zoom > 0.3) {

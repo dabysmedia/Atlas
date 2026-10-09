@@ -87,9 +87,21 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
     onError: toastError,
   });
   const putWeather = (weather: Weather) => qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, weather } : w));
-  const weatherDone = async (r: { weather: Weather }) => { await hold(); putWeather(r.weather); qc.invalidateQueries({ queryKey: qk.events(worldId!) }); };
+  // Weather changes can overlap (two quick picks, a pick during a roll) and their replies can arrive out of order,
+  // so only the last to settle touches the cache: with its own answer when it ran alone, else from a fresh read.
+  const wxKey = ['weather', worldId];
+  const wxCrossed = useRef(false);
+  const weatherSettled = async (r: { weather: Weather } | undefined, prev?: Weather) => {
+    if (qc.isMutating({ mutationKey: wxKey }) > 1) { wxCrossed.current = true; return; }
+    await hold();
+    if (wxCrossed.current) { wxCrossed.current = false; qc.invalidateQueries({ queryKey: qk.world(worldId!), exact: true }); }
+    else if (r) putWeather(r.weather);
+    else if (prev) putWeather(prev);
+    qc.invalidateQueries({ queryKey: qk.events(worldId!) });
+  };
   // Picking a kind shows at once (the map starts easing into it); a failed save puts the old weather back.
   const weather = useMutation({
+    mutationKey: wxKey,
     mutationFn: (body: { kind?: WeatherKind; auto?: boolean }) => api<{ weather: Weather }>(`/api/worlds/${worldId}/weather`, { method: 'PATCH', body }),
     onMutate: async (body) => {
       await hold();
@@ -97,13 +109,14 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
       if (prev) putWeather({ ...prev, ...body });
       return prev;
     },
-    onSuccess: weatherDone,
-    onError: (e, _b, prev) => { if (prev) putWeather(prev); toastError(e); },
+    onError: toastError,
+    onSettled: (r, _e, _b, prev) => weatherSettled(r, prev),
   });
   const rollWeather = useMutation({
+    mutationKey: wxKey,
     mutationFn: () => api<{ weather: Weather }>(`/api/worlds/${worldId}/weather/roll`, { method: 'POST' }),
-    onSuccess: weatherDone,
     onError: toastError,
+    onSettled: (r) => weatherSettled(r),
   });
 
   // A running hour that passes midnight starts the next day on the world clock. The server only
@@ -224,23 +237,41 @@ function WorldRoutes() {
   );
 }
 
+/**
+ * A popover off the world clock: it closes on a click elsewhere or Escape (focus back on its button). The keys it
+ * uses stop at its edge, since the map listens on the window and takes Space (pan) and Escape (deselect) for itself.
+ */
+function usePopover() {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLSpanElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
+    // Escape pressed with focus elsewhere on the page; inside, onKey below handles it first.
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('keydown', esc);
+    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('keydown', esc); };
+  }, [open]);
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === ' ' || (open && e.key === 'Escape')) e.stopPropagation();
+    if (open && e.key === 'Escape' && e.type === 'keydown') { setOpen(false); btn.current?.focus(); }
+  };
+  return { open, setOpen, btn, rootProps: { ref: root, onKeyDown: onKey, onKeyUp: onKey } };
+}
+
 /** The hour on the world clock, with the day cycle's speed (a per-world DM setting) and a dial. */
 function TimeOfDay({ daylight, onChange }: { daylight: Daylight; onChange: (b: { hour?: number; speed?: DaySpeed }) => void }) {
-  const [open, setOpen] = useState(false);
+  const { open, setOpen, btn, rootProps } = usePopover();
   const hour = useHour(daylight);
   const [drag, setDrag] = useState<number | null>(null);
   const shown = drag ?? hour % 24;
   const part = partOfDay(shown);
   const Icon = part === 'Night' ? Moon : part === 'Dawn' ? Sunrise : part === 'Dusk' || part === 'Golden hour' ? Sunset : Sun;
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: PointerEvent) => { if (!(e.target as HTMLElement).closest('.tod')) setOpen(false); };
-    window.addEventListener('pointerdown', close);
-    return () => window.removeEventListener('pointerdown', close);
-  }, [open]);
   return (
-    <span className="tod">
-      <button className="tod-btn" onClick={() => setOpen((o) => !o)} aria-label="Time of day" aria-expanded={open} title={`${part} · day cycle ${DAY_SPEEDS[daylight.speed].label.toLowerCase()}`}>
+    <span className="tod" {...rootProps}>
+      <button ref={btn} className="tod-btn" onClick={() => setOpen((o) => !o)} aria-label="Time of day" aria-expanded={open} title={`${part} · day cycle ${DAY_SPEEDS[daylight.speed].label.toLowerCase()}`}>
         <Icon size={13} className="clock-icon" />
         <span className="hour">{formatHour(shown)}</span>
         {daylight.speed === 'paused' && <Pause size={10} className="faint" />}
@@ -279,23 +310,14 @@ const WEATHER_ICON: Record<WeatherKind, LucideIcon> = {
 function WeatherControl({ weather, daylight, onChange, onRoll, rolling }: {
   weather: Weather; daylight: Daylight; onChange: (b: { kind?: WeatherKind; auto?: boolean }) => void; onRoll: () => void; rolling: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const btn = useRef<HTMLButtonElement>(null);
+  const { open, setOpen, btn, rootProps } = usePopover();
   const grid = useRef<HTMLDivElement>(null);
   // Clear and fair skies show the moon at night, next to the clock's own moon.
   const night = partOfDay(useHour(daylight, 15_000)) === 'Night';
   const icon = (k: WeatherKind) => (night && k === 'clear' ? Moon : night && k === 'fair' ? CloudMoon : WEATHER_ICON[k]);
   const Icon = icon(weather.kind);
   const info = WEATHER[weather.kind];
-  useEffect(() => {
-    if (!open) return;
-    grid.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus({ preventScroll: true });
-    const close = (e: PointerEvent) => { if (!(e.target as HTMLElement).closest('.wx')) setOpen(false); };
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); btn.current?.focus(); } };
-    window.addEventListener('pointerdown', close);
-    window.addEventListener('keydown', esc);
-    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('keydown', esc); };
-  }, [open]);
+  useEffect(() => { if (open) grid.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus({ preventScroll: true }); }, [open]);
   // Arrows move through the grid and Enter or Space picks, so looking around doesn't change the sky (and the chronicle) at every step.
   const onKey = (e: React.KeyboardEvent) => {
     const step = ({ ArrowRight: 1, ArrowLeft: -1, ArrowDown: 3, ArrowUp: -3 } as Record<string, number>)[e.key];
@@ -305,7 +327,7 @@ function WeatherControl({ weather, daylight, onChange, onRoll, rolling }: {
     items[(items.indexOf(document.activeElement as HTMLElement) + step + items.length) % items.length]?.focus();
   };
   return (
-    <span className="wx">
+    <span className="wx" {...rootProps}>
       <button ref={btn} className="wx-btn" onClick={() => setOpen((o) => !o)} aria-label={`Weather: ${info.label}`} aria-expanded={open} aria-haspopup="dialog"
         title={`${info.label} · ${info.note}${weather.auto ? ' · new weather each day' : ''}`}>
         <Icon size={14} className="clock-icon" />
@@ -332,7 +354,8 @@ function WeatherControl({ weather, daylight, onChange, onRoll, rolling }: {
                 );
               })}
             </div>
-            <button className={`wx-roll ${rolling ? 'rolling' : ''}`} onClick={onRoll} disabled={rolling}><Dices size={14} /> Roll today's weather</button>
+            {/* Busy rather than disabled while rolling, so keyboard focus stays on it. */}
+            <button className={`wx-roll ${rolling ? 'rolling' : ''}`} onClick={() => { if (!rolling) onRoll(); }} aria-disabled={rolling}><Dices size={14} /> Roll today's weather</button>
             <label className="toggle"><input type="checkbox" checked={weather.auto} onChange={(e) => onChange({ auto: e.target.checked })} /> Roll new weather each day</label>
             <p className="faint tod-note">For this world. Shown on the 3D map.</p>
           </motion.div>

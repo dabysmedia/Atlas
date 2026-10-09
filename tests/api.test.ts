@@ -13,7 +13,7 @@ import { recoverRemovedIsland, seedNewWorldOnce, upgradeNewWorldIsland, FIXES, L
 import { logEvent } from '../server/history';
 import { readFileSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
-import { wikiPages, wikiLinks, mapModel, maps, appMeta } from '../server/db/schema';
+import { wikiPages, wikiLinks, mapModel, maps, appMeta, worlds } from '../server/db/schema';
 import { WEATHER_KINDS } from '../shared/weather';
 
 const URL = process.env.TEST_DATABASE_URL ?? 'postgres://postgres@localhost:5432/atlas_test';
@@ -48,6 +48,10 @@ beforeAll(async () => {
   cookie = String(res.headers['set-cookie']).split(';')[0];
 });
 afterAll(async () => { await app?.close(); });
+
+/** Run a world's clock (fast: 1 day a minute) to just past midnight, as if a screen had watched it get there. */
+const pastMidnight = (id: string) =>
+  db.update(worlds).set({ daylight: { hour: 23.9, speed: 'fast', at: new Date(Date.now() - 1000).toISOString() } }).where(eq(worlds.id, id));
 
 describe('auth', () => {
   it('rejects anonymous API calls and bad passwords', async () => {
@@ -402,19 +406,40 @@ describe('3D map', () => {
     const w = (await call('POST', '/api/worlds', { name: 'Clockwork', cols: 4, rows: 4 })).body;
     const fresh = (await call('GET', `/api/worlds/${w.id}`)).body;
     expect(fresh.daylight).toMatchObject({ speed: 'paused' });
-    const set = (await call('PATCH', `/api/worlds/${w.id}/daylight`, { hour: 23.5, speed: 'fast' })).body.daylight;
-    expect(set).toMatchObject({ hour: 23.5, speed: 'fast' });
+    const set = (await call('PATCH', `/api/worlds/${w.id}/daylight`, { hour: 20, speed: 'fast' })).body.daylight;
+    expect(set).toMatchObject({ hour: 20, speed: 'fast' });
     const other = (await call('POST', '/api/worlds', { name: 'Other clock', cols: 4, rows: 4 })).body;
     expect((await call('GET', `/api/worlds/${other.id}`)).body.daylight.speed).toBe('paused');
     const day = fresh.currentDay;
-    // A stale tab asking to roll over from a day that's already gone changes nothing.
+    // A stale tab asking to roll over from a day that's already gone changes nothing, and neither does one asking before midnight.
     expect((await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day - 1 } })).body.currentDay).toBe(day);
+    expect((await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day } })).body).toMatchObject({ currentDay: day, daylight: { hour: 20 } });
+    await pastMidnight(w.id);
     const rolled = (await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day } })).body;
     expect(rolled.currentDay).toBe(day + 1);
-    expect(rolled.daylight.hour).toBeLessThan(24);
+    expect(rolled.daylight.hour).toBeGreaterThan(0.3);
+    expect(rolled.daylight.hour).toBeLessThan(1);
     expect((await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day } })).body.currentDay).toBe(day + 1);
     const evs = (await call('GET', `/api/worlds/${w.id}/events`)).body as { kind: string; actor: string }[];
     expect(evs.filter((e) => e.kind === 'day.changed' && e.actor === 'system')).toHaveLength(1);
+  });
+
+  it('ignores a midnight asked for by a screen that missed the clock being paused', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Paused clock', cols: 4, rows: 4 })).body;
+    const day = (await call('GET', `/api/worlds/${w.id}`)).body.currentDay as number;
+    await call('PATCH', `/api/worlds/${w.id}/weather`, { kind: 'rain', auto: true });
+    // Paused at 08:00 (the stale screen still thinks it is running toward midnight).
+    await call('PATCH', `/api/worlds/${w.id}/daylight`, { hour: 8, speed: 'paused' });
+    const r = (await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day } })).body;
+    expect(r).toMatchObject({ currentDay: day, daylight: { hour: 8, speed: 'paused' }, weather: { kind: 'rain', day } });
+    // Paused a moment before midnight is the same.
+    await call('PATCH', `/api/worlds/${w.id}/daylight`, { hour: 23.99 });
+    expect((await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day } })).body).toMatchObject({ currentDay: day, daylight: { hour: 23.99, speed: 'paused' } });
+    const after = (await call('GET', `/api/worlds/${w.id}`)).body;
+    expect(after).toMatchObject({ currentDay: day, daylight: { hour: 23.99, speed: 'paused' }, weather: { kind: 'rain', day } });
+    const evs = (await call('GET', `/api/worlds/${w.id}/events`)).body as { kind: string }[];
+    expect(evs.filter((e) => e.kind === 'day.changed')).toHaveLength(0);
+    expect(evs.filter((e) => e.kind === 'weather.changed')).toHaveLength(1);
   });
 });
 
@@ -492,6 +517,7 @@ describe('weather', () => {
     expect(evs[0]).toMatchObject({ actor: 'gm', gameDay: day + 3, payload: { from: 'rain', to: adv.weather.kind, rolled: true } });
 
     // Midnight on a running clock rolls too, as the system; a second tab asking for the same midnight doesn't.
+    await pastMidnight(w.id);
     const [a, b] = await Promise.all([
       call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day + 3 } }),
       call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day + 3 } }),
@@ -510,11 +536,20 @@ describe('weather', () => {
     // A stale rollover still answers with the weather.
     expect((await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day } })).body.weather).toEqual(rolled);
 
-    // Going back a day keeps today's weather.
-    const back = (await call('POST', `/api/worlds/${w.id}/day`, { advance: -1 })).body;
-    expect(back.currentDay).toBe(day + 3);
-    expect(back.weather).toEqual(rolled);
+    // Going back a day keeps today's weather, and so does coming forward again to the day it was rolled for.
+    for (let i = 0; i < 3; i++) {
+      const back = (await call('POST', `/api/worlds/${w.id}/day`, { advance: -1 })).body;
+      expect(back.currentDay).toBe(day + 3);
+      expect(back.weather).toEqual(rolled);
+      const fwd = (await call('POST', `/api/worlds/${w.id}/day`, { advance: 1 })).body;
+      expect(fwd.currentDay).toBe(day + 4);
+      expect(fwd.weather).toEqual(rolled);
+    }
     expect(await weatherEvents(w.id)).toHaveLength(3);
+    // Back two days and forward three reaches a day with no weather yet: that one rolls.
+    await call('POST', `/api/worlds/${w.id}/day`, { day: day + 2 });
+    expect((await call('POST', `/api/worlds/${w.id}/day`, { advance: 3 })).body.weather).toMatchObject({ day: day + 5 });
+    expect(await weatherEvents(w.id)).toHaveLength(4);
   });
 
   it('keeps the weather across days when auto is off', async () => {
@@ -526,8 +561,17 @@ describe('weather', () => {
     expect(next.weather).toEqual(set);
     const later = (await call('POST', `/api/worlds/${w.id}/day`, { day: day + 10 })).body;
     expect(later.weather).toEqual(set);
-    expect((await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day + 10 } })).body.weather).toEqual(set);
+    await pastMidnight(w.id);
+    expect((await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day + 10 } })).body).toMatchObject({ currentDay: day + 11, weather: set });
     expect(await weatherEvents(w.id)).toHaveLength(1);
+
+    // Switched on later, the sky as it stands is today's: a day back and forward again keeps it, the next new day rolls.
+    expect((await call('PATCH', `/api/worlds/${w.id}/weather`, { auto: true })).body.weather).toMatchObject({ kind: 'overcast', auto: true, day: day + 11 });
+    expect((await call('POST', `/api/worlds/${w.id}/day`, { advance: -1 })).body.weather).toMatchObject({ kind: 'overcast', day: day + 11 });
+    expect((await call('POST', `/api/worlds/${w.id}/day`, { advance: 1 })).body.weather).toMatchObject({ kind: 'overcast', day: day + 11 });
+    expect(await weatherEvents(w.id)).toHaveLength(1);
+    expect((await call('POST', `/api/worlds/${w.id}/day`, { advance: 1 })).body.weather).toMatchObject({ auto: true, day: day + 12 });
+    expect(await weatherEvents(w.id)).toHaveLength(2);
   });
 });
 

@@ -172,7 +172,12 @@ h1, h2, h3, h4 { font-weight: 600; }
   border-bottom: 1px solid var(--line);
   box-shadow: 0 1px 0 rgba(0,0,0,0.6), 0 6px 20px rgba(0,0,0,0.35);
   position: relative; z-index: 20;
+  /* A grid row of .shell: without this it widens to fit its content and nothing inside ever gives way. */
+  min-width: 0;
 }
+/* The clock and sign-out keep their size. The search box fills the free space (centred by the spacers), down to
+   150px; only then does the world's name give way. */
+.topbar > .iconbtn { flex: none; }
 .world-button {
   display: flex; align-items: center; gap: 10px; padding: 4px 10px 4px 5px; border-radius: 9px;
   border: 1px solid transparent; background: transparent; cursor: pointer; max-width: 320px; min-width: 0;
@@ -184,23 +189,24 @@ h1, h2, h3, h4 { font-weight: 600; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--gold-hi);
 }
 .searchbox {
-  display: flex; align-items: center; gap: 9px; width: min(440px, 40vw); height: 32px; padding: 0 8px 0 12px;
+  display: flex; align-items: center; gap: 9px; flex: 100 1 0; max-width: 440px; min-width: 150px; height: 32px; padding: 0 8px 0 12px;
   border-radius: 999px; border: 1px solid var(--line-soft); background: rgba(0,0,0,0.3); color: var(--text-faint);
   cursor: text; text-align: left; transition: border-color 0.15s, background 0.15s, color 0.15s;
 }
+.searchbox .grow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .searchbox:hover { border-color: var(--line); color: var(--text-dim); background: rgba(0,0,0,0.4); }
 .clock {
-  display: flex; align-items: center; gap: 2px; height: 32px; padding: 0 3px;
+  display: flex; align-items: center; gap: 2px; height: 32px; padding: 0 3px; flex: none; position: relative;
   border: 1px solid var(--line); border-radius: 999px; background: linear-gradient(180deg, rgba(214,176,106,0.08), rgba(0,0,0,0.25));
 }
 .clock button { width: 26px; height: 26px; border: 0; border-radius: 50%; background: transparent; color: var(--text-dim); cursor: pointer; display: grid; place-items: center; }
 .clock button:hover { background: var(--gold-soft); color: var(--gold-hi); }
 .clock-icon { color: var(--gold); margin-left: 4px; }
 .clock .day { padding: 0 6px 0 4px; font-variant-numeric: tabular-nums; font-weight: 600; min-width: 64px; text-align: center; font-family: var(--font-display); letter-spacing: 0.04em; }
-.tod { position: relative; display: inline-flex; }
+.tod { display: inline-flex; }
 .clock .tod-btn { width: auto; border-radius: 999px; padding: 0 8px 0 4px; gap: 5px; display: inline-flex; align-items: center; color: var(--text); }
 .tod .hour { font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--text-dim); }
-.tod-pop { position: absolute; top: 38px; right: -40px; width: 268px; padding: 12px; z-index: 40; display: flex; flex-direction: column; gap: 10px; }
+.tod-pop { position: absolute; top: calc(100% + 11px); right: -1px; width: 292px; padding: 12px; z-index: 40; display: flex; flex-direction: column; gap: 10px; }
 /* Near-opaque: these open over the map's own panels, whose text would otherwise show through. */
 .tod-pop { background: linear-gradient(180deg, rgba(17, 29, 36, 0.98), rgba(11, 19, 24, 0.97)); }
 .tod-head { display: flex; align-items: center; gap: 7px; font-family: var(--font-display); letter-spacing: 0.04em; }
@@ -209,13 +215,15 @@ h1, h2, h3, h4 { font-weight: 600; }
 .tod-speeds { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .clock .tod-pop .brush { width: auto; height: auto; border-radius: 7px; display: flex; justify-content: flex-start; padding: 6px 8px; border: 1px solid var(--line-soft); }
 .clock .tod-pop .brush.on { border-color: var(--gold); color: var(--gold-hi); background: var(--gold-soft); }
+/* Hover and keyboard focus in the popovers stay neutral, so only the chosen option reads gold. */
+.clock .tod-pop .brush:not(.on):hover, .clock .wx-pop .wx-kind:not(.on):hover { background: rgba(255,255,255,0.04); color: var(--text); border-color: var(--line); }
+.clock .tod-pop .brush:focus-visible, .clock .wx-pop .wx-kind:focus-visible { outline: 1px dashed var(--text-dim); outline-offset: 2px; }
 .tod-note { margin: 0; font-size: 11.5px; }
 .clock .day small { color: var(--text-faint); font-weight: 500; margin-right: 4px; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; }
 /* Today's weather, beside the hour: the kind, and a popover of all nine to pick from or roll. */
-.wx { position: relative; display: inline-flex; }
+.wx { display: inline-flex; }
 .clock .wx-btn { width: auto; border-radius: 999px; padding: 0 8px 0 2px; gap: 5px; display: inline-flex; align-items: center; color: var(--text); }
 .wx-btn .wx-label { font-size: 12.5px; color: var(--text-dim); white-space: nowrap; }
-.wx-pop { right: -32px; width: 292px; }
 .wx-sub { font-size: 12px; margin: 2px 0 0 22px; }
 .wx-kinds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .clock .wx-pop .wx-kind {
@@ -229,22 +237,38 @@ h1, h2, h3, h4 { font-weight: 600; }
   width: 100%; height: 30px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--ink-3); color: var(--text);
   display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 12.5px; box-shadow: var(--hair);
 }
-.clock .wx-pop .wx-roll:disabled { cursor: default; }
+.clock .wx-pop .wx-roll:hover { border-color: var(--line-strong); background: var(--ink-4); color: var(--text); }
+.clock .wx-pop .wx-roll[aria-disabled="true"] { cursor: default; }
 .wx-roll.rolling svg { animation: wx-tumble 0.5s ease-in-out infinite; }
 @keyframes wx-tumble { 50% { transform: rotate(180deg) scale(0.85); } 100% { transform: rotate(360deg); } }
 
-/* Narrow screens keep the whole clock: the weather label and search text give way first, then the world's name. */
-@media (max-width: 760px) {
+/* Narrower screens keep the whole clock: the weather's label goes first (its icon stays), then the search text. */
+@media (max-width: 899px) {
   .wx-btn .wx-label { display: none; }
   .clock .wx-btn { padding: 0 6px 0 2px; }
-  .searchbox { width: 32px; flex: none; padding: 0; justify-content: center; }
+}
+@media (max-width: 760px) {
+  .searchbox { width: 32px; min-width: 0; flex: none; padding: 0; justify-content: center; }
   .searchbox .grow, .searchbox .kbd { display: none; }
 }
 @media (max-width: 520px) {
   .topbar { gap: 4px; padding: 0 6px 0 4px; }
-  .world-button { padding: 4px; gap: 0; }
+  .world-button { padding: 4px; gap: 0; flex: none; }
   .world-button .name, .world-button > svg:not(.world-sigil) { display: none; }
   .clock .day { min-width: 0; padding: 0 4px; }
+  /* Room for a three-figure day: no empty spacers (the clock keeps to the right), tighter icons. */
+  .topbar > .spacer { display: none; }
+  .topbar > .clock { margin-left: auto; }
+  .clock .clock-icon { margin-left: 1px; }
+}
+/* Phones: the day's number alone, then (the smallest) no paused or auto marks. */
+@media (max-width: 380px) {
+  .clock .day small { display: none; }
+}
+@media (max-width: 350px) {
+  .tod-btn > .faint, .wx-btn > .faint { display: none; }
+  /* Hung from the clock, the popover would run off the left edge: span the screen instead. */
+  .tod-pop { position: fixed; top: 51px; left: 8px; right: 8px; width: auto; }
 }
 
 .shell > .body { display: flex; min-height: 0; }

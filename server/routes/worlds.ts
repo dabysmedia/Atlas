@@ -61,9 +61,13 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
   app.patch('/api/worlds/:w/daylight', async (req) => {
     const w = await getWorld(db, (req.params as { w: string }).w);
     const body = DaylightBody.parse(req.body);
-    const cur = (w.daylight as Daylight | null) ?? DEFAULT_DAYLIGHT();
-    const daylight: Daylight = { hour: body.hour ?? hoursNow(cur) % 24, speed: body.speed ?? cur.speed, at: new Date().toISOString() };
-    await db.update(worlds).set({ daylight }).where(eq(worlds.id, w.id));
+    // Locked like the day, so a pause and a midnight rollover from another screen apply one after the other.
+    const daylight = await db.transaction(async (tx) => {
+      const cur = (await lockClock(tx, w.id)).daylight ?? DEFAULT_DAYLIGHT();
+      const next: Daylight = { hour: body.hour ?? hoursNow(cur) % 24, speed: body.speed ?? cur.speed, at: new Date().toISOString() };
+      await tx.update(worlds).set({ daylight: next }).where(eq(worlds.id, w.id));
+      return next;
+    });
     return { daylight };
   });
 
@@ -75,10 +79,9 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
     const weather = await db.transaction(async (tx) => {
       const { currentDay, weather: cur } = await lockClock(tx, w.id);
       const changed = body.kind !== undefined && body.kind !== cur.kind;
-      const next: Weather = {
-        kind: body.kind ?? cur.kind, auto: body.auto ?? cur.auto,
-        day: body.kind ? currentDay : cur.day, at: changed ? new Date().toISOString() : cur.at,
-      };
+      // Switching auto on makes the sky as it stands today's weather, so only a day after this one rolls.
+      const day = body.kind ? currentDay : body.auto && !cur.auto ? Math.max(cur.day, currentDay) : cur.day;
+      const next: Weather = { kind: body.kind ?? cur.kind, auto: body.auto ?? cur.auto, day, at: changed ? new Date().toISOString() : cur.at };
       await tx.update(worlds).set({ weather: next }).where(eq(worlds.id, w.id));
       if (changed) await logEvent(tx, { worldId: w.id, gameDay: currentDay, kind: 'weather.changed', summary: weatherSummary(next.kind, cur.kind), payload: { from: cur.kind, to: next.kind } });
       return next;
@@ -149,14 +152,21 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
     return db.transaction(async (tx) => {
       // Locked, so two tabs passing midnight together roll the day (and its weather) over once.
       const cur = await lockClock(tx, w.id);
-      if (body.rollover && body.rollover.from !== cur.currentDay) return cur;
-      const day = body.rollover ? cur.currentDay + 1 : Math.max(1, body.day ?? cur.currentDay + (body.advance ?? 1));
       const now = new Date();
+      // A screen asks for midnight from its own copy of the clock, which may be stale (paused or set back elsewhere
+      // since its last poll): only the stored clock, running and past midnight, starts the next day.
+      if (body.rollover) {
+        const due = cur.daylight && cur.daylight.speed !== 'paused' && hoursNow(cur.daylight, now.getTime()) >= 24;
+        if (body.rollover.from !== cur.currentDay || !due) return cur;
+      }
+      const day = body.rollover ? cur.currentDay + 1 : Math.max(1, body.day ?? cur.currentDay + (body.advance ?? 1));
       let daylight = cur.daylight;
-      if (body.rollover && daylight) daylight = { ...daylight, hour: Math.max(0, hoursNow(daylight) - 24) % 24, at: now.toISOString() };
-      // A new day under auto weather rolls fresh weather once, however many days pass; going back keeps it.
+      if (body.rollover && daylight) daylight = { ...daylight, hour: Math.max(0, hoursNow(daylight, now.getTime()) - 24) % 24, at: now.toISOString() };
+      // Auto weather rolls once for a day it hasn't seen, however many days pass. Going back keeps it, and so does
+      // coming forward again to the day it was rolled for (a misclick undone shouldn't change the sky).
       const prev = cur.weather;
-      const weather: Weather = day > cur.currentDay && prev.auto ? { ...prev, kind: rollWeather(prev.kind), day, at: now.toISOString() } : prev;
+      const fresh = prev.auto && day > cur.currentDay && day > prev.day;
+      const weather: Weather = fresh ? { ...prev, kind: rollWeather(prev.kind), day, at: now.toISOString() } : prev;
       const actor = body.rollover ? 'system' : 'gm';
       await tx.update(worlds).set({ currentDay: day, daylight, ...(weather !== prev ? { weather } : {}), updatedAt: now }).where(eq(worlds.id, w.id));
       await logEvent(tx, { worldId: w.id, gameDay: day, kind: 'day.changed', summary: day > cur.currentDay ? `Day ${day} dawns` : `Clock set back to day ${day}`, payload: { from: cur.currentDay, to: day, ...(body.rollover ? { rollover: true } : {}) }, actor });

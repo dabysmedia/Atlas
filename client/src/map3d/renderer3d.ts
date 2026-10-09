@@ -144,6 +144,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
       for (const mat of mats) { for (const v of Object.values(mat)) if (v instanceof THREE.Texture) v.dispose(); mat.dispose(); }
     });
     this.ovTex.dispose(); this.depthTex?.dispose(); this.glowTex.dispose();
+    this.water.dispose();
     this.gl.dispose();
     this.gl.forceContextLoss();
   }
@@ -611,8 +612,8 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected cpuMs = 0;
 
   /**
-   * A machine that can't keep up (frames slower than ~25 a second for a few seconds) drops the
-   * moving wave grid for the flat sea, which shades the same and costs far less. Once per session.
+   * A machine that can't keep up (frames slower than ~25 a second for a few seconds) drops to a
+   * coarser wave simulation and grid. Once per session.
    */
   protected paceMs = 16;
   protected slowFrames = 0;
@@ -625,8 +626,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
   }
   setLowQuality(on: boolean) {
     this.lowQuality = on;
-    this.water.near.visible = !on;
-    this.water.holeOn(!on);
+    this.water.setQuality(on);
     this.dirty = true;
   }
 
@@ -643,6 +643,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.fitShadow();
     this.sky.mesh.position.copy(this.camera.position);
     this.sky.mesh.scale.setScalar(this.camera.far * 0.9);
+    this.water.update(this.gl, now / 1000, this.camera, this.light);
     this.gl.render(this.scene, this.camera);
     this.drawHud(now);
     void moving;

@@ -8,14 +8,15 @@
  * clouds 30% of the sky), and everything reads that same thresholded field: the cumulus puffs (one
  * instanced draw of soft billboards, each shown as far as the field is cloudy where it sits), a flat
  * deck layer that fills in between them as the cover closes, and the shadows on the ground and sea,
- * offset along the light. So a shadow always sits under its cloud at every cover. Mist is
+ * offset along the light. So a shadow always sits under its cloud at every cover; where the cloud
+ * parts for the camera coming down, or a gale shreds it, its shadow goes with it. Mist is
  * exponential height fog with its density taken from a biome map and two layers of noise moving with
- * the wind, integrated along the view ray.
+ * the wind, integrated along the view ray; borders and labels drawn on the map show through it.
  */
 import * as THREE from 'three';
 import type { HeightField } from './heightfield';
 import type { Lighting } from './sky';
-import { FLASH_COLOR } from './sky';
+import { FLASH_COLOR, lum, liftTo } from './sky';
 import type { WeatherLook } from '../../../shared/weather';
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
@@ -39,11 +40,13 @@ export function mistWeight(terrain: string) {
 export const ATMOS_GLSL = /* glsl */`
 uniform float uAtmTime, uAtmOn, uCloudShadow, uMistDensity, uMistHeight, uSeaY;
 uniform vec2 uWind, uCloudOff, uMistOff;
+uniform vec2 uCloudNear; // view depths over which cloud parts as the camera comes down
 uniform vec4 uCloudTile; // origin x, origin z, size, cloud base altitude
 uniform vec4 uCloudCov; // field threshold low, high; how torn; density where cloud is thickest
 uniform vec4 uTornM; // wind-aligned stretch for torn cloud, as a 2x2 matrix
-uniform sampler2D uCloudMap, uMistMap;
-uniform vec4 uMistRect, uMistFx; // fx: how much fog lies over everything, opacity cap, layer height scale
+uniform sampler2D uCloudMap, uMistMap, uAtmOverlay; // the overlay is the map drawn on the ground
+uniform vec4 uAtmOvRect;
+uniform vec4 uMistRect, uMistFx; // fx: how much fog lies over everything, opacity cap, layer height scale, thinning over the sea
 uniform vec3 uAtmKeyDir, uMistColor, uFlashCol;
 uniform vec4 uFlash; // lightning: x, z, reach, brightness
 float atmHash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -67,11 +70,24 @@ vec2 cloudFieldAt(vec2 p) {
 float cloudCoverAt(vec2 p) {
   return uAtmOn * smoothstep(uCloudCov.x, uCloudCov.y, cloudFieldAt(p).r);
 }
-/** 1 in sunlight, lower under a cloud. */
+/** Where a gale shreds the cloud into streaks (1 whole); the puffs read the same mask per pixel. */
+vec2 cloudTearUv(vec2 p) { return mat2(uTornM.xy, uTornM.zw) * (p - uCloudOff - uCloudTile.xy) / uCloudTile.z * 2.0; }
+float cloudTearAt(vec2 p) {
+  return uCloudCov.z > 0.0 ? mix(1.0, smoothstep(0.4, 0.56, texture2D(uCloudMap, cloudTearUv(p)).b), uCloudCov.z * 0.9) : 1.0;
+}
+/** How far cloud at this point of the deck is drawn: it parts where the camera comes down through it. */
+float cloudNearFade(vec2 p) {
+  return smoothstep(uCloudNear.x, uCloudNear.y, -(viewMatrix * vec4(p.x, uCloudTile.w, p.y, 1.0)).z);
+}
+/** 1 in sunlight, lower under a cloud: the cloud as drawn, shredded in a gale and gone where it has parted for the camera. */
 float cloudShadowAt(vec3 wp) {
+  if (uCloudShadow <= 0.0 || uAtmOn < 0.5) return 1.0;
   vec3 L = uAtmKeyDir;
   vec2 p = wp.xz + L.xz / max(L.y, 0.25) * (uCloudTile.w - wp.y);
-  return 1.0 - uCloudShadow * cloudCoverAt(p);
+  // A softer edge than the cloud's own, as light spreads past it on the way down.
+  float m = 0.5 * (uCloudCov.x + uCloudCov.y), hw = 1.5 * (uCloudCov.y - uCloudCov.x);
+  float c = smoothstep(m - hw, m + hw, cloudFieldAt(p).r) * cloudTearAt(p);
+  return 1.0 - uCloudShadow * c * cloudNearFade(p);
 }
 /** Lightning light falling on this point (0 when no flash). */
 float flashAt(vec3 wp) {
@@ -83,7 +99,8 @@ float flashAt(vec3 wp) {
 float mistAt(vec3 wp, vec3 eye) {
   if (uAtmOn < 0.5 || uMistDensity <= 0.0) return 0.0;
   vec2 muv = (wp.xz - uMistRect.xy) / uMistRect.zw;
-  float biome = (muv.x < 0.0 || muv.y < 0.0 || muv.x > 1.0 || muv.y > 1.0) ? 0.1 : texture2D(uMistMap, muv).r;
+  vec2 mm = (muv.x < 0.0 || muv.y < 0.0 || muv.x > 1.0 || muv.y > 1.0) ? vec2(0.1, 0.0) : texture2D(uMistMap, muv).rg;
+  float biome = mm.x; // mm.y: land (1) or sea (0)
   // Fog weather lies on everything, the open sea included.
   biome = mix(biome, 0.75, uMistFx.x);
   if (uMistDensity * biome < 0.004) return 0.0;
@@ -97,7 +114,16 @@ float mistAt(vec3 wp, vec3 eye) {
   float len = length(eye - wp), dh = h1 - h0;
   // Optical depth through an exponential layer: density rho/H at sea level, falling off with height H.
   float od = abs(dh) > 0.5 ? rho * len / dh * (exp(-h0 / H) - exp(-h1 / H)) : rho / H * len * exp(-h0 / H);
-  return clamp(1.0 - exp(-od), 0.0, uMistFx.y);
+  // Fog lies thinner on the water, so the coastline and the borders drawn on the sea still read.
+  // (Land and sea come from the mist map, not the height here, which the waves raise.)
+  float cap = uMistFx.y * (1.0 - uMistFx.w * (1.0 - mm.y));
+  float m = clamp(1.0 - exp(-od), 0.0, cap);
+  if (m < 0.02) return m;
+  // Borders and labels drawn on the map, land or sea, show through it; through fog weather almost
+  // wholly, as the fog is pale and so are many of the labels.
+  vec2 ouv = (wp.xz - uAtmOvRect.xy) / uAtmOvRect.zw;
+  float ova = (ouv.x < 0.0 || ouv.y < 0.0 || ouv.x > 1.0 || ouv.y > 1.0) ? 0.0 : texture2D(uAtmOverlay, ouv).a;
+  return m * (1.0 - mix(0.5, 0.9, uMistFx.x) * ova);
 }
 `;
 
@@ -116,7 +142,10 @@ vec2 groundUv(vec3 wp) {
 const MAP_SHOW_GLSL = MAP_UV_GLSL + /* glsl */`
 float mapShowAt(vec2 uv) {
   if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;
-  return smoothstep(0.3, 0.75, texture2D(uOverlay, uv, 2.5).a);
+  // Lines and lettering rather than the broad territory washes: what stands out from its blurred
+  // surroundings, plus anything solid.
+  float a = texture2D(uOverlay, uv, 1.0).a, blur = texture2D(uOverlay, uv, 4.5).a;
+  return max(smoothstep(0.04, 0.24, a - blur), smoothstep(0.6, 0.9, blur));
 }
 `;
 
@@ -130,7 +159,7 @@ const FIELD = 512;
 export class Atmosphere {
   readonly uniforms = {
     uAtmTime: { value: 0 }, uAtmOn: { value: 1 }, uCloudShadow: { value: 0.4 }, uMistDensity: { value: 0.5 }, uMistHeight: { value: 20 },
-    uSeaY: { value: 0 }, uWind: { value: new THREE.Vector2(9, 4) },
+    uSeaY: { value: 0 }, uWind: { value: new THREE.Vector2(9, 4) }, uCloudNear: { value: new THREE.Vector2(0, 1) },
     uCloudOff: { value: new THREE.Vector2() }, uMistOff: { value: new THREE.Vector2() },
     uCloudTile: { value: new THREE.Vector4(0, 0, 1, 100) }, uCloudMap: { value: null as THREE.Texture | null },
     uCloudCov: { value: new THREE.Vector4(0.6, 0.7, 0, 0) }, uTornM: { value: new THREE.Vector4(1, 0, 0, 1) },
@@ -138,6 +167,7 @@ export class Atmosphere {
     uMistFx: { value: new THREE.Vector4(0, 0.72, 1, 0) },
     uAtmKeyDir: { value: new THREE.Vector3(0, 1, 0) }, uMistColor: { value: new THREE.Color() },
     uFlash: { value: new THREE.Vector4(0, 0, 1, 0) }, uFlashCol: { value: FLASH_COLOR.clone() },
+    uAtmOverlay: { value: null as THREE.Texture | null }, uAtmOvRect: { value: new THREE.Vector4(0, 0, 1, 1) },
   };
   /** Puffs and the deck under them. */
   readonly clouds = new THREE.Group();
@@ -161,7 +191,7 @@ export class Atmosphere {
 
   constructor() {
     const shared = {
-      uNear: { value: new THREE.Vector2(0, 1) }, uLit: { value: new THREE.Color() }, uShade: { value: new THREE.Color() },
+      uLit: { value: new THREE.Color() }, uShade: { value: new THREE.Color() },
       uOverlay: { value: null as THREE.Texture | null }, uOverlayRect: { value: new THREE.Vector4(0, 0, 1, 1) }, uGroundY: { value: 0 },
     };
     this.mapShow = shared;
@@ -175,10 +205,11 @@ export class Atmosphere {
         ${ATMOS_GLSL}
         ${MAP_UV_GLSL}
         attribute vec3 aPos; attribute vec3 aMeta; // size, seed, shade
-        uniform vec2 uNear; uniform float uStretch, uThinOut;
+        uniform float uStretch, uThinOut;
         varying vec2 vUv, vTornUv, vMapUv; varying float vAlpha, vShade, vSeed; varying vec3 vWp;
         void main() {
           vec3 c = aPos;
+          c.y += uCloudTile.w;
           c.xz = uCloudTile.xy + mod(c.xz + uCloudOff - uCloudTile.xy, uCloudTile.z);
           vec2 e = (c.xz - uCloudTile.xy) / uCloudTile.z;
           float edge = smoothstep(0.0, 0.1, e.x) * smoothstep(1.0, 0.9, e.x) * smoothstep(0.0, 0.1, e.y) * smoothstep(1.0, 0.9, e.y);
@@ -198,10 +229,10 @@ export class Atmosphere {
           mvPosition.xy += off;
           // Where this corner lies on the deck, for shredding torn cloud (the view's inverse rotation is its transpose).
           vec3 corner = c + transpose(mat3(viewMatrix)) * vec3(off, 0.0);
-          vTornUv = mat2(uTornM.xy, uTornM.zw) * (corner.xz - uCloudOff - uCloudTile.xy) / uCloudTile.z * 2.0;
+          vTornUv = cloudTearUv(corner.xz);
           vMapUv = groundUv(corner);
           // Clouds part as the camera comes down through them.
-          vAlpha = edge * smoothstep(0.12, 0.7, cov) * smoothstep(uNear.x, uNear.y, -mvPosition.z);
+          vAlpha = edge * smoothstep(0.12, 0.7, cov) * smoothstep(uCloudNear.x, uCloudNear.y, -mvPosition.z);
           vAlpha *= smoothstep(uThinOut - 0.1, uThinOut + 0.1, fract(aMeta.y * 13.7));
           vUv = position.xy + 0.5; vShade = aMeta.z; vSeed = aMeta.y; vWp = c;
           gl_Position = projectionMatrix * mvPosition;
@@ -258,11 +289,11 @@ export class Atmosphere {
         #include <fog_pars_fragment>
         ${ATMOS_GLSL}
         ${MAP_SHOW_GLSL}
-        uniform float uOpacity, uMapShow, uSolid; uniform vec3 uLit, uShade; uniform vec2 uNear; uniform vec4 uDeckRim;
+        uniform float uOpacity, uMapShow, uSolid; uniform vec3 uLit, uShade; uniform vec4 uDeckRim;
         varying vec3 vWp; varying float vDepth;
         void main() {
           // Parts as the camera comes down, and fades out far past the map, where the plane ends.
-          float vFade = smoothstep(uNear.x, uNear.y, vDepth) * (1.0 - smoothstep(uDeckRim.z, uDeckRim.w, length(vWp.xz - uDeckRim.xy)));
+          float vFade = smoothstep(uCloudNear.x, uCloudNear.y, vDepth) * (1.0 - smoothstep(uDeckRim.z, uDeckRim.w, length(vWp.xz - uDeckRim.xy)));
           if (vFade < 0.004) discard;
           vec2 f = cloudFieldAt(vWp.xz);
           float cov = smoothstep(uCloudCov.x, uCloudCov.y, f.r);
@@ -319,6 +350,7 @@ export class Atmosphere {
     for (let k = 0; k < hf.data.length; k += 7) if (hf.data[k] > sea + 0.5) land.push(hf.data[k] - sea);
     land.sort((a, b) => a - b);
     this.fogScale = clamp((land.length ? land[land.length >> 1] : mistH) * 0.9, 6, mistH * 1.5) / mistH;
+    // Puffs sit at heights above the base, so a change of relief (painting mountains) only moves the base.
     this.uniforms.uCloudTile.value.set(cx - T / 2, cz - T / 2, T, alt);
     this.uniforms.uWind.value.set(span * 0.0032, span * 0.0014);
     this.deck.position.set(cx, alt, cz);
@@ -329,12 +361,13 @@ export class Atmosphere {
     const ca = Math.cos(wa), sa = Math.sin(wa);
     this.uniforms.uTornM.value.set(ca * 0.7, -sa * 2.6, sa * 0.7, ca * 2.6);
 
-    // Clouds: clusters of puffs and the field they make, seeded so a world always gets the same sky.
-    // Only the mist below depends on the terrain, so painting hexes doesn't rebuild the sky.
-    const sig = `${Math.round(span)}|${hexes.length}|${cx.toFixed(1)},${cz.toFixed(1)},${alt.toFixed(2)}`;
+    // Clouds: clusters of puffs and the field they make, seeded by the map's size so a world always
+    // gets the same sky. Only the mist below depends on the terrain, so painting hexes doesn't
+    // rebuild the sky (the field takes a noticeable moment to make).
+    const sig = `${Math.round(span)}|${cx.toFixed(1)},${cz.toFixed(1)}`;
     if (sig !== this.fieldSig) {
       this.fieldSig = sig;
-      let seed = Math.round(span) * 7919 + hexes.length;
+      let seed = Math.round(span) * 7919 + 101;
       const rnd = () => { seed = (seed * 16807) % 2147483647; return (seed & 0xffffff) / 0x1000000; };
       const puffs: Puff[] = [];
       for (let c = 0; c < 84; c++) {
@@ -348,7 +381,7 @@ export class Atmosphere {
           // Fuller in the middle and on top; a flat base.
           const sx = Math.cos(a) * d * R * 1.15, sz = Math.sin(a) * d * R * 0.8;
           const y = thick * h * (1 - d * 0.6);
-          puffs.push({ x: cx - T / 2 + ox + sx, y: alt + y, z: cz - T / 2 + oz + sz, size: R * (0.55 + rnd() * 0.6) * (1 - d * 0.35), seed: rnd(), shade: h * 0.7 + (1 - d) * 0.3 });
+          puffs.push({ x: cx - T / 2 + ox + sx, y, z: cz - T / 2 + oz + sz, size: R * (0.55 + rnd() * 0.6) * (1 - d * 0.35), seed: rnd(), shade: h * 0.7 + (1 - d) * 0.3 });
         }
       }
       const pos = new Float32Array(puffs.length * 3), meta = new Float32Array(puffs.length * 3);
@@ -377,6 +410,14 @@ export class Atmosphere {
       gr.addColorStop(0, `rgba(${w},${w},${w},0.85)`); gr.addColorStop(1, `rgba(${w},${w},${w},0)`);
       m.fillStyle = gr; m.beginPath(); m.arc(x, y, r, 0, Math.PI * 2); m.fill();
     }
+    // Green: how far each point is land, from the ground's height, so mistAt can tell land from sea
+    // without the waves' height fooling it.
+    const img = m.getImageData(0, 0, M, mh), px = img.data;
+    for (let j = 0; j < mh; j++) for (let i = 0; i < M; i++) {
+      const g = hf.at(rx + (i + 0.5) / s, rz + (j + 0.5) / s) - sea;
+      px[(j * M + i) * 4 + 1] = Math.round(clamp((g - 1.5) / 2.5, 0, 1) * 255);
+    }
+    m.putImageData(img, 0, 0);
     this.mistTex?.dispose();
     const mt = new THREE.CanvasTexture(mc);
     mt.colorSpace = THREE.NoColorSpace;
@@ -414,14 +455,18 @@ export class Atmosphere {
     };
     norm(broad); norm(fine); norm(torn);
     const data = new Uint8Array(N * N * 4);
-    const dens = new Float32Array(N * N);
+    // Density is stored in 256 steps, so its distribution is exactly a 256-bin histogram.
+    const hist = new Uint32Array(256);
     for (let k = 0; k < N * N; k++) {
       const d = Math.round((0.58 * smooth(0.08, 0.7, cl[k]) + 0.42 * broad[k]) * 255);
-      dens[k] = d / 255;
+      hist[d]++;
       data[k * 4] = d; data[k * 4 + 1] = fine[k] * 255; data[k * 4 + 2] = torn[k] * 255; data[k * 4 + 3] = 255;
     }
-    dens.sort();
-    for (let i = 0; i < this.quant.length; i++) this.quant[i] = dens[Math.round((i / (this.quant.length - 1)) * (N * N - 1))];
+    for (let i = 0, b = 0, below = hist[0]; i < this.quant.length; i++) {
+      const rank = Math.round((i / (this.quant.length - 1)) * (N * N - 1));
+      while (below <= rank && b < 255) below += hist[++b];
+      this.quant[i] = b / 255;
+    }
     const t = new THREE.DataTexture(data, N, N, THREE.RGBAFormat);
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter;
@@ -431,8 +476,14 @@ export class Atmosphere {
     return t;
   }
 
+  /** How far out the camera is: 0 close in, 1 at the whole-island view. */
+  farness(camDist: number) { return 1 - smooth(1.5, 0.6, camDist / this.span); }
+
   /** The draped map overlay, so its borders and labels can show through the clouds. */
-  setOverlay(tex: THREE.Texture | null, rect: THREE.Vector4) { this.mapShow.uOverlay.value = tex; this.mapShow.uOverlayRect.value = rect; }
+  setOverlay(tex: THREE.Texture | null, rect: THREE.Vector4) {
+    this.mapShow.uOverlay.value = this.uniforms.uAtmOverlay.value = tex;
+    this.mapShow.uOverlayRect.value = this.uniforms.uAtmOvRect.value = rect;
+  }
 
   /** The field density below which a share `f` of the tile lies. */
   protected quantile(f: number) {
@@ -465,18 +516,21 @@ export class Atmosphere {
     const dd = Math.min(Math.abs(h - 6.2), 24 - Math.abs(h - 6.2));
     const dawn = Math.exp(-(dd ** 2) / 4.5);
     const evening = Math.exp(-((h - 20.5) ** 2) / 6);
-    const base = 0.12 + 0.65 * dawn + 0.3 * evening + 0.22 * L.night;
-    // From the whole-island view fog lies lighter, so the map under it still reads.
+    const usual = (0.12 + 0.65 * dawn + 0.3 * evening + 0.22 * L.night) * (1 + 0.3 * w.rain) + 0.12 * w.rain;
+    // From the whole-island view fog lies lighter, so the map under it still reads. Fog weather and
+    // the usual dawn mist don't stack: whichever is thicker lies there.
     const nearIn = smooth(1.5, 0.6, camDist / this.span);
-    const fog = w.fog * w.fog * (0.62 + 0.38 * nearIn);
-    u.uMistDensity.value = this.on ? (base * (1 + 0.3 * w.rain) + 0.12 * w.rain) * (1 - fog) + (1 + 0.25 * dawn) * fog : 0;
-    u.uMistFx.value.set(w.fog * w.fog, 0.72 + 0.02 * w.fog, (1 + 0.4 * w.rain) * (1 + (this.fogScale - 1) * w.fog), 0);
+    const fogW = w.fog * w.fog;
+    u.uMistDensity.value = this.on ? Math.max(usual, fogW) * (1 - 0.55 * fogW * (1 - nearIn)) : 0;
+    // The cap keeps the land faintly readable through the thickest fog; on the water fog lies
+    // thinner still, so the coastline and the borders over the sea hold.
+    u.uMistFx.value.set(fogW, 0.72 + 0.02 * w.fog - 0.2 * fogW * (1 - nearIn), (1 + 0.4 * w.rain) * (1 + (this.fogScale - 1) * w.fog), 0.4 * fogW);
     // In fog the drama is low down: the cloud above thins (and so do its shadows) to let it show.
-    const veil = 1 - 0.55 * w.fog;
+    const veil = 1 - 0.8 * w.fog;
     u.uCloudShadow.value = this.on ? L.cloudShadow * veil : 0;
     const amb = this.amb.copy(L.hemiSky).multiplyScalar(L.hemiIntensity);
     u.uMistColor.value.copy(amb).multiplyScalar(0.75).add(this.tmp.copy(L.keyColor).multiplyScalar(0.16 * Math.max(L.keyDir.y, 0.2)));
-    u.uMistColor.value.lerp(L.horizon, 0.35 + 0.1 * w.fog);
+    u.uMistColor.value.lerp(L.horizon, 0.35);
     u.uFlash.value.set(wx.flashX, wx.flashZ, wx.flashR, this.on ? wx.flash : 0);
 
     const cu = this.cloudMat.uniforms;
@@ -484,19 +538,26 @@ export class Atmosphere {
     // Rain cloud is grey through; storm cloud is slate, darkest underneath.
     const dark = w.dark;
     // Cloud tops stand above the weather in full sun; storm cloud still reads dark from above.
-    cu.uLit.value.copy(L.keyAbove).multiplyScalar(0.42 * (1 - 0.5 * dark)).add(this.tmp.copy(amb).multiplyScalar(0.8)).multiplyScalar(1 - 0.6 * dark);
+    cu.uLit.value.copy(L.keyAbove).multiplyScalar(0.42 * (1 - 0.8 * dark)).add(this.tmp.copy(amb).multiplyScalar(0.8)).multiplyScalar(1 - 0.6 * dark);
     cu.uShade.value.copy(amb).multiplyScalar(0.62).lerp(L.horizon, 0.25).multiplyScalar(1 - 0.65 * dark);
+    // Cloud never reads darker than the lit ground under it, so a storm by night veils the map
+    // rather than blacking it out.
+    const ground = 0.1 * (lum(amb) + lum(L.keyColor) * Math.max(L.keyDir.y, 0.2));
+    liftTo(cu.uShade.value, ground); liftTo(cu.uLit.value, ground * 1.3);
     cu.uRim.value.copy(L.keyColor).multiplyScalar(0.35);
     cu.uStretch.value = 1 + 0.6 * smooth(0.86, 1, w.wind);
     // The deck shows from far out and parts as the camera comes down; it never sits on the hexcrawl.
     // Closer in than the whole-island view, the cloud over the place looked at clears and the sky
     // stays in the distance, so the map stays usable under any weather.
-    cu.uNear.value.set(camDist * (0.5 + 0.32 * nearIn), camDist * (0.85 + 0.4 * nearIn));
-    // Seen from far above, a heavy sky veils the island without hiding the map drawn on it.
-    const thin = (1 - smooth(2.4, 4.2, zoom) * 0.6) * veil;
+    // The cloud shadows part with it (cloudShadowAt reads the same depths).
+    u.uCloudNear.value.set(camDist * (0.5 + 0.32 * nearIn), camDist * (0.85 + 0.4 * nearIn));
+    // Seen from far above, a heavy sky veils the island without hiding the map drawn on it; by
+    // night, when the map has least light to show by, storm cloud veils it less.
+    const thin = (1 - smooth(2.4, 4.2, zoom) * 0.6) * veil * (1 - 0.5 * L.night * dark);
     // Cumulus for fair skies; under a full deck they sink into it, though a storm keeps its towers.
     cu.uOpacity.value = this.on ? 0.9 * thin * (1 - 0.35 * smooth(0.4, 0.8, c) - 0.4 * smooth(0.85, 1, c) + 0.25 * w.lightning) : 0;
-    this.deckMat.uniforms.uOpacity.value = this.on ? thin * (0.3 + 0.32 * smooth(0.3, 0.9, c)) : 0;
+    // The flat deck only fills in once the sky is closing; clear and fair skies are cumulus alone.
+    this.deckMat.uniforms.uOpacity.value = this.on ? thin * (0.3 + 0.32 * smooth(0.3, 0.9, c)) * smooth(0.32, 0.5, c) : 0;
     this.deckMat.uniforms.uSolid.value = smooth(0.7, 1, c);
     // Under a closing deck fewer cumulus stand out of it (a storm keeps more of its towers).
     cu.uThinOut.value = 0.7 * smooth(0.75, 1, c) * (1 - 0.5 * w.lightning);
@@ -515,14 +576,19 @@ export class Atmosphere {
 function periodicNoise(N: number, px: number, py: number, rnd: () => number, out: Float32Array, amp: number) {
   const lat = new Float32Array(px * py);
   for (let i = 0; i < lat.length; i++) lat[i] = rnd();
+  // The column lookups are the same on every row.
+  const X0 = new Int32Array(N), X1 = new Int32Array(N), UX = new Float32Array(N);
+  for (let x = 0; x < N; x++) {
+    const fx = (x / N) * px, ix = Math.floor(fx), tx = fx - ix;
+    X0[x] = ix % px; X1[x] = (ix + 1) % px; UX[x] = tx * tx * (3 - 2 * tx);
+  }
   for (let y = 0; y < N; y++) {
     const fy = (y / N) * py, iy = Math.floor(fy), ty = fy - iy, uy = ty * ty * (3 - 2 * ty);
-    const r0 = (iy % py) * px, r1 = ((iy + 1) % py) * px;
+    const r0 = (iy % py) * px, r1 = ((iy + 1) % py) * px, row = y * N;
     for (let x = 0; x < N; x++) {
-      const fx = (x / N) * px, ix = Math.floor(fx), tx = fx - ix, ux = tx * tx * (3 - 2 * tx);
-      const x0 = ix % px, x1 = (ix + 1) % px;
+      const ux = UX[x], x0 = X0[x], x1 = X1[x];
       const a = lat[r0 + x0], b = lat[r0 + x1], c = lat[r1 + x0], d = lat[r1 + x1];
-      out[y * N + x] += amp * (a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy);
+      out[row + x] += amp * (a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy);
     }
   }
 }

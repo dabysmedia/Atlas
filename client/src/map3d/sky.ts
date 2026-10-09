@@ -107,7 +107,9 @@ const grey = new THREE.Color(), tint = new THREE.Color(), flashC = new THREE.Col
 const NEUTRAL = new THREE.Color(1, 1, 1), STORM = new THREE.Color(0.78, 0.93, 1.0);
 /** Lightning: a cold blue-white. */
 export const FLASH_COLOR = new THREE.Color(0.72, 0.8, 1.0);
-const lum = (c: THREE.Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+export const lum = (c: THREE.Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+/** Brighten a color, keeping its hue, until its luminance is at least `t`. */
+export const liftTo = (c: THREE.Color, t: number) => { const l = lum(c); if (l < t) { if (l > 1e-4) c.multiplyScalar(t / l); else c.setScalar(t); } return c; };
 export const addScaled = (c: THREE.Color, d: THREE.Color, s: number) => { c.r += d.r * s; c.g += d.g * s; c.b += d.b * s; return c; };
 /** Pull a color toward a grey of the same brightness, tinted. */
 const greyOut = (c: THREE.Color, t: number, k = 1) => { const l = lum(c) * k; c.lerp(grey.setRGB(l * tint.r, l * tint.g, l * tint.b), t); };
@@ -115,16 +117,18 @@ const greyOut = (c: THREE.Color, t: number, k = 1) => { const l = lum(c) * k; c.
 /**
  * Weather over the light, in place. Cloud takes the direct sun (patchy under broken cloud, an even
  * dimming under a full deck), lifts the ambient share, and greys the sky; storm cloud is darker and
- * a little blue-green. Rain and fog thicken the haze. A lightning flash briefly lifts sky and ambient.
+ * a little blue-green. Rain and fog thicken the haze. A lightning flash (`flash`, its wide part)
+ * lifts sky and ambient a little: enough to feel, never a white-out. `far` (0 close in, 1 the
+ * whole-island view) eases off what would cost the map its legibility from high up.
  */
-export function weatherLight(L: Lighting, w: WeatherLook, flash = 0) {
+export function weatherLight(L: Lighting, w: WeatherLook, flash = 0, far = 0) {
   const c = w.cover, k = w.dark;
   // Shadows under broken cloud; under a full deck the sun is simply dimmed. The key is scaled so the
   // light reaching the ground on average is the look's share of sun.
   L.cloudShadow *= 1 - 0.85 * smooth(0.72, 1, c);
   const keyK = clamp(w.sun / Math.max(0.05, 1 - L.cloudShadow * c), 0, 1);
   // By night the moon is the map's only light, so cloud takes much less of it: the map still reads.
-  L.keyColor.multiplyScalar(keyK + (1 - keyK) * 0.6 * L.night);
+  L.keyColor.multiplyScalar(keyK + (1 - keyK) * 0.75 * L.night);
   tint.copy(NEUTRAL).lerp(STORM, k);
   greyOut(L.hemiSky, c * 0.75);
   greyOut(L.hemiGround, c * 0.5);
@@ -137,15 +141,21 @@ export function weatherLight(L: Lighting, w: WeatherLook, flash = 0) {
   const hl = lum(L.horizon);
   greyOut(L.zenith, c * 0.9);
   L.zenith.lerp(grey.setRGB(hl * tint.r, hl * tint.g, hl * tint.b).multiplyScalar(1.12), c * 0.75);
-  const dim = 1 - 0.62 * k * c;
+  // By night the sky is dark whatever the weather: storm cloud darkens it less, and the map keeps
+  // its exposure and most of its clarity.
+  const n = L.night;
+  const dim = 1 - 0.62 * k * c * (1 - 0.6 * n);
   L.horizon.multiplyScalar(dim); L.zenith.multiplyScalar(dim * (1 - 0.12 * k));
-  L.exposure *= 1 - 0.08 * c - 0.05 * k;
-  L.fogK *= 1 + 0.5 * w.rain + 0.4 * w.fog;
-  L.overlayGlow += 0.14 * c * k;
+  L.exposure *= 1 - (0.08 * c + 0.05 * k) * (1 - 0.7 * n);
+  // Fog weather is mostly the low fog in the valleys (the mist), not a haze over everything.
+  L.fogK *= 1 + (0.5 * w.rain + 0.25 * w.fog) * (1 - 0.5 * n) * (1 - 0.6 * far);
+  // Borders, rivers and labels light themselves a little more under a dark sky, most of all by a
+  // rainy night. Not in fog: it is pale, so a glow would only wash them toward it.
+  L.overlayGlow += c * k * (0.14 + 0.4 * n) + 0.3 * n * w.rain;
   if (flash > 0) {
     flashC.copy(FLASH_COLOR).multiplyScalar(flash);
-    addScaled(L.hemiSky, flashC, 0.45); L.hemiIntensity += flash * 0.35;
-    addScaled(L.zenith, flashC, 0.16); addScaled(L.horizon, flashC, 0.1);
+    addScaled(L.hemiSky, flashC, 0.12); L.hemiIntensity += flash * 0.08;
+    addScaled(L.zenith, flashC, 0.05); addScaled(L.horizon, flashC, 0.03);
   }
 }
 

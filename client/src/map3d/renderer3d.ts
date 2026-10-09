@@ -22,7 +22,7 @@ import { HexMapRenderer, HEX_SIZE, MAX_ZOOM, clamp, type Camera, type RenderInpu
 import type { ArtPlacement, ModelPlacement, TokenKind, Token } from '../types';
 import { hoursNow, type Daylight } from '../../../shared/daylight';
 import { HeightField, rasterizeMesh, reliefFromHexes } from './heightfield';
-import { lightingAt, makeSkyDome, partOfDay, weatherLight, addScaled, FLASH_COLOR, type Lighting } from './sky';
+import { lightingAt, makeSkyDome, partOfDay, weatherLight, addScaled, lum, liftTo, FLASH_COLOR, type Lighting } from './sky';
 import { depthTexture, makeWater } from './water';
 import { ATMOS_GLSL, Atmosphere, type SkyWeather } from './atmosphere';
 import { WeatherFx, type WeatherView } from './weatherfx';
@@ -54,7 +54,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected atmosSig = '';
   // Weather: the eased look, rain and lightning; ground wetness for the drape.
   protected wx = new WeatherFx();
-  protected wxUniforms = { uWet: { value: 0 }, uWetSky: { value: new THREE.Color() } };
+  protected wxUniforms = { uWet: { value: 0 }, uWetSky: { value: new THREE.Color() }, uWetRough: { value: 0.14 }, uSunSpec: { value: 1 } };
   protected wxSky: SkyWeather = { look: this.wx.look, flash: 0, flashX: 0, flashZ: 0, flashR: 1 };
   protected wxView: WeatherView = {
     camera: this.camera, camDist: 1, target: new THREE.Vector3(), sea: 0, cloudBase: 0, width: 1, height: 1,
@@ -66,6 +66,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
   };
   protected seaState = { waves: 1, chop: 0.5, foam: 0.5, rain: 0 };
   protected rainColor = new THREE.Color();
+  protected tmpColor = new THREE.Color();
   protected lastLight = 0;
   protected ground: THREE.Object3D | null = null;
   protected glows = new THREE.Group();
@@ -280,7 +281,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, U, A, W);
       sh.vertexShader = 'varying vec3 vWp;\n' + sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  vWp = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-      sh.fragmentShader = 'varying vec3 vWp;\nuniform sampler2D uOverlay;\nuniform vec4 uOverlayRect;\nuniform float uOverlayGlow, uWet;\nuniform vec3 uWetSky;\n' + sh.fragmentShader
+      sh.fragmentShader = 'varying vec3 vWp;\nuniform sampler2D uOverlay;\nuniform vec4 uOverlayRect;\nuniform float uOverlayGlow, uWet, uWetRough, uSunSpec;\nuniform vec3 uWetSky;\n' + sh.fragmentShader
         .replace('#include <common>', '#include <common>\n' + ATMOS_GLSL)
         .replace('#include <map_fragment>', `#include <map_fragment>
   vec2 ouv = (vWp.xz - uOverlayRect.xy) / uOverlayRect.zw;
@@ -292,28 +293,37 @@ export class HexMapRenderer3D extends HexMapRenderer {
   float atmPuddle = 0.0;
   vec3 atmN = vec3(0.0, 1.0, 0.0);
   if (uWet > 0.0) {
-    atmN = normalize(cross(dFdx(vWp), dFdy(vWp)));
+    // The surface's smooth normal in the world (facets only on a flat-shaded mesh), so wet ground
+    // never shows the mesh's triangles.
+    #ifdef FLAT_SHADED
+      atmN = normalize(cross(dFdx(vWp), dFdy(vWp)));
+    #else
+      atmN = inverseTransformDirection(normalize(vNormal), viewMatrix);
+    #endif
     atmN = atmN.y < 0.0 ? -atmN : atmN;
-    float flatGround = smoothstep(0.97, 0.995, atmN.y);
+    float flatGround = smoothstep(0.88, 0.97, atmN.y);
     float low = 1.0 - smoothstep(0.08, 0.3, (vWp.y - uSeaY) / max(uCloudTile.w - uSeaY, 1.0));
     atmPuddle = uWet * uWet * flatGround * low * smoothstep(0.42, 0.68, atmNoise(vWp.xz * 0.07)) * (1.0 - wet);
     diffuseColor.rgb *= 1.0 - 0.34 * uWet - 0.3 * atmPuddle;
   }
   diffuseColor.rgb = diffuseColor.rgb * (1.0 - ov.a) + ov.rgb;`)
         .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-  roughnessFactor = mix(mix(roughnessFactor, 0.55, uWet * 0.7), 0.12, atmPuddle);`)
+  // Puddles are glossy, but under a closed sky they only mirror its grey, never glint.
+  roughnessFactor = mix(mix(roughnessFactor, 0.6, uWet * 0.6), uWetRough, atmPuddle);`)
         .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
   float atmCs = cloudShadowAt(vWp);
-  reflectedLight.directDiffuse *= atmCs; reflectedLight.directSpecular *= atmCs;`)
+  // Light through a closed deck comes from the whole sky: no highlights, even on wet ground.
+  reflectedLight.directDiffuse *= atmCs; reflectedLight.directSpecular *= atmCs * uSunSpec;`)
         .replace('#include <opaque_fragment>', `#include <opaque_fragment>
-  // Borders and labels drawn on the ground show a little through mist and fog.
-  gl_FragColor.rgb = mix(gl_FragColor.rgb, uMistColor, mistAt(vWp, cameraPosition) * (1.0 - 0.4 * ov.a));`)
+  // Mist and fog (borders and labels drawn on the ground show through it).
+  gl_FragColor.rgb = mix(gl_FragColor.rgb, uMistColor, mistAt(vWp, cameraPosition));`)
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
   totalEmissiveRadiance += ov.rgb * uOverlayGlow;
-  // Wet ground and puddles catch the sky at a glancing angle; lightning lights the ground near a strike.
+  // Wet ground and puddles catch the sky at a glancing angle: rough wet ground only a soft sheen
+  // where it faces the sky, puddles a mirror. Lightning lights the ground near a strike.
   if (uWet > 0.0) {
     float atmF = 0.04 + 0.96 * pow(1.0 - max(dot(atmN, normalize(cameraPosition - vWp)), 0.0), 5.0);
-    totalEmissiveRadiance += uWetSky * atmF * (uWet * 0.22 + atmPuddle * 0.9);
+    totalEmissiveRadiance += uWetSky * (uWet * 0.14 * min(atmF, 0.4) * smoothstep(0.45, 0.85, atmN.y) + atmPuddle * 0.9 * atmF);
   }
   totalEmissiveRadiance += diffuseColor.rgb * uFlashCol * flashAt(vWp) * 0.8;`);
     };
@@ -601,7 +611,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
   /** Force a lightning strike, bolt and all, on the next frame (screenshots and tests). */
   strike() { this.wx.strike(); }
   /** For tests and the frame readout: the weather being drawn. */
-  weatherInfo() { return { kind: this.wx.kind, look: { ...this.wx.look }, wet: this.wx.wet, flash: this.wx.flash }; }
+  weatherInfo() { return { kind: this.wx.kind, look: { ...this.wx.look }, wet: this.wx.wet, flash: this.wx.flash, flashWide: this.wx.flashWide }; }
 
   protected applyLight(now: number) {
     const on = this.layers.atmosphere !== false;
@@ -617,7 +627,8 @@ export class HexMapRenderer3D extends HexMapRenderer {
     wx.lightning(view, on);
 
     const L = (this.light = lightingAt(this.hourAt(now)));
-    weatherLight(L, w, wx.flash);
+    const far = this.atmos.farness(view.camDist);
+    weatherLight(L, w, wx.flashWide, far);
     this.shownHour = L.hour;
     this.key.color.copy(L.keyColor); this.key.intensity = 1;
     this.hemi.color.copy(L.hemiSky); this.hemi.groundColor.copy(L.hemiGround); this.hemi.intensity = L.hemiIntensity;
@@ -640,16 +651,23 @@ export class HexMapRenderer3D extends HexMapRenderer {
     sw.flash = wx.flash; sw.flashX = wx.flashPos.x; sw.flashZ = wx.flashPos.z; sw.flashR = wx.flashReach;
     this.atmos.setOverlay(this.ovTex, this.ovUniforms.uOverlayRect.value);
     this.atmos.update(now, dt, L, view.camDist, this.cam.zoom, this.groundY, sw);
-    // Rain catches the light of the sky around it, and the lightning.
-    this.rainColor.copy(L.horizon).multiplyScalar(0.8).lerp(L.hemiSky, 0.2);
-    addScaled(this.rainColor, FLASH_COLOR, wx.flash * 0.8);
+    // Rain catches the light of the sky around it: kept paler than the ground it falls past, so
+    // fine drizzle and rain by night still show. The lightning catches it too.
+    const sky = this.tmpColor.copy(L.hemiSky).multiplyScalar(L.hemiIntensity);
+    this.rainColor.copy(L.horizon).lerp(sky, 0.5).multiplyScalar(0.7);
+    // From high up it stands out further, so a veil of rain reads over the whole island.
+    liftTo(this.rainColor, Math.max(0.16 * (1 + 0.5 * far) * (lum(sky) + lum(L.keyColor) * Math.max(L.keyDir.y, 0.2)), 0.015));
+    addScaled(this.rainColor, FLASH_COLOR, wx.flashWide * 0.3);
     wx.placeRain(view, this.rainColor, on);
     // The sea follows the wind; rain pocks it.
     const ss = this.seaState;
     ss.waves = 0.55 + 1.65 * w.wind; ss.chop = 0.3 + 0.7 * w.wind; ss.foam = smooth(0.3, 1, w.wind); ss.rain = w.rain;
     this.water.setSea(ss);
-    this.wxUniforms.uWet.value = on ? wx.wet : 0;
+    // From high up, wet ground darkening the whole island would only flatten the map.
+    this.wxUniforms.uWet.value = on ? wx.wet * (1 - 0.6 * far) : 0;
     this.wxUniforms.uWetSky.value.copy(L.horizon).lerp(L.zenith, 0.35);
+    this.wxUniforms.uWetRough.value = 0.14 + 0.26 * smooth(0.6, 0.95, w.cover);
+    this.wxUniforms.uSunSpec.value = 1 - 0.85 * smooth(0.6, 0.95, w.cover);
     this.ovUniforms.uOverlayGlow.value = L.overlayGlow;
     for (const s of this.glows.children as THREE.Sprite[]) (s.material as THREE.SpriteMaterial).opacity = L.night * (s.userData.strength as number);
     this.glows.visible = L.night > 0.01;

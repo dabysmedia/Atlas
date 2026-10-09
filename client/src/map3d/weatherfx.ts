@@ -9,11 +9,13 @@
  * fine slanted veil from the overview. Streaks are expanded in screen space so they never thin to
  * nothing.
  *
- * Lightning comes at random intervals as two or three quick flickers that light the clouds from
- * inside near the strike and lift the sky and ambient a little; often a bolt shows too, a jagged
- * branching line from the cloud base to the ground or sea, drawn as glowing screen-space ribbons.
- * Its clock advances by at most a twentieth of a second a frame, so a slow machine sees each flash
- * over a few frames instead of missing it.
+ * Lightning comes at random intervals. A strike is one flash, sometimes followed a third of a second
+ * later by a weaker one: each lights the cloud from inside near the strike and the ground under
+ * it, and only the first lifts the sky and ambient light, a little. Kept brief, local and moderate
+ * so it never strobes the screen; with reduced motion asked for it is a single slow glow. Often a
+ * bolt shows too, a jagged branching line from the cloud base to the ground or sea, drawn as glowing
+ * screen-space ribbons. Its clock advances by at most a twentieth of a second a frame, so a slow
+ * machine sees each flash over a few frames instead of missing it.
  */
 import * as THREE from 'three';
 import { weatherLook, type WeatherKind, type WeatherLook } from '../../../shared/weather';
@@ -23,6 +25,8 @@ const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const smooth = (a: number, b: number, v: number) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 const FIELDS = ['cover', 'dark', 'rain', 'lightning', 'fog', 'wind', 'sun'] as const;
 const CLEAR: WeatherLook = { ...weatherLook('clear'), cover: 0 };
+/** One lightning flash, `ds` seconds in: up in a fiftieth of a second, dying away over about a fifth. */
+const pulse = (ds: number) => (ds < 0 ? 0 : smooth(0, 0.02, ds) * Math.exp(-ds / 0.08));
 
 /** Seconds a change of weather takes to ease in; seconds of rain to soak the ground; to dry it. */
 const EASE_S = 8, SOAK_S = 20, DRY_S = 60;
@@ -59,11 +63,18 @@ export class WeatherFx {
   protected clock = 0;
   protected nextStrike = 6;
   protected strikeAt = -10;
-  protected pulses = new Float32Array(6); // time, amplitude ×3
+  /** The second, weaker flash of a strike: seconds after the first, and its strength (0 none). */
+  protected secondAt = 0;
+  protected secondAmp = 0;
+  /** This strike is a single slow glow (reduced motion). */
+  protected soft = false;
   protected boltOn = false;
   protected forced = false;
-  /** Brightness of the current flash (0 none) and where it is. */
+  protected reduceMotion = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+  /** Brightness of the current flash in the cloud and on the ground near the strike (0 none), and where it is. */
   flash = 0;
+  /** How much the current flash lifts the whole sky and the ambient light (first flash only; 0 none). */
+  flashWide = 0;
   readonly flashPos = new THREE.Vector3();
   flashReach = 1;
 
@@ -96,13 +107,14 @@ export class WeatherFx {
         uBox: { value: new THREE.Vector4() }, uBase: { value: 0 }, uFall: { value: 0 }, uDrift: { value: new THREE.Vector2() },
         uDir: { value: new THREE.Vector3(0, -1, 0) }, uLen: { value: 1 }, uWidth: { value: 1 }, uRes: { value: new THREE.Vector2(1, 1) },
         uNearFade: { value: new THREE.Vector2(0, 1) }, uColor: { value: new THREE.Color() }, uAlpha: { value: 0.3 },
+        uMinLen: { value: 2.5 },
       }]),
       transparent: true, depthWrite: false, fog: true,
       vertexShader: /* glsl */`
         #include <fog_pars_vertex>
         attribute vec4 aSeed;
         uniform vec4 uBox; // min x, min z, width, height
-        uniform float uBase, uFall, uLen, uWidth, uAlpha;
+        uniform float uBase, uFall, uLen, uWidth, uAlpha, uMinLen;
         uniform vec2 uDrift, uRes, uNearFade;
         uniform vec3 uDir;
         varying float vA, vX, vY;
@@ -110,7 +122,7 @@ export class WeatherFx {
           // Drops on a world lattice repeating every box width, so they stay put as the box moves.
           vec3 p;
           p.xz = uBox.xy + mod(aSeed.xz * uBox.z + uDrift - uBox.xy, uBox.z);
-          float h = mod(aSeed.y * uBox.w - uFall * (0.8 + 0.4 * aSeed.w), uBox.w);
+          float h = mod(aSeed.y * uBox.w - uFall * (1.0 + 0.1 * floor(aSeed.w * 4.0)), uBox.w);
           p.y = uBase + h;
           vec2 e = (p.xz - uBox.xy) / uBox.z;
           e = min(e, 1.0 - e);
@@ -127,7 +139,7 @@ export class WeatherFx {
           vec4 c = mix(ca, cb, position.y);
           c.xy += vec2(-dir.y, dir.x) * position.x * uWidth / uRes * c.w;
           // A streak shorter than a couple of pixels still shows as a short dash.
-          c.xy += dir * (position.y - 0.5) * max(0.0, 2.5 - l) / uRes * c.w;
+          c.xy += dir * (position.y - 0.5) * max(0.0, uMinLen - l) / uRes * c.w;
           vA = fade * uAlpha * (0.45 + 0.55 * fract(aSeed.w * 7.13));
           vX = position.x * 2.0; vY = position.y;
           gl_Position = (vA < 0.002) ? vec4(0.0, 0.0, 2.0, 1.0) : c;
@@ -218,7 +230,7 @@ export class WeatherFx {
     const real = this.lastNow ? clamp((now - this.lastNow) / 1000, 0, 5) : 0;
     this.lastNow = now;
     const t = smooth(0, 1, (now - this.t0) / (EASE_S * 1000));
-    for (const k of FIELDS) this.eased[k] = this.from[k] + (this.to[k] - this.from[k]) * t;
+    for (let i = 0; i < FIELDS.length; i++) { const k = FIELDS[i]; this.eased[k] = this.from[k] + (this.to[k] - this.from[k]) * t; }
     Object.assign(this.look, on ? this.eased : CLEAR);
     // Ground soaks over ~20 s of steady rain (less in drizzle), and dries more slowly.
     const soak = on ? smooth(0.05, 0.5, this.look.rain) : 0;
@@ -230,36 +242,40 @@ export class WeatherFx {
   /** Strike when it's time, and work out this frame's flash. */
   lightning(v: WeatherView, on: boolean) {
     const w = this.look, now = this.clock;
-    const P = this.pulses;
-    if (w.lightning <= 0.01) this.nextStrike = Math.max(this.nextStrike, now + 2);
-    if (this.forced || (on && w.lightning > 0.01 && now >= this.nextStrike)) {
+    // Lightning needs the storm's cloud: none from a sky still closing in as a storm eases in.
+    const rate = w.lightning * smooth(0.8, 1, w.cover);
+    if (rate <= 0.01) this.nextStrike = Math.max(this.nextStrike, now + 2);
+    if (this.forced || (on && rate > 0.01 && now >= this.nextStrike)) {
       const forced = this.forced;
       this.forced = false;
       // ~4-15 s apart in a full storm, rarer as the lightning dies down.
-      this.nextStrike = now + (4 + Math.random() * 11) / Math.max(0.05, w.lightning);
+      this.nextStrike = now + (4 + Math.random() * 11) / Math.max(0.05, rate);
       const at = v.strikePoint(this.v3);
       if (at) {
         this.strikeAt = now;
         this.flashPos.copy(at);
-        this.flashReach = v.camDist * (0.25 + Math.random() * 0.12);
-        // Two or three flickers, the second usually weaker.
-        P[0] = 0; P[1] = 0.8 + Math.random() * 0.2;
-        P[2] = 0.07 + Math.random() * 0.06; P[3] = 0.45 + Math.random() * 0.35;
-        const third = Math.random() < 0.6;
-        P[4] = P[2] + 0.08 + Math.random() * 0.1; P[5] = third ? 0.5 + Math.random() * 0.4 : 0;
+        this.flashReach = v.camDist * (0.085 + Math.random() * 0.035);
+        this.soft = !!this.reduceMotion?.matches;
+        // Now and then a weaker return stroke a third of a second later; never a rapid flicker.
+        const two = !this.soft && Math.random() < 0.6;
+        this.secondAt = 0.28 + Math.random() * 0.14;
+        this.secondAmp = two ? 0.45 + Math.random() * 0.25 : 0;
         this.boltOn = forced || Math.random() < 0.65;
         if (this.boltOn) this.buildBolt(at, v);
       }
     }
     const s = now - this.strikeAt;
-    let f = 0;
-    for (let i = 0; i < 3; i++) { const ds = s - P[i * 2]; if (ds >= 0) f += P[i * 2 + 1] * Math.exp(-ds / 0.07) * smooth(0, 0.012, ds + 0.004); }
-    // Brief and moderate: a flash never whites out the map.
-    this.flash = on && s < 0.9 ? clamp(f, 0, 1) * 0.85 : 0;
-    const showBolt = on && this.boltOn && s < 0.24 + P[4];
+    let f: number, wide: number;
+    if (this.soft) { f = 0.7 * smooth(0, 0.2, s) * Math.exp(-Math.max(0, s - 0.2) / 0.45); wide = 0; } else { f = pulse(s) + this.secondAmp * pulse(s - this.secondAt); wide = pulse(s); }
+    const live = on && s < (this.soft ? 2 : 1);
+    this.flash = live ? clamp(f, 0, 1) : 0;
+    this.flashWide = live ? clamp(wide, 0, 1) : 0;
+    const showBolt = live && this.boltOn && s < (this.soft ? 1.2 : 0.2 + (this.secondAmp > 0 ? this.secondAt : 0));
     this.bolt.visible = showBolt && this.flash > 0.04;
     if (this.bolt.visible) {
-      this.boltMat.uniforms.uBright.value = clamp(f * 1.3, 0.25, 1.2);
+      // Seen from above the cloud, the bolt is under it, dimmed by the deck like the rain.
+      this.bolt.renderOrder = v.camera.position.y > v.cloudBase ? 3 : 6;
+      this.boltMat.uniforms.uBright.value = this.soft ? clamp(f * 1.4, 0, 0.9) : clamp(f * 1.3, 0.25, 1.2);
       this.boltMat.uniforms.uRes.value.set(v.width / 2, v.height / 2);
       this.boltMat.uniforms.uGlow.value = clamp(10 * Math.sqrt(1200 / Math.max(200, v.camDist)), 5, 16) * (v.width > 2200 ? 1.6 : 1);
     }
@@ -305,7 +321,8 @@ export class WeatherFx {
     const w = this.look;
     const amount = on ? w.rain : 0;
     const g = this.rain.geometry as THREE.InstancedBufferGeometry;
-    g.instanceCount = Math.round(RAIN_MAX * clamp(amount * 1.15, 0, 1));
+    // Light rain is many fine drops rather than a few: the count goes with the square root.
+    g.instanceCount = Math.round(RAIN_MAX * clamp(Math.sqrt(amount) * smooth(0, 0.12, amount), 0, 1));
     this.rain.visible = g.instanceCount > 0;
     if (!this.rain.visible) return;
     const u = this.rainMat.uniforms;
@@ -318,25 +335,34 @@ export class WeatherFx {
     u.uBox.value.set(cx - S / 2, cz - S / 2, S, H);
     u.uBase.value = v.sea;
     // Streaks: long and fast close in, short dashes from far out; heavier rain, longer streaks.
-    const len = Math.min(D * 0.016, H * 0.45) * (0.55 + 0.6 * amount);
+    const len = Math.min(D * 0.016, H * 0.45) * (0.4 + 0.75 * amount);
     const dt = this.dtc();
-    this.fall += len * 14 * dt;
+    // Wrapped where the drop pattern repeats (each drop falls at 1, 1.1, 1.2 or 1.3 times the speed),
+    // so it never grows past float precision.
+    this.fall = (this.fall + len * 14 * dt) % (H * 10);
     // Slant with the wind; a gale drives it nearly sideways. Seen from straight above a falling
     // streak would shrink to a dot, so the view from overhead leans it a little more.
     const down = -v.camera.getWorldDirection(this.v3b).y;
     const slant = 0.12 + 0.75 * w.wind * w.wind + 0.45 * smooth(0.75, 0.98, down);
-    this.drift.x += this.wind.x * slant * len * 14 * dt; this.drift.y += this.wind.y * slant * len * 14 * dt;
-    u.uFall.value = this.fall % (H * 1000);
+    this.drift.x = (this.drift.x + this.wind.x * slant * len * 14 * dt) % S; this.drift.y = (this.drift.y + this.wind.y * slant * len * 14 * dt) % S;
+    u.uFall.value = this.fall;
     u.uDrift.value.copy(this.drift);
     u.uDir.value.set(this.wind.x * slant, -1, this.wind.y * slant).normalize();
     u.uLen.value = len;
-    u.uWidth.value = (0.9 + 0.7 * smooth(0.2, 0.9, amount)) * (v.width > 2200 ? 1.5 : 1);
+    // Even drizzle shows: no streak thinner than a pixel or fainter than about half. From high over
+    // the island the streaks would be specks, so they keep a few pixels' length and a little more
+    // weight, and rain shows as a slanting veil whose density tells drizzle from a downpour.
+    const far = smooth(3, 10, D / Math.max(v.cloudBase - v.sea, 1));
+    const hi = v.width > 2200 ? 1.5 : 1;
+    u.uWidth.value = (1.2 + 0.5 * smooth(0.2, 0.9, amount) + 0.4 * far) * hi;
+    u.uMinLen.value = (2.5 + far * (3.5 + 2.5 * amount)) * hi;
     u.uRes.value.set(v.width / 2, v.height / 2);
     u.uNearFade.value.set(D * 0.12, D * 0.3);
-    u.uAlpha.value = (0.22 + 0.4 * amount) * (0.7 + 0.3 * smooth(0, 0.6, 1 - D / (D + 2000)));
+    u.uAlpha.value = Math.min(0.85, (0.45 + 0.15 * amount) * (1 + 0.3 * far));
     u.uColor.value.copy(color);
-    // Drawn before the clouds when looking down on them, after when under them.
-    this.rain.renderOrder = cam.y > v.cloudBase ? 3 : 6;
+    // Drawn before the clouds when looking down on them, after when under them; the bolt too. From
+    // the whole-island view the deck is only a veil, and the rain falls through it.
+    this.rain.renderOrder = cam.y > v.cloudBase && far < 0.5 ? 3 : 6;
   }
 
   protected lastClock = 0;

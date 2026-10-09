@@ -172,7 +172,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
   resize(w: number, h: number) {
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.w = w; this.h = h;
-    this.gl.setPixelRatio(this.dpr);
+    this.gl.setPixelRatio(this.dpr * this.renderScale);
     this.gl.setSize(w, h, false);
     this.hud.width = Math.round(w * this.dpr); this.hud.height = Math.round(h * this.dpr);
     this.camera.aspect = w / Math.max(1, h);
@@ -714,16 +714,23 @@ export class HexMapRenderer3D extends HexMapRenderer {
 
   /**
    * A machine that can't keep up (frames slower than ~25 a second for a few seconds) drops to a
-   * coarser wave simulation and grid. Once per session.
+   * coarser wave simulation and grid. One that still crawls after that (no GPU: software GL)
+   * draws the 3D scene at half resolution, so clicks and drags stay responsive. Once per session.
    */
   protected paceMs = 16;
   protected slowFrames = 0;
+  protected renderScale = 1;
   lowQuality = false;
   protected watchPace(raw: number) {
-    if (this.lowQuality || document.hidden || raw <= 0 || raw > 2000) return;
+    if (this.renderScale < 1 || document.hidden || raw <= 0 || raw > 4000) return;
     this.paceMs = this.paceMs * 0.95 + raw * 0.05;
-    this.slowFrames = this.paceMs > 40 ? this.slowFrames + 1 : 0;
-    if (this.slowFrames > 90 || (this.slowFrames > 3 && this.paceMs > 400)) this.setLowQuality(true);
+    if (!this.lowQuality) {
+      this.slowFrames = this.paceMs > 40 ? this.slowFrames + 1 : 0;
+      if (this.slowFrames > 90 || (this.slowFrames > 3 && this.paceMs > 400)) { this.setLowQuality(true); this.slowFrames = 0; this.paceMs = 100; }
+      return;
+    }
+    this.slowFrames = this.paceMs > 250 ? this.slowFrames + 1 : 0;
+    if (this.slowFrames > 6) { this.renderScale = 0.5; this.resize(this.w, this.h); }
   }
   setLowQuality(on: boolean) {
     this.lowQuality = on;
@@ -871,7 +878,8 @@ export class HexMapRenderer3D extends HexMapRenderer {
       this.drawHud(performance.now());
       const ctx = out.getContext('2d')!;
       const sx = ((this.w - w) / 2) * this.dpr, sy = ((this.h - h) / 2) * this.dpr;
-      ctx.drawImage(this.glCanvas, sx, sy, w * this.dpr, h * this.dpr, 0, 0, out.width, out.height);
+      const k = this.renderScale; // the 3D canvas may be drawn at a lower resolution than the HUD
+      ctx.drawImage(this.glCanvas, sx * k, sy * k, w * this.dpr * k, h * this.dpr * k, 0, 0, out.width, out.height);
       ctx.drawImage(this.hud, sx, sy, w * this.dpr, h * this.dpr, 0, 0, out.width, out.height);
     } finally {
       this.cam = saved.cam; this.tiltNow = saved.tilt; this.groundY = saved.g;

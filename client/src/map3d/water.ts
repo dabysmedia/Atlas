@@ -404,8 +404,12 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
         // Streaks gather in broad bands and each fades in and out along its length.
         float dens = smoothstep(0.5, 1.2, sh) * (0.2 + 0.8 * smoothstep(0.005, 0.04, brk)) * (0.25 + 0.75 * smoothstep(0.25, 0.65, atmNoise(sq * vec2(0.0035, 0.014) + 9.1)));
         float tone = 0.3 + 0.7 * atmNoise(vec2(sq.x * 0.02, id * 5.1 + 2.0));
-        float streak = mix(vein * on * tone * (0.25 + 0.75 * bub), 0.04, smoothstep(1.8, 4.0, pix));
-        foam = max(foam, streak * dens * gale * 0.65);
+        // Past a unit or so a pixel a streak would be a hairline across the screen; let it go to
+        // its faint average there instead.
+        // Drawn as soft, ragged bands of lace rather than lines: a hard-edged streak reads as wire.
+        float band = smoothstep(0.5, 0.85, atmNoise(sq * vec2(0.008, 0.15) + 4.0)) * (0.5 + 0.5 * on);
+        float streak = mix(band * tone * bub * 0.7, 0.06, smoothstep(1.5, 4.0, pix));
+        foam = max(foam, streak * dens * gale * 0.45);
         foamFar = max(foamFar, 0.04 * dens * gale * 0.65);
       }
       foam = mix(foam, foamFar, smoothstep(3.0, 8.0, pix)) * (1.0 - ov.a * 0.5);

@@ -2,7 +2,7 @@
  * API integration tests against a real Postgres (TEST_DATABASE_URL).
  * Each run starts from an empty schema so results don't depend on prior runs.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import pg from 'pg';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../server/index';
@@ -14,7 +14,7 @@ import { logEvent } from '../server/history';
 import { readFileSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
 import { wikiPages, wikiLinks, mapModel, maps, appMeta, worlds } from '../server/db/schema';
-import { WEATHER_KINDS } from '../shared/weather';
+import { WEATHER_KINDS, rollWeather, type WeatherKind } from '../shared/weather';
 
 const URL = process.env.TEST_DATABASE_URL ?? 'postgres://postgres@localhost:5432/atlas_test';
 let app: FastifyInstance;
@@ -441,6 +441,29 @@ describe('3D map', () => {
     expect(evs.filter((e) => e.kind === 'day.changed')).toHaveLength(0);
     expect(evs.filter((e) => e.kind === 'weather.changed')).toHaveLength(1);
   });
+
+  it('starts the next day when the clock is paused just after midnight, before any screen asked', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Late pause', cols: 4, rows: 4 })).body;
+    const day = (await call('GET', `/api/worlds/${w.id}`)).body.currentDay as number;
+    await call('PATCH', `/api/worlds/${w.id}/weather`, { kind: 'fog', auto: true });
+    await pastMidnight(w.id);
+    const r = (await call('PATCH', `/api/worlds/${w.id}/daylight`, { speed: 'paused' })).body;
+    expect(r).toMatchObject({ currentDay: day + 1, daylight: { speed: 'paused' }, weather: { auto: true, day: day + 1 } });
+    expect(r.daylight.hour).toBeGreaterThan(0.3);
+    expect(r.daylight.hour).toBeLessThan(1);
+    expect((await call('GET', `/api/worlds/${w.id}`)).body).toMatchObject({ currentDay: day + 1, weather: r.weather });
+    // The screen that saw midnight asks too late, and changes nothing.
+    expect((await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day } })).body.currentDay).toBe(day + 1);
+    const evs = (await call('GET', `/api/worlds/${w.id}/events`)).body as { kind: string; actor: string; gameDay: number }[];
+    expect(evs.filter((e) => e.kind === 'day.changed')).toMatchObject([{ actor: 'system', gameDay: day + 1 }]);
+    expect(evs.filter((e) => e.kind === 'weather.changed')[0]).toMatchObject({ actor: 'system', gameDay: day + 1 });
+
+    // A speed change does the same; setting the hour by hand places the clock without starting a day.
+    await pastMidnight(w.id);
+    expect((await call('PATCH', `/api/worlds/${w.id}/daylight`, { speed: 'slow' })).body).toMatchObject({ currentDay: day + 2, daylight: { speed: 'slow' } });
+    await pastMidnight(w.id);
+    expect((await call('PATCH', `/api/worlds/${w.id}/daylight`, { hour: 6 })).body).toMatchObject({ currentDay: day + 2, daylight: { hour: 6, speed: 'fast' } });
+  });
 });
 
 describe('weather', () => {
@@ -497,6 +520,17 @@ describe('weather', () => {
     const [ev] = await weatherEvents(w.id);
     expect(ev).toMatchObject({ actor: 'gm', gameDay: currentDay, payload: { from: 'fog', to: rolled.body.weather.kind, rolled: true } });
     expect(ev.summary.length).toBeGreaterThan(5);
+
+    // A roll that comes up the same keeps the sky as it is, and says it holds (not 'another day' of it).
+    const same = rolled.body.weather as { kind: WeatherKind; at: string };
+    const hit = Array.from({ length: 1000 }, (_, i) => i / 1000).find((v) => rollWeather(same.kind, () => v) === same.kind)!;
+    vi.spyOn(Math, 'random').mockReturnValueOnce(hit);
+    const again = (await call('POST', `/api/worlds/${w.id}/weather/roll`)).body.weather;
+    expect(again).toEqual(same);
+    const [held] = await weatherEvents(w.id);
+    expect(held).toMatchObject({ payload: { from: same.kind, to: same.kind, rolled: true } });
+    expect(held.summary).not.toMatch(/again|Another/);
+    vi.restoreAllMocks();
   });
 
   it('rolls new weather when a new day begins under auto weather, once', async () => {

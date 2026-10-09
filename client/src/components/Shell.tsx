@@ -43,9 +43,11 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
   const qc = useQueryClient();
   const [switcher, setSwitcher] = useState(!!noWorld);
   const [palette, setPalette] = useState(false);
+  const wxKey = ['weather', worldId];
   // Polled gently so weather, the day and the clock set from another screen reach this one; unchanged data doesn't re-render.
+  // Not while a weather change is saving, whose answer could land before the poll's and be undone by it.
   const world = useQuery({
-    queryKey: qk.world(worldId ?? ''), enabled: !!worldId, refetchInterval: 30_000,
+    queryKey: qk.world(worldId ?? ''), enabled: !!worldId, refetchInterval: () => (qc.isMutating({ mutationKey: wxKey }) ? false : 30_000),
     queryFn: () => api<World>(`/api/worlds/${worldId}`),
   });
 
@@ -69,28 +71,43 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
 
   // A poll on its way could land after a change and put the old world back, so a change drops it first.
   const hold = () => qc.cancelQueries({ queryKey: qk.world(worldId!), exact: true });
+  // Weather changes started so far: a clock answer sent before the latest one may carry the weather from before it.
+  const wxSeq = useRef(0);
+  const wxCrossed = useRef(false);
+  /** Put a clock answer (day, hour, and the weather a new day may bring) in the cache, unless a weather change crossed it. */
+  const applyClock = async (r: { currentDay: number; daylight?: Daylight; weather: Weather }, sentAt: number) => {
+    await hold();
+    const saving = qc.isMutating({ mutationKey: wxKey }) > 0;
+    const crossed = saving || wxSeq.current !== sentAt;
+    const moved = qc.getQueryData<World>(qk.world(worldId!))?.currentDay !== r.currentDay;
+    qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, currentDay: r.currentDay, ...(r.daylight ? { daylight: r.daylight } : {}), ...(crossed ? {} : { weather: r.weather }) } : w));
+    // Which weather is newer is for a fresh read to say: once the change in flight settles, or now.
+    if (saving) wxCrossed.current = true;
+    else if (crossed) qc.invalidateQueries({ queryKey: qk.world(worldId!), exact: true });
+    if (moved) qc.invalidateQueries({ queryKey: qk.events(worldId!) });
+  };
   const day = useMutation({
     mutationFn: (advance: number) => api<{ currentDay: number; weather: Weather }>(`/api/worlds/${worldId}/day`, { body: { advance } }),
-    onSuccess: async (r) => {
-      await hold();
+    onMutate: () => wxSeq.current,
+    onSuccess: async (r, _a, sentAt) => {
       // A new day may bring new weather (when the world rolls its own each day).
-      qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, currentDay: r.currentDay, weather: r.weather } : w));
+      await applyClock(r, sentAt);
       qc.invalidateQueries({ queryKey: qk.events(worldId!) });
       qc.invalidateQueries({ queryKey: qk.worlds });
       daySweep.emit();
     },
     onError: toastError,
   });
+  // Pausing or changing speed just after midnight starts the next day first, so the answer carries the day too.
   const daylight = useMutation({
-    mutationFn: (body: { hour?: number; speed?: DaySpeed }) => api<{ daylight: Daylight }>(`/api/worlds/${worldId}/daylight`, { method: 'PATCH', body }),
-    onSuccess: async (r) => { await hold(); qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, daylight: r.daylight } : w)); },
+    mutationFn: (body: { hour?: number; speed?: DaySpeed }) => api<{ daylight: Daylight; currentDay: number; weather: Weather }>(`/api/worlds/${worldId}/daylight`, { method: 'PATCH', body }),
+    onMutate: () => wxSeq.current,
+    onSuccess: (r, _b, sentAt) => applyClock(r, sentAt),
     onError: toastError,
   });
   const putWeather = (weather: Weather) => qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, weather } : w));
   // Weather changes can overlap (two quick picks, a pick during a roll) and their replies can arrive out of order,
   // so only the last to settle touches the cache: with its own answer when it ran alone, else from a fresh read.
-  const wxKey = ['weather', worldId];
-  const wxCrossed = useRef(false);
   const weatherSettled = async (r: { weather: Weather } | undefined, prev?: Weather) => {
     if (qc.isMutating({ mutationKey: wxKey }) > 1) { wxCrossed.current = true; return; }
     await hold();
@@ -104,6 +121,7 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
     mutationKey: wxKey,
     mutationFn: (body: { kind?: WeatherKind; auto?: boolean }) => api<{ weather: Weather }>(`/api/worlds/${worldId}/weather`, { method: 'PATCH', body }),
     onMutate: async (body) => {
+      wxSeq.current++;
       await hold();
       const prev = qc.getQueryData<World>(qk.world(worldId!))?.weather;
       if (prev) putWeather({ ...prev, ...body });
@@ -115,6 +133,7 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
   const rollWeather = useMutation({
     mutationKey: wxKey,
     mutationFn: () => api<{ weather: Weather }>(`/api/worlds/${worldId}/weather/roll`, { method: 'POST' }),
+    onMutate: () => { wxSeq.current++; },
     onError: toastError,
     onSettled: (r) => weatherSettled(r),
   });
@@ -130,10 +149,8 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
       if (busy || hoursNow(dl) < 24) return;
       busy = true;
       try {
-        const r = await api<{ currentDay: number; daylight: Daylight; weather: Weather }>(`/api/worlds/${worldId}/day`, { body: { rollover: { from: current } } });
-        await hold();
-        qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, currentDay: r.currentDay, daylight: r.daylight, weather: r.weather } : w));
-        qc.invalidateQueries({ queryKey: qk.events(worldId!) });
+        const sentAt = wxSeq.current;
+        await applyClock(await api<{ currentDay: number; daylight: Daylight; weather: Weather }>(`/api/worlds/${worldId}/day`, { body: { rollover: { from: current } } }), sentAt);
       } catch { /* the next tick retries */ } finally { busy = false; }
     }, 1000);
     return () => window.clearInterval(id);
@@ -313,7 +330,7 @@ function WeatherControl({ weather, daylight, onChange, onRoll, rolling }: {
   const { open, setOpen, btn, rootProps } = usePopover();
   const grid = useRef<HTMLDivElement>(null);
   // Clear and fair skies show the moon at night, next to the clock's own moon.
-  const night = partOfDay(useHour(daylight, 15_000)) === 'Night';
+  const night = partOfDay(useHour(daylight)) === 'Night';
   const icon = (k: WeatherKind) => (night && k === 'clear' ? Moon : night && k === 'fair' ? CloudMoon : WEATHER_ICON[k]);
   const Icon = icon(weather.kind);
   const info = WEATHER[weather.kind];

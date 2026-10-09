@@ -68,7 +68,11 @@ describe('weather words and looks', () => {
     expect(weatherSummary('clear', 'overcast')).toBe('The skies clear');
     expect(weatherSummary('fair', 'fog')).toBe('The fog lifts and the day turns fair');
     expect(weatherSummary('rain', 'rain')).toBe('The rain keeps falling');
-    for (const to of WEATHER_KINDS) for (const from of [null, ...WEATHER_KINDS]) expect(weatherSummary(to, from)).toMatch(/^[A-Z].{8,}[a-z]$/);
+    // Fine weather held by a roll the same day just holds; held into a new day it is another day of it.
+    expect(weatherSummary('fair', 'fair')).toBe('The fair weather holds');
+    expect(weatherSummary('fair', 'fair', true)).toBe('Another fair day');
+    expect(weatherSummary('rain', 'rain', true)).toBe('The rain keeps falling');
+    for (const to of WEATHER_KINDS) for (const from of [null, ...WEATHER_KINDS]) for (const day of [false, true]) expect(weatherSummary(to, from, day)).toMatch(/^[A-Z].{8,}[a-z]$/);
   });
 
   it('falls back to fair for an unknown kind', () => {

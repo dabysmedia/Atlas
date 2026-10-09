@@ -62,10 +62,10 @@ export function rollWeather(prev?: WeatherKind | null, rnd: () => number = Math.
   return WEATHER_KINDS[WEATHER_KINDS.length - 1];
 }
 
-/** How the chronicle tells of the weather: as it arrives, and when it holds for another day. */
+/** How the chronicle tells of the weather: as it arrives, and when a roll keeps it as it is. */
 const TOLD: Record<WeatherKind, [arrives: string, holds: string]> = {
-  clear: ['The skies clear', 'Clear skies again'],
-  fair: ['The weather turns fair', 'Another fair day'],
+  clear: ['The skies clear', 'The skies stay clear'],
+  fair: ['The weather turns fair', 'The fair weather holds'],
   overcast: ['A grey overcast closes over the sky', 'The grey overcast lingers'],
   fog: ['Thick fog rolls in off the sea', 'The fog lingers'],
   drizzle: ['A fine drizzle sets in', 'The drizzle keeps on'],
@@ -74,10 +74,12 @@ const TOLD: Record<WeatherKind, [arrives: string, holds: string]> = {
   thunderstorm: ['A thunderstorm rolls in', 'The storm rages on'],
   gale: ['A gale blows up', 'The gale still howls'],
 };
+/** Fine weather that holds into a new day reads as another day of it. */
+const HOLDS_NEW_DAY: Partial<Record<WeatherKind, string>> = { clear: 'Clear skies again', fair: 'Another fair day' };
 
-/** One line for the chronicle when the weather changes (or holds) from one kind to another. */
-export function weatherSummary(to: WeatherKind, from?: WeatherKind | null): string {
-  if (from === to) return TOLD[to][1];
+/** One line for the chronicle when the weather changes (or holds) from one kind to another; `newDay` when a new day brought it. */
+export function weatherSummary(to: WeatherKind, from?: WeatherKind | null, newDay = false): string {
+  if (from === to) return (newDay && HOLDS_NEW_DAY[to]) || TOLD[to][1];
   if (from && (to === 'clear' || to === 'fair')) {
     const before = from === 'fog' ? 'The fog lifts' : from === 'gale' ? 'The wind drops' : WEATHER[from].look.rain > 0.1 ? 'The rain passes' : '';
     if (before) return `${before} and ${to === 'clear' ? 'the skies clear' : 'the day turns fair'}`;

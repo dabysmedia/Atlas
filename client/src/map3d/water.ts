@@ -41,6 +41,7 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
     uDepth: { value: null }, uDepthRect: { value: new THREE.Vector4(0, 0, 1, 1) },
     uOverlay: { value: null }, uOverlayRect: { value: new THREE.Vector4(0, 0, 1, 1) }, uOverlayGlow: { value: 0.1 },
     uNight: { value: 0 }, uPixAngle: { value: 0.001 }, uHole: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uWaves: { value: 1 }, uChop: { value: 0.5 }, uFoamAmt: { value: 0.5 }, uRain: { value: 0 },
     ...atmos,
   } as Record<string, THREE.IUniform>;
 
@@ -228,7 +229,15 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
     const h = uniforms.uHole.value as THREE.Vector4;
     if (!on && h.z > 0) { hole = h.clone(); h.z = 0; } else if (on && h.z === 0 && hole.z > 0) h.copy(hole);
   };
-  return { mesh, near, far, uniforms, place, holeOn };
+  /**
+   * Sea state from the weather, eased by the caller: `waves` scales wave height (0.5 glassy, 1 an
+   * ordinary fair day, about 2.2 in a gale); `chop` (0..1) sharpens crests; `foam` (0..1) is how
+   * readily whitecaps break; `rain` (0..1) is rain falling on the surface.
+   */
+  const setSea = (s: { waves: number; chop: number; foam: number; rain: number }) => {
+    uniforms.uWaves.value = s.waves; uniforms.uChop.value = s.chop; uniforms.uFoamAmt.value = s.foam; uniforms.uRain.value = s.rain;
+  };
+  return { mesh, near, far, uniforms, place, holeOn, setSea };
 }
 
 /**

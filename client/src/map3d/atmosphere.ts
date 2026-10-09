@@ -47,12 +47,16 @@ float atmFbm(vec2 p) {
   for (int i = 0; i < 4; i++) { s += a * atmNoise(p); p = mat2(1.6, 1.2, -1.2, 1.6) * p + 3.1; a *= 0.5; }
   return s;
 }
+/** How much cloud there is overhead at this point of the cloud deck (0 open sky .. 1 solid cloud). */
+float cloudCoverAt(vec2 p) {
+  float c = texture2D(uCloudMap, (p - uWind * uAtmTime - uCloudTile.xy) / uCloudTile.z).r;
+  return uAtmOn * smoothstep(0.08, 0.7, c);
+}
 /** 1 in sunlight, lower under a cloud. */
 float cloudShadowAt(vec3 wp) {
   vec3 L = uAtmKeyDir;
   vec2 p = wp.xz + L.xz / max(L.y, 0.25) * (uCloudTile.w - wp.y);
-  float c = texture2D(uCloudMap, (p - uWind * uAtmTime - uCloudTile.xy) / uCloudTile.z).r;
-  return 1.0 - uCloudShadow * uAtmOn * smoothstep(0.08, 0.7, c);
+  return 1.0 - uCloudShadow * cloudCoverAt(p);
 }
 /** How much rolling mist lies between the eye and this point (0..1). */
 float mistAt(vec3 wp, vec3 eye) {

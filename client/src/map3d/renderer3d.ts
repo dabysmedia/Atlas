@@ -24,6 +24,7 @@ import { hoursNow, type Daylight } from '../../../shared/daylight';
 import { HeightField, rasterizeMesh, reliefFromHexes } from './heightfield';
 import { lightingAt, makeSkyDome, partOfDay, type Lighting } from './sky';
 import { depthTexture, makeWater } from './water';
+import { ATMOS_GLSL, Atmosphere } from './atmosphere';
 
 const FOV = 24; // degrees, vertical; narrow so the overhead view stays close to a flat map
 const MAX_TILT = 1.32;
@@ -46,7 +47,9 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
   protected fog3 = new THREE.FogExp2(0x000000, 0.0002);
   protected sky = makeSkyDome();
-  protected water = makeWater();
+  protected atmos = new Atmosphere();
+  protected water = makeWater(this.atmos.uniforms);
+  protected atmosSig = '';
   protected ground: THREE.Object3D | null = null;
   protected glows = new THREE.Group();
   protected glowTex = glowTexture();
@@ -109,7 +112,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
 
     this.ovTex = this.makeOverlayTexture();
     this.scene.fog = this.fog3;
-    this.scene.add(this.sky.mesh, this.water.mesh, this.glows, this.hemi, this.key, this.key.target);
+    this.scene.add(this.sky.mesh, this.water.mesh, this.atmos.clouds, this.glows, this.hemi, this.key, this.key.target);
     this.key.castShadow = true;
     this.key.shadow.mapSize.set(2048, 2048);
     this.key.shadow.bias = -0.0004;
@@ -163,6 +166,16 @@ export class HexMapRenderer3D extends HexMapRenderer {
     if (Number.isFinite(minX)) this.bounds = { minX, minY, maxX, maxY };
     this.rebuildGlows();
     this.scheduleRelief();
+    this.buildAtmosphere();
+  }
+
+  /** Clouds and the mist map follow the ground and the hex terrain. */
+  protected buildAtmosphere() {
+    if (!this.ground || !this.hexes.length) return;
+    const sig = `${this.ground.id}|${this.hexes.length}|${this.hexes.map((h) => h.terrain).join(',')}`;
+    if (sig === this.atmosSig) return;
+    this.atmosSig = sig;
+    this.atmos.build(this.hf, this.sea, this.bounds, this.hexes, HEX_SIZE);
   }
 
   setTokens(tokens: Token[]) { super.setTokens(tokens); this.rebuildGlows(); }
@@ -223,12 +236,14 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.hf = hf;
     this.sea = sea;
     this.depthTex?.dispose();
-    this.depthTex = depthTexture(hf, sea);
+    const dt = depthTexture(hf, sea);
+    this.depthTex = dt.tex;
     this.water.uniforms.uDepth.value = this.depthTex;
     const b = this.bounds, span = Math.max(b.maxX - b.minX, b.maxY - b.minY);
-    this.water.mesh.position.set((b.minX + b.maxX) / 2, sea, (b.minY + b.maxY) / 2);
-    this.water.mesh.scale.set(span * 16, 1, span * 16);
-    (this.water.uniforms.uDepthRect.value as THREE.Vector4).set(hf.minX, hf.minY, hf.w, hf.h);
+    this.water.place((b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2, sea, span);
+    this.atmosSig = '';
+    this.buildAtmosphere();
+    (this.water.uniforms.uDepthRect.value as THREE.Vector4).set(dt.rect.x, dt.rect.y, dt.rect.w, dt.rect.h);
     this.occlusion.clear();
     this.rebuildGlows();
     this.groundY = this.groundAround(this.cam.x, this.cam.y);
@@ -239,17 +254,27 @@ export class HexMapRenderer3D extends HexMapRenderer {
   /** Mix the draped overlay into a terrain material: by world position, lit like the ground. */
   protected drape(mat: THREE.MeshStandardMaterial) {
     const U = this.ovUniforms;
+    const A = this.atmos.uniforms;
     mat.onBeforeCompile = (sh) => {
-      Object.assign(sh.uniforms, U);
+      Object.assign(sh.uniforms, U, A);
       sh.vertexShader = 'varying vec3 vWp;\n' + sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  vWp = (modelMatrix * vec4(transformed, 1.0)).xyz;');
       sh.fragmentShader = 'varying vec3 vWp;\nuniform sampler2D uOverlay;\nuniform vec4 uOverlayRect;\nuniform float uOverlayGlow;\n' + sh.fragmentShader
+        .replace('#include <common>', '#include <common>\n' + ATMOS_GLSL)
         .replace('#include <map_fragment>', `#include <map_fragment>
   vec2 ouv = (vWp.xz - uOverlayRect.xy) / uOverlayRect.zw;
   vec4 ov = (ouv.x < 0.0 || ouv.y < 0.0 || ouv.x > 1.0 || ouv.y > 1.0) ? vec4(0.0) : texture2D(uOverlay, ouv);
+  // Sand and rock darken where the sea wets them.
+  float wet = 1.0 - smoothstep(uSeaY, uSeaY + uMistHeight * 0.18, vWp.y);
+  diffuseColor.rgb *= 1.0 - 0.32 * wet;
   diffuseColor.rgb = diffuseColor.rgb * (1.0 - ov.a) + ov.rgb;`)
+        .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+  float atmCs = cloudShadowAt(vWp);
+  reflectedLight.directDiffuse *= atmCs; reflectedLight.directSpecular *= atmCs;`)
+        .replace('#include <opaque_fragment>', `#include <opaque_fragment>
+  gl_FragColor.rgb = mix(gl_FragColor.rgb, uMistColor, mistAt(vWp, cameraPosition));`)
         .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  totalEmissiveRadiance += ov.rgb * uOverlayGlow;');
     };
-    mat.customProgramCacheKey = () => 'atlas-drape';
+    mat.customProgramCacheKey = () => 'atlas-drape-atmos';
     mat.needsUpdate = true;
   }
 
@@ -539,7 +564,9 @@ export class HexMapRenderer3D extends HexMapRenderer {
     wu.uHemiSky.value.copy(L.hemiSky).multiplyScalar(L.hemiIntensity); wu.uHemiGround.value.copy(L.hemiGround).multiplyScalar(L.hemiIntensity);
     wu.uZenith.value.copy(L.zenith); wu.uHorizon.value.copy(L.horizon); wu.uNight.value = L.night;
     wu.uTime.value = now / 1000;
-    wu.uDetail.value = smooth(0.35, 1.4, this.cam.zoom);
+    wu.uPixAngle.value = (2 * Math.tan(THREE.MathUtils.degToRad(FOV / 2))) / Math.max(1, this.h);
+    this.atmos.on = this.layers.atmosphere !== false;
+    this.atmos.update(now, L, this.camDist(), this.cam.zoom);
     this.ovUniforms.uOverlayGlow.value = L.overlayGlow;
     for (const s of this.glows.children as THREE.Sprite[]) (s.material as THREE.SpriteMaterial).opacity = L.night * (s.userData.strength as number);
     this.glows.visible = L.night > 0.01;
@@ -564,9 +591,11 @@ export class HexMapRenderer3D extends HexMapRenderer {
   // ---------------------------------------------------------------- frame
   protected loop(now: number) {
     this.raf = requestAnimationFrame(this.loop);
-    const dt = Math.min(0.05, (now - this.last) / 1000);
+    const raw = now - this.last;
+    const dt = Math.min(0.05, raw / 1000);
     this.last = now;
     if (!this.w || !this.h) return;
+    this.watchPace(raw);
     const moving = this.step(dt);
     // Idle: the sea and sky still move, at half rate.
     if (!moving && !this.dirty && !this.dragToken && (this.idleTick++ & 1)) return;
@@ -580,6 +609,26 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.onAfterFrame?.();
   }
   protected cpuMs = 0;
+
+  /**
+   * A machine that can't keep up (frames slower than ~25 a second for a few seconds) drops the
+   * moving wave grid for the flat sea, which shades the same and costs far less. Once per session.
+   */
+  protected paceMs = 16;
+  protected slowFrames = 0;
+  lowQuality = false;
+  protected watchPace(raw: number) {
+    if (this.lowQuality || document.hidden || raw <= 0 || raw > 2000) return;
+    this.paceMs = this.paceMs * 0.95 + raw * 0.05;
+    this.slowFrames = this.paceMs > 40 ? this.slowFrames + 1 : 0;
+    if (this.slowFrames > 90 || (this.slowFrames > 3 && this.paceMs > 400)) this.setLowQuality(true);
+  }
+  setLowQuality(on: boolean) {
+    this.lowQuality = on;
+    this.water.near.visible = !on;
+    this.water.holeOn(!on);
+    this.dirty = true;
+  }
 
   /** Frames per second over the last couple of seconds, and the CPU cost of a frame. */
   stats() {

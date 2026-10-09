@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  Archive, Box, Brush, ChevronLeft, Compass, Eye, EyeOff, Flag, Grid3x3, Image as ImageIcon, Layers, Map as MapIcon, Maximize, Minus, Mountain, MousePointer2, Move, Plus,
+  Archive, Box, Brush, ChevronLeft, CloudFog, Compass, Eye, EyeOff, Flag, Grid3x3, Image as ImageIcon, Layers, Map as MapIcon, Maximize, Minus, Mountain, MousePointer2, Move, Plus,
   RotateCcw, RotateCw, Shield, Stamp, Trash2, Upload, X,
 } from 'lucide-react';
 import { api, ApiError, qk } from '../api';
@@ -747,6 +747,7 @@ export function MapView() {
                   )}
                   <label className="toggle"><input type="checkbox" checked={layers.grid} onChange={(e) => setLayers({ ...layers, grid: e.target.checked })} /><Grid3x3 size={14} /> Hex grid</label>
                   <label className="toggle"><input type="checkbox" checked={layers.territory} onChange={(e) => setLayers({ ...layers, territory: e.target.checked })} /><Shield size={14} /> Territories and borders</label>
+                  {mode === '3d' && <label className="toggle"><input type="checkbox" checked={layers.atmosphere !== false} onChange={(e) => setLayers({ ...layers, atmosphere: e.target.checked })} /><CloudFog size={14} /> Clouds and mist</label>}
                 </div>
                 <div className="layer-group">
                   <div className="layer-title"><Mountain size={14} /> 3D terrain model</div>

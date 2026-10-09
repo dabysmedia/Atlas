@@ -51,6 +51,8 @@ export type Layers = {
   terrainOverlay: number;
   grid: boolean;
   territory: boolean;
+  /** 3D only: clouds, cloud shadows and mist (on unless turned off). */
+  atmosphere?: boolean;
 };
 
 export class HexMapRenderer {

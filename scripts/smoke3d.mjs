@@ -284,27 +284,31 @@ await step('search-flies-camera', async () => {
 });
 
 await step('day-cycle', async () => {
-  // DM sets the speed on the clock; the light runs dawn → noon → golden hour → dusk → night, and
-  // passing midnight starts the next day on the world clock.
-  await R(([w]) => fetch(`/api/worlds/${w}/daylight`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ hour: 4.6, speed: 'paused' }) }), [worldId]);
+  // The light runs dawn → noon → golden hour → dusk → night, and a running clock that passes
+  // midnight starts the next day on the world clock. Software frames take seconds, longer than a
+  // part of the day lasts at the fastest speed, so each part is shown by setting the hour, and the
+  // running clock is checked across midnight on its own.
   await openWorld();
-  await p.click('.tod-btn');
-  await p.click('.tod-speeds button:has-text("1 day per minute")');
-  await p.waitForFunction(() => window.__atlasMap.daylight?.speed === 'fast', null, { timeout: 10000 });
-  await p.click('.tod-btn');
-  const day0 = await R(([w]) => fetch(`/api/worlds/${w}`).then((r) => r.json()).then((x) => x.currentDay), [worldId]);
   await R(() => { const r = window.__atlasMap; const f = r.fitCamera(); r.setCamera({ ...f, zoom: f.zoom * 1.15 }); });
   const shots = [];
   for (const [name, hour] of [['dawn', 6.05], ['noon', 12], ['golden-hour', 17.8], ['dusk', 18.9], ['night', 21.8]]) {
-    await p.waitForFunction((h) => window.__atlasMap.shownHour >= h, hour, { timeout: 70000, polling: 50 });
-    // Read the light first: the clock keeps running while a software frame is captured.
+    await R((h) => window.__atlasMap.setDaylight({ hour: h, speed: 'paused', at: new Date().toISOString() }), hour);
+    await p.waitForFunction((h) => Math.abs(window.__atlasMap.shownHour - h) < 0.01, hour, { timeout: 30000, polling: 50 });
     shots.push(await R(() => {
       const r = window.__atlasMap, L = r.light;
       return { hour: +r.shownHour.toFixed(2), part: r.partOfDay(r.shownHour), sunHeight: +L.sunDir.y.toFixed(2), keyLight: L.keyColor.toArray().map((v) => +v.toFixed(2)), fog: '#' + L.horizon.getHexString(), fogDensityK: +L.fogK.toFixed(2) };
     }));
     await p.screenshot({ path: S(`08-day-${name}`) });
   }
-  await p.waitForFunction(([w, d0]) => fetch(`/api/worlds/${w}`).then((r) => r.json()).then((x) => x.currentDay === d0 + 1), [worldId, day0], { timeout: 30000, polling: 1000 });
+  // The DM starts the clock just before midnight from the clock popover; the day turns over.
+  await R(([w]) => fetch(`/api/worlds/${w}/daylight`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ hour: 23.4, speed: 'paused' }) }), [worldId]);
+  await openWorld();
+  const day0 = await R(([w]) => fetch(`/api/worlds/${w}`).then((r) => r.json()).then((x) => x.currentDay), [worldId]);
+  await p.click('.tod-btn');
+  await p.click('.tod-speeds button:has-text("1 day per minute")');
+  await p.waitForFunction(() => window.__atlasMap.daylight?.speed === 'fast', null, { timeout: 10000 });
+  await p.click('.tod-btn');
+  await p.waitForFunction(([w, d0]) => fetch(`/api/worlds/${w}`).then((r) => r.json()).then((x) => x.currentDay === d0 + 1), [worldId, day0], { timeout: 60000, polling: 1000 });
   await R(([w]) => fetch(`/api/worlds/${w}/daylight`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ hour: 10, speed: 'paused' }) }), [worldId]);
   writeFileSync(`${DIR}/day-cycle.json`, JSON.stringify(shots, null, 2));
   const parts = shots.map((s) => s.part);

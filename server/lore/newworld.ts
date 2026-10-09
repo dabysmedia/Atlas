@@ -9,8 +9,9 @@
 import fs from 'node:fs';
 import { and, eq, inArray, isNull, like, sql } from 'drizzle-orm';
 import type { Db, DbOrTx } from '../db/index.js';
-import { appMeta, events, factions, hexes, mapModel, maps, meterDefinitions, wikiLinks, wikiPages, worlds } from '../db/schema.js';
+import { appMeta, events, factions, hexes, mapModel, mapModelArchive, maps, meterDefinitions, wikiLinks, wikiPages, worlds } from '../db/schema.js';
 import { fitModelPlacement } from '../placement.js';
+import { installModel } from '../modelArchive.js';
 import { SIGNATURE_BANDS } from '../defaults.js';
 import { setMeter, logEvent } from '../history.js';
 import { axialToOffset } from '../../shared/hex.js';
@@ -441,6 +442,40 @@ export async function upgradeNewWorldIsland(db: Db): Promise<string[]> {
       const fits = layout.cols === ISLAND.cols && layout.rows === ISLAND.rows;
       if (n === 0 && fits) { await paintIsland(tx, map.id); notes.push(`re-read the hexes of world ${worldId} from the island model`); }
       else notes.push(`added the island model under world ${worldId}; its edited terrain was kept`);
+      await tx.insert(appMeta).values({ key, value: 'done' }).onConflictDoNothing();
+    });
+  }
+  return notes;
+}
+
+/**
+ * Before removed models were archived, removing The New World's island deleted it outright. Once,
+ * a world that lost its island that way gets it back: onto the map if the map has no model now,
+ * otherwise into the model archive. Its hexes are left as they are.
+ */
+export async function recoverRemovedIsland(db: Db): Promise<string[]> {
+  const notes: string[] = [];
+  const imported = await db.selectDistinct({ worldId: events.worldId }).from(events)
+    .where(and(eq(events.kind, 'note'), like(events.summary, `Lore imported from ${LORE_FILE}%`)));
+  for (const { worldId } of imported) {
+    const key = `recover:island-model:${worldId}`;
+    if ((await db.select().from(appMeta).where(eq(appMeta.key, key))).length) continue;
+    const [map] = await db.select().from(maps).where(and(eq(maps.worldId, worldId), isNull(maps.parentHexId)));
+    const removed = await db.select({ id: events.id }).from(events)
+      .where(and(eq(events.worldId, worldId), eq(events.kind, 'map.model'), eq(events.summary, 'Removed the 3D terrain model')));
+    await db.transaction(async (tx) => {
+      if (map && removed.length) {
+        const live = await tx.select({ v: mapModel.version }).from(mapModel).where(eq(mapModel.mapId, map.id));
+        const island = { bytes: islandModel(), name: 'island.glb', placement: fitModelPlacement(map.layout) };
+        if (!live.length) {
+          await installModel(tx, map.id, island);
+          await logEvent(tx, { worldId, kind: 'map.model', summary: 'Restored the island model that was removed' });
+          notes.push(`put the removed island model back on world ${worldId}`);
+        } else {
+          await tx.insert(mapModelArchive).values({ mapId: map.id, ...island, version: 0, reason: 'removed' });
+          notes.push(`kept the removed island model of world ${worldId} in its model archive`);
+        }
+      }
       await tx.insert(appMeta).values({ key, value: 'done' }).onConflictDoNothing();
     });
   }

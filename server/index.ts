@@ -15,7 +15,7 @@ import { mapRoutes, modelRoutes } from './routes/map.js';
 import { factionRoutes } from './routes/factions.js';
 import { chronicleRoutes } from './routes/chronicle.js';
 import { seedDemoWorld, upgradeDemo } from './worlds.js';
-import { seedNewWorldOnce, upgradeNewWorldIsland } from './lore/newworld.js';
+import { recoverRemovedIsland, seedNewWorldOnce, upgradeNewWorldIsland } from './lore/newworld.js';
 import { worlds } from './db/schema.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -89,6 +89,7 @@ async function main() {
     const note = await seedNewWorldOnce(db);
     if (note) app.log.info(note);
     for (const n of await upgradeNewWorldIsland(db)) app.log.info(n);
+    for (const n of await recoverRemovedIsland(db)) app.log.info(n);
   }
   await app.listen({ host: '0.0.0.0', port: Number(process.env.PORT ?? 3000) });
 }

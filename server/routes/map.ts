@@ -8,6 +8,7 @@ import { getWorld, Uuid } from './worlds.js';
 import { gridBounds, hexLabel, type Orientation } from '../../shared/hex.js';
 import { imageSize } from '../imagesize.js';
 import { fitModelPlacement } from '../placement.js';
+import { archiveModel, installModel, listArchive, restoreModel } from '../modelArchive.js';
 
 type P = { w: string; id: string };
 
@@ -345,10 +346,9 @@ export function modelRoutes(app: FastifyInstance, db: Db) {
     const name = String((req.headers['x-file-name'] as string | undefined) ?? 'model.glb').slice(0, 200);
     const placement = fitModelPlacement(map.layout);
     const prev = await db.query.mapModel.findFirst({ where: eq(mapModel.mapId, map.id), columns: { version: true } });
-    const values = { bytes: body, name, placement, updatedAt: new Date() };
-    const [row] = await db.insert(mapModel).values({ mapId: map.id, ...values, version: 1 })
-      .onConflictDoUpdate({ target: mapModel.mapId, set: { ...values, version: (prev?.version ?? 0) + 1 } })
-      .returning(modelMeta);
+    // The model being replaced goes to the archive, not the bin.
+    await db.transaction((tx) => installModel(tx, map.id, { bytes: body, name, placement }));
+    const [row] = await db.select(modelMeta).from(mapModel).where(eq(mapModel.mapId, map.id));
     await logEvent(db, { worldId: w.id, kind: 'map.model', summary: `${prev ? 'Replaced' : 'Added'} the 3D terrain model (${(body.length / 1e6).toFixed(1)} MB)`, payload: { version: row.version } });
     return row;
   });
@@ -382,9 +382,29 @@ export function modelRoutes(app: FastifyInstance, db: Db) {
   app.delete('/api/worlds/:w/map/model', async (req) => {
     const w = await getWorld(db, (req.params as P).w);
     const map = await rootMap(db, w.id);
-    const gone = await db.delete(mapModel).where(eq(mapModel.mapId, map.id)).returning({ v: mapModel.version });
-    if (gone.length) await logEvent(db, { worldId: w.id, kind: 'map.model', summary: 'Removed the 3D terrain model' });
-    return { ok: true };
+    const archived = await db.transaction((tx) => archiveModel(tx, map.id, 'removed'));
+    if (archived) await logEvent(db, { worldId: w.id, kind: 'map.model', summary: 'Removed the 3D terrain model (kept in the model archive)' });
+    return { ok: true, archived };
+  });
+
+  /** Models taken off this map, newest first. */
+  app.get('/api/worlds/:w/map/model/archive', async (req) => {
+    const w = await getWorld(db, (req.params as P).w);
+    const map = await rootMap(db, w.id);
+    return listArchive(db, map.id);
+  });
+
+  /** Put an archived model back; the current one (if any) is archived in its place. */
+  app.post('/api/worlds/:w/map/model/archive/:id/restore', async (req) => {
+    const { w: wid, id } = req.params as P;
+    const w = await getWorld(db, wid);
+    const map = await rootMap(db, w.id);
+    if (!Uuid.safeParse(id).success) throw notFound('Archived model');
+    const done = await db.transaction((tx) => restoreModel(tx, map.id, id));
+    if (!done) throw notFound('Archived model');
+    await logEvent(db, { worldId: w.id, kind: 'map.model', summary: `Restored the 3D terrain model ${done.name} from the archive`, payload: { version: done.version } });
+    const [row] = await db.select(modelMeta).from(mapModel).where(eq(mapModel.mapId, map.id));
+    return row;
   });
 }
 

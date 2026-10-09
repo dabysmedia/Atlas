@@ -3,11 +3,11 @@ import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  Box, Brush, ChevronLeft, Compass, Eye, EyeOff, Flag, Grid3x3, Image as ImageIcon, Layers, Map as MapIcon, Maximize, Minus, Mountain, MousePointer2, Move, Plus,
+  Archive, Box, Brush, ChevronLeft, Compass, Eye, EyeOff, Flag, Grid3x3, Image as ImageIcon, Layers, Map as MapIcon, Maximize, Minus, Mountain, MousePointer2, Move, Plus,
   RotateCcw, RotateCw, Shield, Stamp, Trash2, Upload, X,
 } from 'lucide-react';
 import { api, ApiError, qk } from '../api';
-import type { ArtPlacement, Claim, Hex, MapArt, MapData, MapModel, Token } from '../types';
+import type { ArchivedModel, ArtPlacement, Claim, Hex, MapArt, MapData, MapModel, Token } from '../types';
 import { useWorld } from '../world';
 import { cameraPref, fogCampaign, layerPrefs, mapModePref, panelPrefs } from '../prefs';
 import { HEX_SIZE, HexMapRenderer, type Camera, type Layers as RLayers } from './renderer';
@@ -307,6 +307,7 @@ export function MapView() {
       if (!res.ok) throw new ApiError(res.status, body?.error ?? res.statusText);
       patchCache((d) => ({ ...d, map: { ...d.map, model: body as MapModel } }));
       qc.invalidateQueries({ queryKey: qk.events(world.id) });
+      qc.invalidateQueries({ queryKey: ['modelArchive', world.id] });
       setLayersOpen(false);
       toast('3D model added.');
     } catch (e) { toastError(e); }
@@ -316,6 +317,23 @@ export function MapView() {
       await api(`/api/worlds/${world.id}/map/model`, { method: 'DELETE' });
       patchCache((d) => ({ ...d, map: { ...d.map, model: null } }));
       qc.invalidateQueries({ queryKey: qk.events(world.id) });
+      void archiveQ.refetch();
+      toast('3D model moved to the archive. Restore it from Layers.');
+    } catch (e) { toastError(e); }
+  };
+  // Removed and replaced models are archived, never deleted; any of them can be put back.
+  const archiveQ = useQuery({
+    queryKey: ['modelArchive', world.id],
+    queryFn: () => api<ArchivedModel[]>(`/api/worlds/${world.id}/map/model/archive`),
+    enabled: layersOpen,
+  });
+  const restoreModel = async (a: ArchivedModel) => {
+    try {
+      const row = await api<MapModel>(`/api/worlds/${world.id}/map/model/archive/${a.id}/restore`, { method: 'POST' });
+      patchCache((d) => ({ ...d, map: { ...d.map, model: row } }));
+      qc.invalidateQueries({ queryKey: qk.events(world.id) });
+      void archiveQ.refetch();
+      toast(`${a.name} is back on the map.`);
     } catch (e) { toastError(e); }
   };
   const uploadArt = async (file: File) => {
@@ -746,6 +764,19 @@ export function MapView() {
                       <span><b>Add a 3D model</b><br /><span className="faint">A .glb up to 40 MB, laid under the grid. Without one, the 3D view raises relief from the hex terrain.</span></span>
                     </button>
                   )}
+                  {!!archiveQ.data?.length && (
+                    <div className="model-archive">
+                      <div className="faint" style={{ fontSize: 11.5 }}>Archived models</div>
+                      {archiveQ.data.map((a) => (
+                        <div key={a.id} className="row" style={{ gap: 8, fontSize: 12.5 }}>
+                          <Archive size={13} className="faint" />
+                          <span className="grow" title={`${a.reason === 'replaced' ? 'Replaced' : 'Removed'} ${new Date(a.archivedAt).toLocaleString()}`}>{a.name}</span>
+                          <span className="faint num">{(a.size / 1e6).toFixed(1)} MB</span>
+                          <button className="btn sm ghost" onClick={() => void restoreModel(a)}><RotateCcw size={12} /> Restore</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="layer-group">
                   <div className="layer-title"><Eye size={14} /> Party fog</div>
@@ -864,7 +895,7 @@ export function MapView() {
       </AnimatePresence>
 
       <Dialog open={confirmArt === 'remove-model'} onClose={() => setConfirmArt(null)} title="Remove the 3D model?">
-        <p className="muted" style={{ marginTop: 0 }}>The hexes stay exactly as they are. The 3D view falls back to relief raised from the hex terrain.</p>
+        <p className="muted" style={{ marginTop: 0 }}>The hexes stay exactly as they are. The 3D view falls back to relief raised from the hex terrain. The model moves to the archive in Layers, where you can restore it.</p>
         <div className="actions"><button className="btn ghost" onClick={() => setConfirmArt(null)}>Keep it</button><button className="btn danger-solid" onClick={() => { setConfirmArt(null); void removeModel(); }}>Remove model</button></div>
       </Dialog>
       <Dialog open={confirmArt === 'remove'} onClose={() => setConfirmArt(null)} title="Remove the map art?">

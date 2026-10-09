@@ -148,6 +148,21 @@ export const mapModel = pgTable('map_model', {
 });
 
 /**
+ * Models taken off a map: removed or replaced models land here instead of being deleted, so one
+ * removed by accident can be put back. Each keeps the version it had, so restoring never reuses one.
+ */
+export const mapModelArchive = pgTable('map_model_archive', {
+  id: id(),
+  mapId: uuid('map_id').notNull().references(() => maps.id, { onDelete: 'cascade' }),
+  bytes: bytea('bytes').notNull(),
+  name: text('name').notNull(),
+  placement: jsonb('placement').$type<ModelPlacement>().notNull(),
+  version: integer('version').notNull(),
+  reason: text('reason').notNull(), // 'removed' | 'replaced'
+  archivedAt: timestamp('archived_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('map_model_archive_map_idx').on(t.mapId)]);
+
+/**
  * Every hex on a map is a row (dense), keyed by axial coordinates.
  * Controlling faction lives in `claims`; fog lives in `campaign_fog`.
  */

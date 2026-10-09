@@ -649,3 +649,5 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 .sigil-badge { display: grid; place-items: center; border-radius: 50%; border: 1px solid; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06); }
 /* Page content sits on a calm column of glass; the island shows around it, not through the text. */
 .ambient-live .pagebody { background: rgba(10,17,21,0.8); min-height: 100%; box-shadow: 0 0 0 1px var(--line-soft), 0 30px 80px rgba(0,0,0,0.35); }
+
+.model-archive { display: grid; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-soft); }

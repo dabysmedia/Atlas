@@ -43,6 +43,7 @@ export type ArtPlacement = { x: number; y: number; w: number; h: number; opacity
 export type ModelPlacement = { x: number; y: number; w: number; h: number; heightScale: number };
 /** The 3D terrain model under the grid. Purely visual: hexes stay the source of truth. */
 export type MapModel = { version: number; name: string; placement: ModelPlacement; size: number; updatedAt: string };
+export type ArchivedModel = { id: string; name: string; version: number; reason: 'removed' | 'replaced'; archivedAt: string; size: number };
 export type MapArt = { version: number; width: number; height: number; mime: string; placement: ArtPlacement; updatedAt: string };
 export type MapData = {
   map: { id: string; name: string; layout: MapLayout; art: MapArt | null; model: MapModel | null };

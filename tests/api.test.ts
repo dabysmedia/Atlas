@@ -9,7 +9,8 @@ import { buildApp } from '../server/index';
 import { ensureOwner } from '../server/auth';
 import { deflateSync } from 'node:zlib';
 import { seedDemoWorld, upgradeDemo, DEMO_VERSION } from '../server/worlds';
-import { seedNewWorldOnce, upgradeNewWorldIsland, FIXES, LORE_FILE } from '../server/lore/newworld';
+import { recoverRemovedIsland, seedNewWorldOnce, upgradeNewWorldIsland, FIXES, LORE_FILE } from '../server/lore/newworld';
+import { logEvent } from '../server/history';
 import { readFileSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
 import { wikiPages, wikiLinks, mapModel, maps, appMeta } from '../server/db/schema';
@@ -333,6 +334,14 @@ describe('3D map', () => {
     expect(JSON.parse((await put(glb, 'v2.glb')).body).version).toBe(2);
     expect((await call('DELETE', `/api/worlds/${w.id}/map/model`)).status).toBe(200);
     expect((await call('GET', `/api/worlds/${w.id}/map`)).body.map.model).toBeNull();
+    // Removed and replaced models are archived, newest first, and can be put back.
+    const arch = (await call('GET', `/api/worlds/${w.id}/map/model/archive`)).body as { id: string; name: string; reason: string; version: number }[];
+    expect(arch.map((a) => [a.name, a.reason, a.version])).toEqual([['v2.glb', 'removed', 2], ['isle.glb', 'replaced', 1]]);
+    const back = (await call('POST', `/api/worlds/${w.id}/map/model/archive/${arch[1].id}/restore`)).body;
+    expect(back).toMatchObject({ name: 'isle.glb', version: 3, placement: { heightScale: 0.6 } });
+    expect((await call('GET', `/api/worlds/${w.id}/map`)).body.map.model).toMatchObject({ name: 'isle.glb', version: 3 });
+    expect((await call('GET', `/api/worlds/${w.id}/map/model/archive`)).body).toHaveLength(1);
+    expect((await call('POST', `/api/worlds/${w.id}/map/model/archive/${arch[1].id}/restore`)).status).toBe(404);
     // Hexes are untouched by any of it.
     expect((await call('GET', `/api/worlds/${w.id}/map`)).body.hexes).toHaveLength(48);
   });
@@ -364,6 +373,28 @@ describe('3D map', () => {
     for (const w of [a, b]) expect((await call('GET', `/api/worlds/${w.id}/map`)).body.map.model).not.toBeNull();
     expect((await call('GET', `/api/worlds/${b.id}/map`)).body.hexes.find((h: { id: string }) => h.id === hexB.id).terrain).toBe('desert');
     expect(await upgradeNewWorldIsland(db)).toEqual([]);
+  });
+
+  it('recovers an island removed before models were archived, once', async () => {
+    const oldRemove = async (worldId: string) => {
+      const [m] = await db.select().from(maps).where(eq(maps.worldId, worldId));
+      await db.delete(mapModel).where(eq(mapModel.mapId, m.id));
+      await logEvent(db, { worldId, kind: 'map.model', summary: 'Removed the 3D terrain model' });
+    };
+    const a = (await call('POST', '/api/worlds', { name: 'Lost island', template: 'newworld' })).body;
+    const b = (await call('POST', '/api/worlds', { name: 'Lost then replaced', template: 'newworld' })).body;
+    const c = (await call('POST', '/api/worlds', { name: 'Never lost', template: 'newworld' })).body;
+    await oldRemove(a.id); await oldRemove(b.id);
+    const glb = Buffer.alloc(64); glb.writeUInt32LE(0x46546c67, 0); glb.writeUInt32LE(2, 4); glb.writeUInt32LE(64, 8);
+    await app.inject({ method: 'PUT', url: `/api/worlds/${b.id}/map/model`, headers: { cookie, 'content-type': 'model/gltf-binary', 'x-file-name': 'mine.glb' }, payload: glb });
+    const notes = await recoverRemovedIsland(db);
+    expect(notes.some((n) => n.includes(a.id) && n.includes('back'))).toBe(true);
+    expect(notes.some((n) => n.includes(b.id) && n.includes('archive'))).toBe(true);
+    expect(notes.some((n) => n.includes(c.id))).toBe(false);
+    expect((await call('GET', `/api/worlds/${a.id}/map`)).body.map.model).toMatchObject({ name: 'island.glb' });
+    expect((await call('GET', `/api/worlds/${b.id}/map`)).body.map.model).toMatchObject({ name: 'mine.glb' });
+    expect((await call('GET', `/api/worlds/${b.id}/map/model/archive`)).body.map((x: { name: string }) => x.name)).toContain('island.glb');
+    expect(await recoverRemovedIsland(db)).toEqual([]);
   });
 
   it('keeps the time of day per world, and a running clock rolls the day over once', async () => {

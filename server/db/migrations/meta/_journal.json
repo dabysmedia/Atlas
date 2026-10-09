@@ -36,6 +36,13 @@
       "when": 1791514680153,
       "tag": "0004_living_island",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791523252115,
+      "tag": "0005_model_archive",
+      "breakpoints": true
     }
   ]
 }

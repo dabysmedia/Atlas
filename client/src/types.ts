@@ -50,7 +50,7 @@ export type MeterDef = {
 };
 export type FactionMeter = { meterId: string; value: number; isSet: boolean; updatedAt: string | null; band: MeterBand | null };
 export type Faction = {
-  id: string; name: string; color: string; description: string; signatureMeterId: string | null; wikiPageId: string | null;
+  id: string; name: string; color: string; sigil: string | null; description: string; signatureMeterId: string | null; wikiPageId: string | null;
   claims: Record<string, number>; meters: FactionMeter[];
 };
 export type MeterChange = {

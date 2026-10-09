@@ -167,6 +167,8 @@ export const factions = pgTable('factions', {
   name: text('name').notNull(),
   color: text('color').notNull().default('#8a6d3b'),
   description: text('description').notNull().default(''),
+  /** Emblem key from the client's small sigil set (null shows the plain diamond). */
+  sigil: text('sigil'),
   /** Exactly one signature meter per faction (null until the GM picks one). */
   signatureMeterId: uuid('signature_meter_id').references(() => meterDefinitions.id, { onDelete: 'set null' }),
   wikiPageId: uuid('wiki_page_id').references(() => wikiPages.id, { onDelete: 'set null' }),
@@ -311,3 +313,10 @@ export const events = pgTable('events', {
   actor: text('actor').notNull().default('gm'), // gm | sim | system
   createdAt: created(),
 }, (t) => [index('events_world_idx').on(t.worldId, t.id)]);
+
+/** Install-wide markers, e.g. which one-time seeds have already run (so deleting a seeded world doesn't bring it back). */
+export const appMeta = pgTable('app_meta', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: updated(),
+});

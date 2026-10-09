@@ -5,6 +5,7 @@ import type { Db } from '../db/index.js';
 import { worlds } from '../db/schema.js';
 import { logEvent, notFound } from '../history.js';
 import { createWorld, deleteWorld, seedDemoWorld } from '../worlds.js';
+import { seedNewWorld } from '../lore/newworld.js';
 
 export const Uuid = z.uuid();
 
@@ -40,7 +41,7 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
   const Create = z.object({
     name: z.string().trim().min(1).max(120),
     description: z.string().max(2000).optional(),
-    template: z.enum(['blank', 'demo']).default('blank'),
+    template: z.enum(['blank', 'demo', 'newworld']).default('blank'),
     cols: z.number().int().min(4).max(200).optional(),
     rows: z.number().int().min(4).max(200).optional(),
     orientation: z.enum(['flat', 'pointy']).optional(),
@@ -50,6 +51,10 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
     if (body.template === 'demo') {
       const w = await seedDemoWorld(db);
       if (body.name !== w.name) await db.update(worlds).set({ name: body.name }).where(eq(worlds.id, w.id));
+      return getWorld(db, w.id);
+    }
+    if (body.template === 'newworld') {
+      const w = await seedNewWorld(db, { name: body.name });
       return getWorld(db, w.id);
     }
     const { world } = await db.transaction((tx) => createWorld(tx, body));

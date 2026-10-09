@@ -5,6 +5,8 @@ import { api, qk } from '../api';
 import type { HexStateType, TerrainType, World } from '../types';
 import { useWorld } from '../world';
 import { toast, toastError } from './toast';
+import { ambientPref } from '../prefs';
+import { useAmbientPref } from './AmbientMap';
 
 const GLYPHS = ['none', 'grass', 'trees', 'hills', 'peaks', 'reeds', 'dunes', 'waves'];
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `t${Date.now()}`;
@@ -17,6 +19,7 @@ export function SettingsView() {
   const [accent, setAccent] = useState(world.accent);
   const [terrain, setTerrain] = useState<TerrainType[]>(world.terrainTypes);
   const [states, setStates] = useState<HexStateType[]>(world.hexStates);
+  const ambient = useAmbientPref();
   const dirty = name !== world.name || description !== world.description || accent !== world.accent
     || JSON.stringify(terrain) !== JSON.stringify(world.terrainTypes) || JSON.stringify(states) !== JSON.stringify(world.hexStates);
 
@@ -80,6 +83,12 @@ export function SettingsView() {
             </div>
           ))}
           <button className="btn ghost sm" onClick={() => { const n = `State ${states.length + 1}`; setStates([...states, { key: slug(n), name: n }]); }}><Plus size={13} /> Hex state</button>
+        </div></div>
+
+        <h3 className="display" style={{ margin: '28px 0 6px' }}>Display</h3>
+        <p className="muted" style={{ marginTop: 0 }}>Saved in this browser only.</p>
+        <div className="card"><div className="card-body">
+          <label className="toggle"><input type="checkbox" checked={ambient} onChange={(e) => ambientPref.set(e.target.checked)} /> Show the world map behind pages</label>
         </div></div>
       </div>
     </div>

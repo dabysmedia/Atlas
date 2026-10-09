@@ -7,7 +7,7 @@ export function docText(node: unknown): string {
   const out: string[] = [];
   const walk = (n: PMNode) => {
     if (n.type === 'text' && n.text) out.push(n.text);
-    else if (n.type === 'wikiLink') out.push(String(n.attrs?.label ?? ''));
+    else if (n.type === 'wikiLink') out.push(String(n.attrs?.text || n.attrs?.label || ''));
     else if (n.type === 'hardBreak') out.push('\n');
     n.content?.forEach(walk);
     if (n.type && BLOCKS.has(n.type)) out.push('\n');

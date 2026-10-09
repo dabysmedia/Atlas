@@ -188,6 +188,40 @@ await step('search-to-map', async () => {
   await p.screenshot({ path: S('19-search-to-map') });
 });
 
+await step('import-lore', async () => {
+  await p.click('.world-button');
+  await p.click('.world-card.new');
+  await p.fill('.dialog input.input', 'Lore Import Check');
+  await p.click('.dialog button:has-text("The New World lore")');
+  await p.click('.dialog button:has-text("Create world")');
+  await p.waitForURL(/\/w\/.*\/map/);
+  await p.waitForSelector('canvas.map');
+  await p.waitForTimeout(1200);
+  await p.screenshot({ path: S('20-lore-island') });
+});
+
+await step('lore-wiki-ambient', async () => {
+  await nav('Wiki');
+  await p.waitForSelector('.ambient.on');
+  await p.click('.wiki-item:has-text("The Flesh-Shapers")');
+  await p.waitForSelector('.ProseMirror:has-text("They broke from orthodox")');
+  await p.waitForSelector('.ProseMirror .wikilink:text-is("Nhal’Kesh")');
+  await p.waitForTimeout(600);
+  await p.screenshot({ path: S('21-lore-wiki') });
+});
+
+await step('lore-factions', async () => {
+  await nav('Factions');
+  await p.waitForSelector('.faction-row >> nth=6');
+  const n = await p.locator('.faction-row').count();
+  if (n !== 7) throw new Error(`expected 7 factions, saw ${n}`);
+  await p.waitForSelector('.fr-meter:has-text("Attunement")');
+  await p.waitForSelector('.ambient.on');
+  await p.screenshot({ path: S('22-lore-factions') });
+  await nav('Map');
+  await p.waitForSelector('.ambient:not(.on)', { state: 'attached' });
+});
+
 console.log('console errors:', errs.length ? '\n' + errs.join('\n') : 'none');
 await b.close();
 if (failed || errs.length) process.exit(1);

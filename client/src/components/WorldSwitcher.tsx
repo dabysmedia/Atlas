@@ -108,13 +108,13 @@ const cardVariants = {
 function CreateWorldDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (id: string) => void }) {
   const qc = useQueryClient();
   const [name, setName] = useState('');
-  const [template, setTemplate] = useState<'blank' | 'demo'>('blank');
+  const [template, setTemplate] = useState<'blank' | 'demo' | 'newworld'>('blank');
   const [size, setSize] = useState<keyof typeof SIZES>('medium');
   const [orientation, setOrientation] = useState<'flat' | 'pointy'>('flat');
   useEffect(() => { if (open) { setName(''); setTemplate('blank'); } }, [open]);
   const create = useMutation({
     mutationFn: () => api<{ id: string }>('/api/worlds', {
-      body: { name: name.trim() || (template === 'demo' ? 'The Sundered Reach' : 'New World'), template, cols: SIZES[size][0], rows: SIZES[size][1], orientation },
+      body: { name: name.trim() || (template === 'demo' ? 'The Sundered Reach' : template === 'newworld' ? 'The New World' : 'New World'), template, cols: SIZES[size][0], rows: SIZES[size][1], orientation },
     }),
     onSuccess: (w) => { qc.invalidateQueries({ queryKey: qk.worlds }); toast('World created'); onCreated(w.id); },
     onError: toastError,
@@ -131,7 +131,9 @@ function CreateWorldDialog({ open, onClose, onCreated }: { open: boolean; onClos
           <div className="seg">
             <button type="button" className={template === 'blank' ? 'on' : ''} onClick={() => setTemplate('blank')}>Blank canvas</button>
             <button type="button" className={template === 'demo' ? 'on' : ''} onClick={() => setTemplate('demo')}>Demo world</button>
+            <button type="button" className={template === 'newworld' ? 'on' : ''} onClick={() => setTemplate('newworld')}>The New World lore</button>
           </div>
+          {template === 'newworld' && <p className="faint" style={{ margin: '8px 0 0', fontSize: 12.5 }}>Imports the bundled setting document as wiki pages, seven factions and an unclaimed island. Each import is a separate world you can delete.</p>}
         </div>
         {template === 'blank' && (
           <div className="row" style={{ gap: 18 }}>

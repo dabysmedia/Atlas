@@ -31,14 +31,18 @@ export const WikiLink = Node.create({
   addAttributes() {
     return {
       pageId: { default: null, parseHTML: (el) => el.getAttribute('data-page-id') },
-      label: { default: '', parseHTML: (el) => el.textContent ?? '' },
+      label: { default: '', parseHTML: (el) => el.getAttribute('data-label') ?? el.textContent ?? '' },
+      /** Wording shown instead of the page's title, e.g. "Mendoza" linking to "Casa de Mendoza". */
+      text: { default: null, parseHTML: (el) => el.getAttribute('data-text') },
     };
   },
   parseHTML() { return [{ tag: 'a[data-wikilink]' }]; },
   renderHTML({ node, HTMLAttributes }) {
-    return ['a', mergeAttributes(HTMLAttributes, { 'data-wikilink': '', 'data-page-id': node.attrs.pageId, class: 'wikilink' }), node.attrs.label];
+    return ['a', mergeAttributes(HTMLAttributes, {
+      'data-wikilink': '', 'data-page-id': node.attrs.pageId, 'data-label': node.attrs.label, 'data-text': node.attrs.text, class: 'wikilink',
+    }), node.attrs.text || node.attrs.label];
   },
-  renderText({ node }) { return `[[${node.attrs.label}]]`; },
+  renderText({ node }) { return node.attrs.text ? `[[${node.attrs.label}|${node.attrs.text}]]` : `[[${node.attrs.label}]]`; },
   addNodeView() { return ReactNodeViewRenderer(WikiLinkView); },
 
   /** Typing [[Some Title]] converts to a link immediately (red link if the page doesn't exist yet). */
@@ -145,7 +149,7 @@ const SuggestList = forwardRef<SuggestHandle, SuggestProps>(function SuggestList
 
 /** Shows the target page's live title, so renaming a page updates every link to it. */
 function WikiLinkView({ node }: NodeViewProps) {
-  const { pageId, label } = node.attrs as { pageId: string | null; label: string };
+  const { pageId, label, text } = node.attrs as { pageId: string | null; label: string; text: string | null };
   const page = pageId ? wikiHost.pages.find((p) => p.id === pageId) : findByTitle(label);
   const [, force] = useState(0);
   useEffect(() => {
@@ -162,7 +166,7 @@ function WikiLinkView({ node }: NodeViewProps) {
   return (
     <NodeViewWrapper as="span" className={`wikilink ${page ? '' : 'missing'}`} onClick={open}
       title={page ? `Open ${page.title}` : `"${label}" doesn't exist yet. Click to create it.`} data-wikilink="">
-      {page?.title ?? label}
+      {text || (page?.title ?? label)}
     </NodeViewWrapper>
   );
 }
@@ -173,7 +177,7 @@ export function resolveLinks(doc: unknown): unknown {
     if (n.type === 'wikiLink') {
       const attrs = n.attrs as { pageId: string | null; label: string };
       const page = attrs.pageId ? wikiHost.pages.find((p) => p.id === attrs.pageId) : findByTitle(attrs.label);
-      if (page) return { ...n, attrs: { pageId: page.id, label: page.title } };
+      if (page) return { ...n, attrs: { ...attrs, pageId: page.id, label: page.title } };
       return n;
     }
     if (Array.isArray(n.content)) return { ...n, content: (n.content as Record<string, unknown>[]).map(walk) };

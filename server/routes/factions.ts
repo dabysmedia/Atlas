@@ -52,6 +52,7 @@ export function factionRoutes(app: FastifyInstance, db: Db) {
     name: z.string().trim().min(1).max(120),
     color: z.string().max(20).optional(),
     description: z.string().max(5000).optional(),
+    sigil: z.string().max(40).nullable().optional(),
     signatureMeterId: Uuid.nullable().optional(),
     wikiPageId: Uuid.nullable().optional(),
   });

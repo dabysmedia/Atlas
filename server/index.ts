@@ -15,6 +15,7 @@ import { mapRoutes } from './routes/map.js';
 import { factionRoutes } from './routes/factions.js';
 import { chronicleRoutes } from './routes/chronicle.js';
 import { seedDemoWorld, upgradeDemo } from './worlds.js';
+import { seedNewWorldOnce } from './lore/newworld.js';
 import { worlds } from './db/schema.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -81,6 +82,11 @@ async function main() {
     app.log.info('seeded demo world');
   } else if (process.env.SEED_DEMO !== 'false') {
     for (const note of await upgradeDemo(db)) app.log.info(note);
+  }
+  // The owner's own setting, imported once. Deleting it keeps it deleted; "New world" can import it again.
+  if (process.env.SEED_LORE !== 'false') {
+    const note = await seedNewWorldOnce(db);
+    if (note) app.log.info(note);
   }
   await app.listen({ host: '0.0.0.0', port: Number(process.env.PORT ?? 3000) });
 }

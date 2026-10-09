@@ -32,6 +32,9 @@ Browser smoke test: `BASE_URL=… ATLAS_PASS=… node scripts/smoke.mjs` (needs 
    - `ADMIN_USERNAME` (default `gm`) and `ADMIN_PASSWORD` (10+ characters)
 3. Generate a domain. Migrations run on boot; the demo world is created the first time the database is empty
    (`SEED_DEMO=false` to skip).
+4. The owner's setting, "The New World", is imported once from `server/assets/lore/the-new-world-island.md`
+   (`server/lore/newworld.ts`; `SEED_LORE=false` to skip). The `app_meta` table remembers it ran, so deleting the
+   world keeps it deleted. "New world → The New World lore" imports a fresh copy at any time.
 
 To change the password, change `ADMIN_PASSWORD` and redeploy; existing sessions are signed out.
 

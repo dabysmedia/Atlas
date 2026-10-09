@@ -9,6 +9,10 @@ import { buildApp } from '../server/index';
 import { ensureOwner } from '../server/auth';
 import { deflateSync } from 'node:zlib';
 import { seedDemoWorld, upgradeDemo, DEMO_VERSION } from '../server/worlds';
+import { seedNewWorldOnce, FIXES, LORE_FILE } from '../server/lore/newworld';
+import { readFileSync } from 'node:fs';
+import { eq } from 'drizzle-orm';
+import { wikiPages, wikiLinks } from '../server/db/schema';
 
 const URL = process.env.TEST_DATABASE_URL ?? 'postgres://postgres@localhost:5432/atlas_test';
 let app: FastifyInstance;
@@ -238,6 +242,69 @@ describe('map art', () => {
       { name: 'Old Demo B (painted)', demo: DEMO_VERSION },
     ]);
     expect(await upgradeDemo(db)).toHaveLength(0);
+  });
+});
+
+describe('lore import', () => {
+  it('imports The New World as linked pages, seven factions and an unclaimed island, and can be re-imported', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'The New World', template: 'newworld' })).body;
+    const pages = await db.select().from(wikiPages).where(eq(wikiPages.worldId, w.id));
+    const byTitle = new Map(pages.map((p) => [p.title, p]));
+    for (const title of ['The New World', 'Core Setting', 'Geography of the Island', 'Casa de Mendoza', 'Company DuPont', 'The Qadir Ascendancy',
+      'The Nhal’Kesh', 'The Flesh-Shapers', 'The Aelari', 'The Canopy People', 'The Mage City Within the Mountain', 'The Precursor Mages',
+      'Still Intentionally Unresolved', 'Open Questions / Co-DM Discussion']) expect(byTitle.has(title), title).toBe(true);
+
+    // Every line of the source lands on a page, word for word (bar the listed repairs).
+    const norm = (x: string) => x.replace(/[^\p{L}\p{N}]+/gu, '');
+    const all = norm(pages.map((p) => p.contentText).join('\n'));
+    const src = readFileSync(new globalThis.URL(`../server/assets/lore/${LORE_FILE}`, import.meta.url), 'utf8').split('\n');
+    const missing = src.map((l, i) => ({ n: i + 1, text: (FIXES[i + 1] ? l.replace(FIXES[i + 1].from, FIXES[i + 1].to) : l).replace(/^#+\s*/, '').replace(/\*+$/, '').trim() }))
+      .filter((l) => l.text && !all.includes(norm(l.text)));
+    expect(missing).toEqual([]);
+
+    // Open matters say so on the page rather than reading as canon.
+    expect(byTitle.get('Still Intentionally Unresolved')!.contentText).toMatch(/Open by design/);
+    expect(byTitle.get('The Canopy People')!.contentText).toMatch(/Unfinished in the source/);
+    expect(byTitle.get('Open Questions / Co-DM Discussion')!.contentText).toMatch(/Discussion, not canon/);
+    expect(byTitle.get('Core Setting')!.contentText).toMatch(/Unresolved in the source/);
+
+    // Names link to their pages.
+    const links = await db.select().from(wikiLinks).where(eq(wikiLinks.fromPageId, byTitle.get('The Flesh-Shapers')!.id));
+    expect(links.map((l) => l.toPageId)).toContain(byTitle.get('The Nhal’Kesh')!.id);
+    // A link keeps the source's wording ("College of Mages") rather than the target's title.
+    expect(byTitle.get('Established Facts About the Precursor City')!.contentText).toContain('an apolitical College of Mages rather than');
+    expect(JSON.stringify(byTitle.get('Established Facts About the Precursor City')!.content)).toContain('"text":"College of Mages"');
+
+    const meters = (await call('GET', `/api/worlds/${w.id}/meters`)).body as { id: string; name: string; kind: string }[];
+    const fs = (await call('GET', `/api/worlds/${w.id}/factions`)).body as { name: string; signatureMeterId: string; sigil: string; meters?: unknown }[];
+    const sig = Object.fromEntries(fs.map((f) => [f.name, meters.find((m) => m.id === f.signatureMeterId)?.name]));
+    expect(sig).toEqual({
+      'Casa de Mendoza': 'Zeal', 'Company DuPont': 'Grandeur', 'The Qadir Ascendancy': 'Attunement', 'The Nhal’Kesh': 'Vigil',
+      'The Flesh-Shapers': 'Transcendence', 'The Aelari': 'Communion', 'The Canopy People': 'Provisional',
+    });
+    expect(meters.filter((m) => m.kind !== 'signature').map((m) => m.name).sort()).toEqual(['Morale', 'Treasury']);
+
+    // The island is painted terrain with nothing claimed or settled.
+    const map = (await call('GET', `/api/worlds/${w.id}/map`)).body;
+    expect(map.hexes.length).toBe(48 * 32);
+    const terrains = new Set(map.hexes.map((h: { terrain: string }) => h.terrain));
+    for (const k of ['deep', 'water', 'jungle', 'mountains']) expect(terrains.has(k)).toBe(true);
+    expect(map.claims ?? []).toEqual([]);
+    expect(map.tokens ?? []).toEqual([]);
+
+    // Deletable, and importing again gives a fresh copy.
+    expect((await call('DELETE', `/api/worlds/${w.id}`)).status).toBe(200);
+    const again = (await call('POST', '/api/worlds', { name: 'The New World', template: 'newworld' })).body;
+    expect((await call('GET', `/api/worlds/${again.id}/factions`)).body).toHaveLength(7);
+  });
+
+  it('seeds once on boot and stays deleted after the owner removes it', async () => {
+    const note = await seedNewWorldOnce(db);
+    expect(note).toMatch(/imported/);
+    const list = (await call('GET', '/api/worlds')).body as { id: string; name: string }[];
+    const seeded = list.find((x) => x.name === 'The New World')!;
+    await call('DELETE', `/api/worlds/${seeded.id}`);
+    expect(await seedNewWorldOnce(db)).toBeNull();
   });
 });
 

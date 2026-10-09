@@ -16,6 +16,7 @@ import { FactionsView } from '../factions/FactionsView';
 import { ChronicleView } from '../chronicle/ChronicleView';
 import { CampaignsView } from './CampaignsView';
 import { SettingsView } from './SettingsView';
+import { AmbientMap, useAmbientPref } from './AmbientMap';
 
 // The editor is the heaviest dependency; load it on first visit to the wiki.
 const WikiView = lazy(() => import('../wiki/WikiView').then((m) => ({ default: m.WikiView })));
@@ -76,6 +77,9 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
   };
 
   const w = world.data;
+  const loc = useLocation();
+  const section = loc.pathname.split('/')[3] ?? 'map';
+  const ambient = useAmbientPref() && section !== 'map';
   return (
     <div className="shell">
       <header className="topbar">
@@ -121,9 +125,10 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
             ))}
           </nav>
         )}
-        <main className="main">
+        <main className={`main ${ambient ? 'ambient-live' : ''}`}>
           {w && (
             <WorldCtx.Provider value={w}>
+              <AmbientMap key={w.id} section={section} />
               {/* Keyed by world: switching worlds remounts instead of cross-animating two worlds' routes. */}
               <WorldRoutes key={w.id} />
               <CommandPalette open={palette} onClose={() => setPalette(false)} />

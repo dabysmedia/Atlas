@@ -10,7 +10,7 @@ import { isLowTone } from '../../../shared/meters';
 import { usePageIndex } from '../wiki/usePages';
 import { Dialog } from '../components/Dialog';
 import { toast, toastError } from '../components/toast';
-import { Diamond } from '../map/panels';
+import { FactionSigil, SIGILS } from './FactionSigil';
 
 const PALETTE = ['#c0392b', '#3b6fd4', '#2e9e6a', '#8e44ad', '#d68910', '#16a3b8', '#b8466e', '#7f8c8d', '#c2a83e', '#5d6dbe'];
 
@@ -153,7 +153,7 @@ function FactionRow({ faction, meters, tables, open, onToggle }: { faction: Fact
   return (
     <div className={`faction-row ${open ? 'open' : ''}`} id={`faction-${faction.id}`}>
       <button className="fr-head" onClick={onToggle} aria-expanded={open}>
-        <span className="fr-crest"><Diamond color={faction.color} size={18} /></span>
+        <span className="fr-crest"><FactionSigil sigil={faction.sigil} color={faction.color} /></span>
         <div className="grow">
           <div className="fr-name">{faction.name}</div>
           <div className="fr-sub">{faction.claims.control ?? 0} hexes held{faction.claims.contested ? ` · ${faction.claims.contested} contested` : ''}</div>
@@ -183,6 +183,14 @@ function FactionRow({ faction, meters, tables, open, onToggle }: { faction: Fact
                 <span className="label" style={{ margin: 0 }}>Color</span>
                 <span className="swatch" style={{ background: faction.color, width: 22, height: 22, borderRadius: 5 }} />
                 <input type="color" value={faction.color} onChange={(e) => patch({ color: e.target.value })} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
+              </label>
+              <label className="row" style={{ gap: 8 }}>
+                <span className="label" style={{ margin: 0 }}>Sigil</span>
+                <select className="select" style={{ width: 'auto', padding: '3px 8px', fontSize: 12.5 }} value={faction.sigil ?? ''}
+                  onChange={(e) => patch({ sigil: e.target.value || null })}>
+                  <option value="">Diamond</option>
+                  {Object.entries(SIGILS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
               </label>
               <label className="row" style={{ gap: 8 }}>
                 <span className="label" style={{ margin: 0 }}>Signature</span>

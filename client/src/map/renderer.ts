@@ -470,7 +470,30 @@ export class HexMapRenderer {
     this.dirty = true;
   }
 
-  setCamera(c: Camera) { this.cam = { ...c }; this.target = { ...c }; this.anchor = null; this.dirty = true; }
+  setCamera(c: Camera) {
+    const k = this.keepOnMap(c);
+    this.cam = { ...k }; this.target = { ...k }; this.anchor = null; this.dirty = true;
+  }
+
+  /**
+   * A camera whose centre is over the map (its hexes plus a small margin) with a sane zoom, so the
+   * view can never drift off into empty space, and a bad saved camera can't open on nothing.
+   */
+  keepOnMap(c: Camera): Camera {
+    if (!this.hexes.length) return { ...c };
+    if (!Number.isFinite(c.x) || !Number.isFinite(c.y) || !Number.isFinite(c.zoom) || c.zoom <= 0) return this.fitCamera();
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const ch of this.chunks.values()) { minX = Math.min(minX, ch.minX); minY = Math.min(minY, ch.minY); maxX = Math.max(maxX, ch.maxX); maxY = Math.max(maxY, ch.maxY); }
+    const mx = (maxX - minX) * 0.1, my = (maxY - minY) * 0.1;
+    return { x: clamp(c.x, minX - mx, maxX + mx), y: clamp(c.y, minY - my, maxY + my), zoom: clamp(c.zoom, this.w ? this.minZoom() : MIN_ZOOM, MAX_ZOOM) };
+  }
+
+  /** Pull the camera and its target back over the map if a move carried them off it. */
+  protected holdOnMap() {
+    const c = this.keepOnMap(this.cam), t = this.keepOnMap(this.target);
+    if (c.x !== this.cam.x || c.y !== this.cam.y) { this.cam.x = c.x; this.cam.y = c.y; this.velocity = { x: 0, y: 0 }; }
+    if (t.x !== this.target.x || t.y !== this.target.y) { this.target.x = t.x; this.target.y = t.y; }
+  }
 
   /** Camera that fits the whole map in view, leaving room for overlaid chrome. */
   fitCamera(padding = 70): Camera {
@@ -535,6 +558,7 @@ export class HexMapRenderer {
         this.cam.x += dx * k; this.cam.y += dy * k; moving = true;
       } else { this.cam.x = this.target.x; this.cam.y = this.target.y; }
     }
+    this.holdOnMap();
     if (moving) this.onCameraChange?.(this.cam);
     return moving;
   }

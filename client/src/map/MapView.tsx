@@ -162,7 +162,9 @@ export function MapView() {
       placedCamera.current = true;
       window.clearInterval(id);
       const saved = sessionCameras.get(world.id) ?? cameraPref(world.id).get();
-      if (saved) { r.setCamera(saved); return; }
+      // A saved view that has drifted off the map (an old bug could do that) opens on the whole map instead.
+      const onMap = saved && r.keepOnMap(saved);
+      if (saved && onMap && onMap.x === saved.x && onMap.y === saved.y) { r.setCamera(saved); return; }
       if (is3d(r)) { const fit = r.fitCamera(); r.setCamera({ ...fit, zoom: fit.zoom * 0.62 }); r.flyTo(fit.x, fit.y, fit.zoom); return; }
       const fit = r.fitCamera();
       r.setCamera({ ...fit, zoom: fit.zoom * 0.7 });

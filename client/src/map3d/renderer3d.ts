@@ -422,7 +422,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
 
   setCamera(c: Camera) {
     super.setCamera(c);
-    this.groundY = this.groundAround(c.x, c.y);
+    this.groundY = this.groundAround(this.cam.x, this.cam.y);
     this.tiltNow = this.wantedTilt();
     this.updateCamera();
   }
@@ -503,6 +503,9 @@ export class HexMapRenderer3D extends HexMapRenderer {
       } else { this.cam.x = this.target.x; this.cam.y = this.target.y; }
       this.updateCamera();
     }
+    const held = { x: this.cam.x, y: this.cam.y };
+    this.holdOnMap();
+    if (this.cam.x !== held.x || this.cam.y !== held.y) { this.anchor = null; this.updateCamera(); }
     if (this.cam.x !== before.x || this.cam.y !== before.y || this.cam.zoom !== before.zoom) this.onCameraChange?.(this.cam);
     return moving;
   }

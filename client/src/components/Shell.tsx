@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
-import { BookOpen, ChevronLeft, ChevronRight, ChevronsUpDown, Flag, Hexagon, LogOut, ScrollText, Search, Settings, Swords, Sun } from 'lucide-react';
+import { BookOpen, ChevronLeft, ChevronRight, ChevronsUpDown, Flag, Hexagon, LogOut, Moon, Pause, Play, ScrollText, Search, Settings, Sunrise, Sunset, Swords, Sun } from 'lucide-react';
 import { api, ApiError, qk } from '../api';
 import type { World } from '../types';
 import { WorldCtx } from '../world';
@@ -17,6 +17,9 @@ import { ChronicleView } from '../chronicle/ChronicleView';
 import { CampaignsView } from './CampaignsView';
 import { SettingsView } from './SettingsView';
 import { AmbientMap, useAmbientPref } from './AmbientMap';
+import { daySweep, formatHour, useHour } from '../daylight';
+import { DAY_SPEEDS, hoursNow, type Daylight, type DaySpeed } from '../../../shared/daylight';
+import { partOfDay } from '../map3d/sky';
 
 // The editor is the heaviest dependency; load it on first visit to the wiki.
 const WikiView = lazy(() => import('../wiki/WikiView').then((m) => ({ default: m.WikiView })));
@@ -65,9 +68,34 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
       qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, currentDay: r.currentDay } : w));
       qc.invalidateQueries({ queryKey: qk.events(worldId!) });
       qc.invalidateQueries({ queryKey: qk.worlds });
+      daySweep.emit();
     },
     onError: toastError,
   });
+  const daylight = useMutation({
+    mutationFn: (body: { hour?: number; speed?: DaySpeed }) => api<{ daylight: Daylight }>(`/api/worlds/${worldId}/daylight`, { method: 'PATCH', body }),
+    onSuccess: (r) => qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, daylight: r.daylight } : w)),
+    onError: toastError,
+  });
+
+  // A running hour that passes midnight starts the next day on the world clock. The server only
+  // honours the first tab to ask for a given day, and a long absence advances a single day.
+  const dl = world.data?.daylight;
+  const current = world.data?.currentDay;
+  useEffect(() => {
+    if (!dl || dl.speed === 'paused' || current === undefined) return;
+    let busy = false;
+    const id = window.setInterval(async () => {
+      if (busy || hoursNow(dl) < 24) return;
+      busy = true;
+      try {
+        const r = await api<{ currentDay: number; daylight: Daylight }>(`/api/worlds/${worldId}/day`, { body: { rollover: { from: current } } });
+        qc.setQueryData<World>(qk.world(worldId!), (w) => (w ? { ...w, currentDay: r.currentDay, daylight: r.daylight } : w));
+        qc.invalidateQueries({ queryKey: qk.events(worldId!) });
+      } catch { /* the next tick retries */ } finally { busy = false; }
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [dl, current, worldId, qc]);
 
   const logout = async () => {
     await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
@@ -103,8 +131,8 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
         {w && (
           <div className="clock" title="World clock (in-game day)">
             <button onClick={() => day.mutate(-1)} aria-label="Previous day"><ChevronLeft size={14} /></button>
-            <Sun size={13} className="clock-icon" />
             <span className="day"><small>Day</small> {w.currentDay}</span>
+            <TimeOfDay daylight={w.daylight} onChange={(b) => daylight.mutate(b)} />
             <button onClick={() => day.mutate(1)} aria-label="Next day"><ChevronRight size={14} /></button>
           </div>
         )}
@@ -163,5 +191,52 @@ function WorldRoutes() {
         </Suspense>
       </motion.div>
     </AnimatePresence>
+  );
+}
+
+/** The hour on the world clock, with the day cycle's speed (a per-world DM setting) and a dial. */
+function TimeOfDay({ daylight, onChange }: { daylight: Daylight; onChange: (b: { hour?: number; speed?: DaySpeed }) => void }) {
+  const [open, setOpen] = useState(false);
+  const hour = useHour(daylight);
+  const [drag, setDrag] = useState<number | null>(null);
+  const shown = drag ?? hour % 24;
+  const part = partOfDay(shown);
+  const Icon = part === 'Night' ? Moon : part === 'Dawn' ? Sunrise : part === 'Dusk' || part === 'Golden hour' ? Sunset : Sun;
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => { if (!(e.target as HTMLElement).closest('.tod')) setOpen(false); };
+    window.addEventListener('pointerdown', close);
+    return () => window.removeEventListener('pointerdown', close);
+  }, [open]);
+  return (
+    <span className="tod">
+      <button className="tod-btn" onClick={() => setOpen((o) => !o)} aria-label="Time of day" aria-expanded={open} title={`${part} · day cycle ${DAY_SPEEDS[daylight.speed].label.toLowerCase()}`}>
+        <Icon size={13} className="clock-icon" />
+        <span className="hour">{formatHour(shown)}</span>
+        {daylight.speed === 'paused' && <Pause size={10} className="faint" />}
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div className="panel tod-pop" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.14 }}>
+            <div className="tod-head"><Icon size={15} /> <b>{part}</b> <span className="faint">{formatHour(shown)}</span></div>
+            <label className="slider"><span>Time of day</span>
+              <input type="range" min={0} max={23.99} step={0.05} value={shown} aria-label="Hour"
+                onChange={(e) => setDrag(Number(e.target.value))}
+                onPointerUp={() => { if (drag !== null) { onChange({ hour: drag }); setDrag(null); } }}
+                onKeyUp={() => { if (drag !== null) { onChange({ hour: drag }); setDrag(null); } }} />
+            </label>
+            <div className="tod-title">Day cycle speed</div>
+            <div className="tod-speeds" role="radiogroup" aria-label="Day cycle speed">
+              {(Object.keys(DAY_SPEEDS) as DaySpeed[]).map((k) => (
+                <button key={k} role="radio" aria-checked={daylight.speed === k} className={`brush ${daylight.speed === k ? 'on' : ''}`} onClick={() => onChange({ speed: k })}>
+                  {k === 'paused' ? <Pause size={12} /> : <Play size={12} />} {DAY_SPEEDS[k].label}
+                </button>
+              ))}
+            </div>
+            <p className="faint tod-note">For this world. A running clock starts the next day at midnight.</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </span>
   );
 }

@@ -1,12 +1,13 @@
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Db } from '../db/index.js';
-import { campaignFog, campaigns, claims, factions, hexes, mapArt, maps, settlements, tokens, type ArtPlacement } from '../db/schema.js';
+import { campaignFog, campaigns, claims, factions, hexes, mapArt, mapModel, maps, settlements, tokens, type ArtPlacement } from '../db/schema.js';
 import { badRequest, logEvent, notFound, worldDay } from '../history.js';
 import { getWorld, Uuid } from './worlds.js';
 import { gridBounds, hexLabel, type Orientation } from '../../shared/hex.js';
 import { imageSize } from '../imagesize.js';
+import { fitModelPlacement } from '../placement.js';
 
 type P = { w: string; id: string };
 
@@ -40,13 +41,16 @@ export function coverPlacement(layout: { cols: number; rows: number; orientation
 }
 
 export const MAX_ART_BYTES = 25 * 1024 * 1024;
+export const MAX_MODEL_BYTES = 40 * 1024 * 1024;
+
+const modelMeta = { version: mapModel.version, name: mapModel.name, placement: mapModel.placement, size: sql<number>`octet_length(${mapModel.bytes})`.as('size'), updatedAt: mapModel.updatedAt };
 
 export function mapRoutes(app: FastifyInstance, db: Db) {
   /** Everything the map view needs in one round trip. Fog comes separately per campaign. */
   app.get('/api/worlds/:w/map', async (req) => {
     const w = await getWorld(db, (req.params as P).w);
     const map = await rootMap(db, w.id);
-    const [hexRows, claimRows, tokenRows, settlementRows, factionRows, campaignRows, artRows] = await Promise.all([
+    const [hexRows, claimRows, tokenRows, settlementRows, factionRows, campaignRows, artRows, modelRows] = await Promise.all([
       db.select({
         id: hexes.id, q: hexes.q, r: hexes.r, terrain: hexes.terrain, state: hexes.state, name: hexes.name,
         notes: hexes.notes, wikiPageId: hexes.wikiPageId, data: hexes.data,
@@ -58,8 +62,9 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
       db.select({ id: factions.id, name: factions.name, color: factions.color }).from(factions).where(eq(factions.worldId, w.id)),
       db.select({ id: campaigns.id, name: campaigns.name }).from(campaigns).where(eq(campaigns.worldId, w.id)),
       db.select(artMeta).from(mapArt).where(eq(mapArt.mapId, map.id)),
+      db.select(modelMeta).from(mapModel).where(eq(mapModel.mapId, map.id)),
     ]);
-    return { map: { ...map, art: artRows[0] ?? null }, hexes: hexRows, claims: claimRows, tokens: tokenRows, settlements: settlementRows, factions: factionRows, campaigns: campaignRows };
+    return { map: { ...map, art: artRows[0] ?? null, model: modelRows[0] ?? null }, hexes: hexRows, claims: claimRows, tokens: tokenRows, settlements: settlementRows, factions: factionRows, campaigns: campaignRows };
   });
 
   const HexPatch = z.object({
@@ -323,6 +328,62 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const map = await rootMap(db, w.id);
     const gone = await db.delete(mapArt).where(eq(mapArt.mapId, map.id)).returning({ v: mapArt.version });
     if (gone.length) await logEvent(db, { worldId: w.id, kind: 'map.art', summary: 'Removed the map art' });
+    return { ok: true };
+  });
+}
+
+export function modelRoutes(app: FastifyInstance, db: Db) {
+  app.addContentTypeParser(['model/gltf-binary', 'application/octet-stream'], { parseAs: 'buffer', bodyLimit: MAX_MODEL_BYTES }, (_req, body, done) => done(null, body));
+
+  /** Upload or replace the 3D terrain model (binary glTF). Large raw exports go through scripts/bake-model.mjs first. */
+  app.put('/api/worlds/:w/map/model', { bodyLimit: MAX_MODEL_BYTES }, async (req) => {
+    const w = await getWorld(db, (req.params as P).w);
+    const map = await rootMap(db, w.id);
+    const body = req.body;
+    if (!Buffer.isBuffer(body) || body.length < 20) throw badRequest('Send the .glb file as the request body.');
+    if (body.readUInt32LE(0) !== 0x46546c67 || body.readUInt32LE(4) !== 2) throw badRequest('That file is not a binary glTF 2.0 (.glb) model.');
+    const name = String((req.headers['x-file-name'] as string | undefined) ?? 'model.glb').slice(0, 200);
+    const placement = fitModelPlacement(map.layout);
+    const prev = await db.query.mapModel.findFirst({ where: eq(mapModel.mapId, map.id), columns: { version: true } });
+    const values = { bytes: body, name, placement, updatedAt: new Date() };
+    const [row] = await db.insert(mapModel).values({ mapId: map.id, ...values, version: 1 })
+      .onConflictDoUpdate({ target: mapModel.mapId, set: { ...values, version: (prev?.version ?? 0) + 1 } })
+      .returning(modelMeta);
+    await logEvent(db, { worldId: w.id, kind: 'map.model', summary: `${prev ? 'Replaced' : 'Added'} the 3D terrain model (${(body.length / 1e6).toFixed(1)} MB)`, payload: { version: row.version } });
+    return row;
+  });
+
+  app.get('/api/worlds/:w/map/model', async (req, reply) => {
+    const w = await getWorld(db, (req.params as P).w);
+    const map = await rootMap(db, w.id);
+    const m = await db.query.mapModel.findFirst({ where: eq(mapModel.mapId, map.id) });
+    if (!m) throw notFound('Model');
+    const v = (req.query as { v?: string }).v;
+    reply.header('cache-control', v && Number(v) === m.version ? 'private, max-age=31536000, immutable' : 'private, no-cache');
+    reply.header('etag', `"model-${map.id}-${m.version}"`);
+    return reply.type('model/gltf-binary').send(m.bytes);
+  });
+
+  const MPlacement = z.object({
+    x: z.number().finite(), y: z.number().finite(), w: z.number().finite().positive(), h: z.number().finite().positive(),
+    heightScale: z.number().min(0.05).max(10),
+  }).partial();
+  app.patch('/api/worlds/:w/map/model', async (req) => {
+    const w = await getWorld(db, (req.params as P).w);
+    const map = await rootMap(db, w.id);
+    const m = await db.query.mapModel.findFirst({ where: eq(mapModel.mapId, map.id), columns: { placement: true } });
+    if (!m) throw notFound('Model');
+    const body = req.body as { placement?: unknown; reset?: boolean };
+    const placement = body.reset ? fitModelPlacement(map.layout) : { ...m.placement, ...MPlacement.parse(body.placement ?? {}) };
+    const [row] = await db.update(mapModel).set({ placement, updatedAt: new Date() }).where(eq(mapModel.mapId, map.id)).returning(modelMeta);
+    return row;
+  });
+
+  app.delete('/api/worlds/:w/map/model', async (req) => {
+    const w = await getWorld(db, (req.params as P).w);
+    const map = await rootMap(db, w.id);
+    const gone = await db.delete(mapModel).where(eq(mapModel.mapId, map.id)).returning({ v: mapModel.version });
+    if (gone.length) await logEvent(db, { worldId: w.id, kind: 'map.model', summary: 'Removed the 3D terrain model' });
     return { ok: true };
   });
 }

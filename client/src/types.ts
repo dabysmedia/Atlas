@@ -1,3 +1,4 @@
+import type { Daylight } from '../../shared/daylight';
 import type { MeterBand } from '../../shared/meters';
 export type { MeterBand };
 
@@ -13,6 +14,7 @@ export type WorldSummary = {
 export type World = {
   id: string; name: string; description: string; accent: string; currentDay: number;
   terrainTypes: TerrainType[]; hexStates: HexStateType[];
+  daylight: Daylight;
 };
 
 export type PageIndex = { id: string; title: string; category: string; updatedAt: string };
@@ -38,9 +40,12 @@ export type Settlement = {
 export type FactionLite = { id: string; name: string; color: string };
 export type CampaignLite = { id: string; name: string };
 export type ArtPlacement = { x: number; y: number; w: number; h: number; opacity: number };
+export type ModelPlacement = { x: number; y: number; w: number; h: number; heightScale: number };
+/** The 3D terrain model under the grid. Purely visual: hexes stay the source of truth. */
+export type MapModel = { version: number; name: string; placement: ModelPlacement; size: number; updatedAt: string };
 export type MapArt = { version: number; width: number; height: number; mime: string; placement: ArtPlacement; updatedAt: string };
 export type MapData = {
-  map: { id: string; name: string; layout: MapLayout; art: MapArt | null };
+  map: { id: string; name: string; layout: MapLayout; art: MapArt | null; model: MapModel | null };
   hexes: Hex[]; claims: Claim[]; tokens: Token[]; settlements: Settlement[]; factions: FactionLite[]; campaigns: CampaignLite[];
 };
 

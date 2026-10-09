@@ -11,11 +11,11 @@ import { registerAuth, ensureOwner } from './auth.js';
 import { HttpError } from './history.js';
 import { worldRoutes } from './routes/worlds.js';
 import { wikiRoutes } from './routes/wiki.js';
-import { mapRoutes } from './routes/map.js';
+import { mapRoutes, modelRoutes } from './routes/map.js';
 import { factionRoutes } from './routes/factions.js';
 import { chronicleRoutes } from './routes/chronicle.js';
 import { seedDemoWorld, upgradeDemo } from './worlds.js';
-import { seedNewWorldOnce } from './lore/newworld.js';
+import { seedNewWorldOnce, upgradeNewWorldIsland } from './lore/newworld.js';
 import { worlds } from './db/schema.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -47,6 +47,7 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
     worldRoutes(api, db);
     wikiRoutes(api, db);
     mapRoutes(api, db);
+    modelRoutes(api, db);
     factionRoutes(api, db);
     chronicleRoutes(api, db);
   });
@@ -87,6 +88,7 @@ async function main() {
   if (process.env.SEED_LORE !== 'false') {
     const note = await seedNewWorldOnce(db);
     if (note) app.log.info(note);
+    for (const n of await upgradeNewWorldIsland(db)) app.log.info(n);
   }
   await app.listen({ host: '0.0.0.0', port: Number(process.env.PORT ?? 3000) });
 }

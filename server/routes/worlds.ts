@@ -6,6 +6,7 @@ import { worlds } from '../db/schema.js';
 import { logEvent, notFound } from '../history.js';
 import { createWorld, deleteWorld, seedDemoWorld } from '../worlds.js';
 import { seedNewWorld } from '../lore/newworld.js';
+import { DAY_SPEEDS, DEFAULT_DAYLIGHT, hoursNow, type Daylight, type DaySpeed } from '../../shared/daylight.js';
 
 export const Uuid = z.uuid();
 
@@ -36,7 +37,27 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
     return rows.rows;
   });
 
-  app.get('/api/worlds/:w', async (req) => getWorld(db, (req.params as { w: string }).w));
+  app.get('/api/worlds/:w', async (req) => {
+    const w = await getWorld(db, (req.params as { w: string }).w);
+    // Start the sky running the first time anyone opens the world.
+    if (!w.daylight) {
+      const daylight = DEFAULT_DAYLIGHT();
+      await db.update(worlds).set({ daylight }).where(eq(worlds.id, w.id));
+      return { ...w, daylight };
+    }
+    return w;
+  });
+
+  /** Set the time of day and/or how fast it runs (a per-world DM setting). */
+  const DaylightBody = z.object({ hour: z.number().min(0).max(24).optional(), speed: z.enum(Object.keys(DAY_SPEEDS) as [DaySpeed, ...DaySpeed[]]).optional() });
+  app.patch('/api/worlds/:w/daylight', async (req) => {
+    const w = await getWorld(db, (req.params as { w: string }).w);
+    const body = DaylightBody.parse(req.body);
+    const cur = (w.daylight as Daylight | null) ?? DEFAULT_DAYLIGHT();
+    const daylight: Daylight = { hour: body.hour ?? hoursNow(cur) % 24, speed: body.speed ?? cur.speed, at: new Date().toISOString() };
+    await db.update(worlds).set({ daylight }).where(eq(worlds.id, w.id));
+    return { daylight };
+  });
 
   const Create = z.object({
     name: z.string().trim().min(1).max(120),
@@ -77,16 +98,23 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
   });
 
   /** Move the world clock. Setting a day backwards is allowed (GM correction) and logged. */
-  const Day = z.object({ day: z.number().int().min(1).max(10_000_000).optional(), advance: z.number().int().min(-1000).max(1000).optional() });
+  const Day = z.object({
+    day: z.number().int().min(1).max(10_000_000).optional(), advance: z.number().int().min(-1000).max(1000).optional(),
+    /** Sent when the running day cycle passes midnight; only the first tab to send it for a given day counts. */
+    rollover: z.object({ from: z.number().int() }).optional(),
+  });
   app.post('/api/worlds/:w/day', async (req) => {
     const w = await getWorld(db, (req.params as { w: string }).w);
     const body = Day.parse(req.body);
-    const day = Math.max(1, body.day ?? w.currentDay + (body.advance ?? 1));
+    if (body.rollover && body.rollover.from !== w.currentDay) return { currentDay: w.currentDay, daylight: w.daylight };
+    const day = body.rollover ? w.currentDay + 1 : Math.max(1, body.day ?? w.currentDay + (body.advance ?? 1));
+    let daylight = w.daylight as Daylight | null;
+    if (body.rollover && daylight) daylight = { ...daylight, hour: Math.max(0, hoursNow(daylight) - 24) % 24, at: new Date().toISOString() };
     await db.transaction(async (tx) => {
-      await tx.update(worlds).set({ currentDay: day, updatedAt: new Date() }).where(eq(worlds.id, w.id));
-      await logEvent(tx, { worldId: w.id, gameDay: day, kind: 'day.changed', summary: day > w.currentDay ? `Day ${day} dawns` : `Clock set back to day ${day}`, payload: { from: w.currentDay, to: day } });
+      await tx.update(worlds).set({ currentDay: day, daylight, updatedAt: new Date() }).where(eq(worlds.id, w.id));
+      await logEvent(tx, { worldId: w.id, gameDay: day, kind: 'day.changed', summary: day > w.currentDay ? `Day ${day} dawns` : `Clock set back to day ${day}`, payload: { from: w.currentDay, to: day, ...(body.rollover ? { rollover: true } : {}) }, actor: body.rollover ? 'system' : 'gm' });
     });
-    return { currentDay: day };
+    return { currentDay: day, daylight };
   });
 
   app.post('/api/worlds/reorder', async (req) => {

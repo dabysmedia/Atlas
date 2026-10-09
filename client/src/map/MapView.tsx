@@ -3,18 +3,24 @@ import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  Brush, ChevronLeft, Eye, EyeOff, Flag, Grid3x3, Image as ImageIcon, Layers, Maximize, Minus, MousePointer2, Move, Plus,
-  RotateCcw, Shield, Stamp, Trash2, Upload, X,
+  Box, Brush, ChevronLeft, Compass, Eye, EyeOff, Flag, Grid3x3, Image as ImageIcon, Layers, Map as MapIcon, Maximize, Minus, Mountain, MousePointer2, Move, Plus,
+  RotateCcw, RotateCw, Shield, Stamp, Trash2, Upload, X,
 } from 'lucide-react';
 import { api, ApiError, qk } from '../api';
-import type { ArtPlacement, Claim, Hex, MapArt, MapData, Token } from '../types';
+import type { ArtPlacement, Claim, Hex, MapArt, MapData, MapModel, Token } from '../types';
 import { useWorld } from '../world';
-import { cameraPref, fogCampaign, layerPrefs, panelPrefs } from '../prefs';
+import { cameraPref, fogCampaign, layerPrefs, mapModePref, panelPrefs } from '../prefs';
 import { HEX_SIZE, HexMapRenderer, type Camera, type Layers as RLayers } from './renderer';
 import { FactionPanel, HexPanel, TokenPanel, Diamond, type Focus } from './panels';
 import { toast, toastError } from '../components/toast';
 import { Dialog } from '../components/Dialog';
 import { DIRS, key } from '../../../shared/hex';
+import type { HexMapRenderer3D } from '../map3d/renderer3d';
+import { is3d, load3d, webgl2Available } from '../map3d/support';
+import { daySweep } from '../daylight';
+
+const HAS_WEBGL2 = typeof document !== 'undefined' && webgl2Available();
+if (HAS_WEBGL2 && mapModePref.get() !== '2d') void load3d();
 
 type Tool = 'select' | 'terrain' | 'state' | 'claim' | 'fog';
 const TOOLS: { id: Tool; label: string; icon: typeof Brush; keyHint: string }[] = [
@@ -35,7 +41,15 @@ export function MapView() {
   const [params, setParams] = useSearchParams();
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const glRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<HexMapRenderer | null>(null);
+  // 3D is the default; the flat map stays one click away, and is used without WebGL2.
+  const [modePref, setModePref] = useState<'3d' | '2d'>(() => mapModePref.get() ?? '3d');
+  const [alignIn2d, setAlignIn2d] = useState(false);
+  const mode: '3d' | '2d' = HAS_WEBGL2 && modePref === '3d' && !alignIn2d ? '3d' : '2d';
+  const [gen, setGen] = useState(0);
+  const [modelState, setModelState] = useState<'loading' | 'ready' | 'error' | null>(null);
+  const r3 = () => (is3d(rendererRef.current) ? rendererRef.current : null);
   const [focus, setFocus] = useState<Focus | null>(null);
   const [tool, setTool] = useState<Tool>('select');
   const [brush, setBrush] = useState<Record<Tool, string>>({ select: '', terrain: 'plains', state: 'settled', claim: '', fog: 'reveal' });
@@ -65,18 +79,38 @@ export function MapView() {
 
   // ---- renderer lifecycle
   useEffect(() => {
-    const r = new HexMapRenderer(canvasRef.current!);
-    rendererRef.current = r;
-    const ro = new ResizeObserver(([e]) => r.resize(e.contentRect.width, e.contentRect.height));
-    ro.observe(wrapRef.current!);
-    let saveT = 0;
-    r.onCameraChange = (c) => {
-      sessionCameras.set(world.id, { ...c });
-      window.clearTimeout(saveT);
-      saveT = window.setTimeout(() => cameraPref(world.id).set({ ...c }), 300);
+    let r: HexMapRenderer | null = null;
+    let ro: ResizeObserver | null = null;
+    let live = true;
+    const start = (made: HexMapRenderer) => {
+      r = made;
+      rendererRef.current = r;
+      wire(r);
     };
-    return () => { ro.disconnect(); r.destroy(); rendererRef.current = null; };
-  }, [world.id]);
+    if (mode === '3d') {
+      load3d().then((m) => {
+        if (!live) return;
+        const r3d = new m.HexMapRenderer3D(glRef.current!, canvasRef.current!);
+        r3d.onLoadState = setModelState;
+        start(r3d);
+      }).catch(() => { if (live) setModePref('2d'); });
+    } else start(new HexMapRenderer(canvasRef.current!));
+    function wire(r: HexMapRenderer) {
+      (window as unknown as { __atlasMap?: HexMapRenderer }).__atlasMap = r;
+      ro = new ResizeObserver(([e]) => r.resize(e.contentRect.width, e.contentRect.height));
+      ro.observe(wrapRef.current!);
+      let saveT = 0;
+      r.onCameraChange = (c) => {
+        sessionCameras.set(world.id, { ...c });
+        window.clearTimeout(saveT);
+        saveT = window.setTimeout(() => cameraPref(world.id).set({ ...c }), 300);
+      };
+      placedCamera.current = false;
+      setGen((g) => g + 1);
+    }
+    return () => { live = false; ro?.disconnect(); r?.destroy(); rendererRef.current = null; setModelState(null); };
+  }, [world.id, mode]);
+  useEffect(() => { mapModePref.set(modePref); }, [modePref]);
 
   const placedCamera = useRef(false);
   useEffect(() => {
@@ -87,7 +121,17 @@ export function MapView() {
       factions: data.factions, terrain: world.terrainTypes, states: world.hexStates,
       fog: fogCamp && fogQ.data ? new Set(fogQ.data) : null,
     });
-  }, [data, fogQ.data, fogCamp, world.terrainTypes, world.hexStates, world.id]);
+  }, [data, fogQ.data, fogCamp, world.terrainTypes, world.hexStates, world.id, gen]);
+
+  // 3D: the world's model (or relief from its hexes), and the time of day.
+  const model: MapModel | null = data?.map.model ?? null;
+  useEffect(() => {
+    const r = r3();
+    if (!r || !data) return;
+    r.setModel(model ? { url: `/api/worlds/${world.id}/map/model?v=${model.version}`, placement: model.placement } : null);
+  }, [model?.version, model?.placement, !!data, gen, world.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { r3()?.setDaylight(world.daylight ?? null); }, [world.daylight, gen]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => daySweep.subscribe(() => r3()?.sweepDay()), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Map art: load the versioned image once per version.
   const art = data?.map.art ?? null;
@@ -101,7 +145,7 @@ export function MapView() {
     let live = true;
     img.decode().then(() => { if (live) { rendererRef.current?.setArt(img, art.placement); setArtLoaded(art.version); } }).catch(() => {});
     return () => { live = false; };
-  }, [art?.version, world.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [art?.version, world.id, gen]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const r = rendererRef.current;
     if (r && art && r.hasArt && !align) { r.artPlacement = { ...art.placement }; r.invalidate(); }
@@ -119,12 +163,13 @@ export function MapView() {
       window.clearInterval(id);
       const saved = sessionCameras.get(world.id) ?? cameraPref(world.id).get();
       if (saved) { r.setCamera(saved); return; }
+      if (is3d(r)) { const fit = r.fitCamera(); r.setCamera({ ...fit, zoom: fit.zoom * 0.62 }); r.flyTo(fit.x, fit.y, fit.zoom); return; }
       const fit = r.fitCamera();
       r.setCamera({ ...fit, zoom: fit.zoom * 0.7 });
       r.flyTo(fit.x, fit.y, fit.zoom);
     }, 16);
     return () => window.clearInterval(id);
-  }, [data, world.id]);
+  }, [data, world.id, gen]);
 
   // Renderer state that follows React state.
   useEffect(() => {
@@ -134,15 +179,24 @@ export function MapView() {
     r.selectedTokenId = focus?.kind === 'token' ? focus.id : null;
     r.focusFactionId = focus?.kind === 'faction' ? focus.id : null;
     r.invalidate();
-  }, [focus]);
-  useEffect(() => { const r = rendererRef.current; if (r) { r.showFog = showFog; r.invalidate(); } }, [showFog]);
+  }, [focus, gen]);
+  // 3D: choosing a place is a slow move onto it; letting go returns to exactly the view before.
+  useEffect(() => {
+    const r = r3();
+    if (!r || !data) return;
+    if (focus?.kind === 'hex' || focus?.kind === 'token') {
+      const p = focus.kind === 'hex' ? r.hexById(focus.id) && { x: r.hexById(focus.id)!.cx, y: r.hexById(focus.id)!.cy } : (() => { const t = data.tokens.find((x) => x.id === focus.id); return t ? r.tokenPos(t) : null; })();
+      if (p) r.focusOn(p.x, p.y, Math.max(r.target.zoom, 2.1), r.viewport.w > 900 ? 185 : 0);
+    } else if (!focus) r.restoreView();
+  }, [focus?.kind, focus?.id, gen]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { const r = rendererRef.current; if (r) { r.showFog = showFog; r.invalidate(); } }, [showFog, gen]);
   useEffect(() => { fogCampaign(world.id).set(fogCamp); }, [fogCamp, world.id]);
   useEffect(() => {
     const r = rendererRef.current;
     if (r) { r.layers = align ? { ...layers, territory: false, grid: true, terrainOverlay: Math.max(layers.terrainOverlay, 0.35) } : layers; r.invalidate(); }
     layerPrefs(world.id).set(layers);
-  }, [layers, align, world.id]);
-  useEffect(() => { const r = rendererRef.current; if (r) { r.painting = tool === 'terrain' || tool === 'state'; r.invalidate(); } }, [tool]);
+  }, [layers, align, world.id, gen]);
+  useEffect(() => { const r = rendererRef.current; if (r) { r.painting = tool === 'terrain' || tool === 'state'; r.invalidate(); } }, [tool, gen]);
   useEffect(() => { panelPrefs.set({ ...panelPrefs.get(), territories: territoriesOpen }); }, [territoriesOpen]);
 
   /** Fly to a point, centered in the map area the focus panel leaves visible. */
@@ -150,7 +204,8 @@ export function MapView() {
     const r = rendererRef.current;
     if (!r) return;
     const panel = r.viewport.w > 900 ? 185 : 0;
-    r.flyTo(x + panel / zoom, y, zoom);
+    if (is3d(r)) r.focusOn(x, y, zoom, panel);
+    else r.flyTo(x + panel / zoom, y, zoom);
   };
 
   // Deep links from search: ?focus=hex:<id> | token:<id> | faction:<id>
@@ -239,7 +294,28 @@ export function MapView() {
 
   // ---- map art
   const fileRef = useRef<HTMLInputElement>(null);
-  const [confirmArt, setConfirmArt] = useState<null | 'remove'>(null);
+  const [confirmArt, setConfirmArt] = useState<null | 'remove' | 'remove-model'>(null);
+  const modelRef = useRef<HTMLInputElement>(null);
+  const uploadModel = async (file: File) => {
+    if (!/\.glb$/i.test(file.name)) { toast('That file is not a .glb model.'); return; }
+    if (file.size > 40 * 1024 * 1024) { toast('Models up to 40 MB, please. Larger exports can be baked down with scripts/bake-model.mjs.'); return; }
+    try {
+      const res = await fetch(`/api/worlds/${world.id}/map/model`, { method: 'PUT', body: file, headers: { 'content-type': 'model/gltf-binary', 'x-file-name': file.name }, credentials: 'same-origin' });
+      const body = await res.json();
+      if (!res.ok) throw new ApiError(res.status, body?.error ?? res.statusText);
+      patchCache((d) => ({ ...d, map: { ...d.map, model: body as MapModel } }));
+      qc.invalidateQueries({ queryKey: qk.events(world.id) });
+      setLayersOpen(false);
+      toast('3D model added.');
+    } catch (e) { toastError(e); }
+  };
+  const removeModel = async () => {
+    try {
+      await api(`/api/worlds/${world.id}/map/model`, { method: 'DELETE' });
+      patchCache((d) => ({ ...d, map: { ...d.map, model: null } }));
+      qc.invalidateQueries({ queryKey: qk.events(world.id) });
+    } catch (e) { toastError(e); }
+  };
   const uploadArt = async (file: File) => {
     if (!file.type.startsWith('image/')) { toast('That file is not an image.'); return; }
     if (file.size > 25 * 1024 * 1024) { toast('Images up to 25 MB, please.'); return; }
@@ -283,7 +359,7 @@ export function MapView() {
   useEffect(() => {
     const canvas = canvasRef.current!;
     const pointers = new Map<number, { x: number; y: number }>();
-    let mode: 'none' | 'pan' | 'maybe-click' | 'stroke' | 'token' | 'pinch' | 'art' = 'none';
+    let mode: 'none' | 'pan' | 'orbit' | 'maybe-click' | 'stroke' | 'token' | 'pinch' | 'art' = 'none';
     let start = { x: 0, y: 0 };
     let lastMove = { x: 0, y: 0, t: 0 };
     let vel = { x: 0, y: 0 };
@@ -312,6 +388,7 @@ export function MapView() {
     };
 
     const onDown = (e: PointerEvent) => {
+      if (!rendererRef.current) return;
       canvas.setPointerCapture(e.pointerId);
       const p = pos(e);
       pointers.set(e.pointerId, p);
@@ -323,6 +400,8 @@ export function MapView() {
         return;
       }
       start = p; lastMove = { ...p, t: performance.now() }; vel = { x: 0, y: 0 };
+      // In 3D the right button turns and tips the view; middle button or Space pans.
+      if (e.button === 2 && is3d(r())) { mode = 'orbit'; return; }
       if (e.button === 1 || e.button === 2 || space) { mode = 'pan'; return; }
       if (toolRef.current.align) { mode = 'art'; return; }
       const t = toolRef.current.tool;
@@ -337,6 +416,7 @@ export function MapView() {
     };
 
     const onMove = (e: PointerEvent) => {
+      if (!rendererRef.current) return;
       const p = pos(e);
       if (pointers.has(e.pointerId)) pointers.set(e.pointerId, p);
       const h = r().hexAt(p.x, p.y);
@@ -357,7 +437,11 @@ export function MapView() {
       const now = performance.now();
       const dx = p.x - lastMove.x, dy = p.y - lastMove.y, dt = Math.max(1, now - lastMove.t);
       if (mode === 'maybe-click' && Math.hypot(p.x - start.x, p.y - start.y) > 4) mode = 'pan';
-      if (mode === 'pan') {
+      if (mode === 'orbit') {
+        const rr = r() as HexMapRenderer3D;
+        rr.rotate(-dx * 0.006); rr.tip(-dy * 0.004);
+        canvas.style.cursor = 'grabbing';
+      } else if (mode === 'pan') {
         r().panBy(dx, dy);
         vel = { x: (dx / dt) * 1000 * 0.6 + vel.x * 0.4, y: (dy / dt) * 1000 * 0.6 + vel.y * 0.4 };
         canvas.style.cursor = 'grabbing';
@@ -379,6 +463,7 @@ export function MapView() {
     };
 
     const onUp = (e: PointerEvent) => {
+      if (!rendererRef.current) return;
       const p = pos(e);
       pointers.delete(e.pointerId);
       if (mode === 'pinch') { if (pointers.size === 0) mode = 'none'; return; }
@@ -404,6 +489,7 @@ export function MapView() {
     };
 
     const onWheel = (e: WheelEvent) => {
+      if (!rendererRef.current) return;
       e.preventDefault();
       const p = pos(e);
       // Trackpad pinch arrives as ctrl+wheel with small deltas; mouse wheels give ~100 per notch.
@@ -419,14 +505,15 @@ export function MapView() {
       r().zoomAt(p.x, p.y, factor);
     };
     const onDbl = (e: MouseEvent) => {
+      if (!rendererRef.current) return;
       if (toolRef.current.tool !== 'select' || toolRef.current.align) return;
       const p = pos(e);
       const h = r().hexAt(p.x, p.y);
-      if (h) r().flyTo(h.cx, h.cy, Math.max(r().target.zoom * 2, 1.4));
+      if (h && !is3d(r())) r().flyTo(h.cx, h.cy, Math.max(r().target.zoom * 2, 1.4));
     };
-    const onLeave = () => { setHover(null); if (r()) { r().hoverId = null; r().brushIds = new Set(); r().invalidate(); } };
+    const onLeave = () => { setHover(null); if (rendererRef.current) { r().hoverId = null; r().brushIds = new Set(); r().invalidate(); } };
     const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if ((e.target as HTMLElement)?.closest('input, textarea, select, [contenteditable="true"]') || !rendererRef.current) return;
       if (e.code === 'Space') { space = e.type === 'keydown'; canvas.style.cursor = space ? 'grab' : ''; if (space) e.preventDefault(); return; }
       if (e.type !== 'keydown' || e.metaKey || e.ctrlKey || e.altKey) return;
       const idx = ['1', '2', '3', '4', '5'].indexOf(e.key);
@@ -438,6 +525,13 @@ export function MapView() {
       else if (e.key === '[') setRadius((x) => Math.max(0, x - 1));
       else if (e.key === ']') setRadius((x) => Math.min(3, x + 1));
       else if (e.key === 'l') setLayersOpen((o) => !o);
+      else if (is3d(r())) {
+        const rr = r() as HexMapRenderer3D;
+        if (e.key === 'q') rr.rotate(Math.PI / 8);
+        else if (e.key === 'e') rr.rotate(-Math.PI / 8);
+        else if (e.key === 't') rr.setOverhead(!rr.overhead);
+        else if (e.key === 'n') rr.faceNorth();
+      }
     };
     // Drop an image anywhere on the map to use it as map art.
     const onDragOver = (e: DragEvent) => { if (e.dataTransfer?.types.includes('Files')) { e.preventDefault(); setDropping(true); } };
@@ -476,7 +570,7 @@ export function MapView() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKey);
     };
-  }, []);
+  }, [gen]);
   const uploadRef = useRef(uploadArt);
   uploadRef.current = uploadArt;
 
@@ -514,9 +608,11 @@ export function MapView() {
   };
 
   return (
-    <div className={`mapview ${align ? 'aligning' : ''}`} ref={wrapRef}>
-      <canvas ref={canvasRef} className="map" aria-label="Hex map" />
+    <div className={`mapview ${align ? 'aligning' : ''} mode-${mode}`} ref={wrapRef} data-map-mode={mode}>
+      {mode === '3d' && <canvas key="gl" ref={glRef} className="map map-gl" aria-hidden />}
+      <canvas key={`hud-${mode}`} ref={canvasRef} className="map" aria-label="Hex map" />
       {!data && <div className="map-loading"><span>Unrolling the map…</span></div>}
+      {mode === '3d' && modelState === 'loading' && <div className="map-raising"><Mountain size={13} /> Raising the island…</div>}
 
       {/* Territories: compact, collapsible. */}
       {data && !align && (
@@ -601,6 +697,7 @@ export function MapView() {
                 <header><h4>Layers</h4><button className="iconbtn sm" onClick={() => setLayersOpen(false)} aria-label="Close layers"><X size={14} /></button></header>
                 <div className="layer-group">
                   <div className="layer-title"><ImageIcon size={14} /> Map art</div>
+                  {model && <p className="faint layer-note">This world's 3D model is its ground in the 3D view; the art shows on the flat map.</p>}
                   {art ? (
                     <>
                       <div className="art-thumb"><img src={`/api/worlds/${world.id}/map/art?v=${art.version}`} alt="" /><span>{art.width}×{art.height}</span></div>
@@ -610,7 +707,7 @@ export function MapView() {
                           onPointerUp={() => saveArt(data.map.art?.placement ?? null)} onKeyUp={() => saveArt(data.map.art?.placement ?? null)} />
                       </label>
                       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-                        <button className="btn sm" onClick={() => { setLayersOpen(false); setFocus(null); setAlign({ ...art.placement }); }}><Move size={13} /> Align</button>
+                        <button className="btn sm" onClick={() => { setLayersOpen(false); setFocus(null); if (mode === '3d') setAlignIn2d(true); setAlign({ ...art.placement }); }}><Move size={13} /> Align</button>
                         <button className="btn sm" onClick={() => fileRef.current?.click()}><Upload size={13} /> Replace</button>
                         <button className="btn sm ghost danger" onClick={() => setConfirmArt('remove')}><Trash2 size={13} /> Remove</button>
                       </div>
@@ -630,6 +727,23 @@ export function MapView() {
                   )}
                   <label className="toggle"><input type="checkbox" checked={layers.grid} onChange={(e) => setLayers({ ...layers, grid: e.target.checked })} /><Grid3x3 size={14} /> Hex grid</label>
                   <label className="toggle"><input type="checkbox" checked={layers.territory} onChange={(e) => setLayers({ ...layers, territory: e.target.checked })} /><Shield size={14} /> Territories and borders</label>
+                </div>
+                <div className="layer-group">
+                  <div className="layer-title"><Mountain size={14} /> 3D terrain model</div>
+                  {model ? (
+                    <>
+                      <div className="row" style={{ gap: 8, fontSize: 12.5 }}><Box size={14} className="faint" /> <span className="grow">{model.name}</span> <span className="faint num">{(model.size / 1e6).toFixed(1)} MB</span></div>
+                      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                        <button className="btn sm" onClick={() => modelRef.current?.click()}><Upload size={13} /> Replace</button>
+                        <button className="btn sm ghost danger" onClick={() => setConfirmArt('remove-model')}><Trash2 size={13} /> Remove</button>
+                      </div>
+                    </>
+                  ) : (
+                    <button className="dropzone" onClick={() => modelRef.current?.click()}>
+                      <Mountain size={18} />
+                      <span><b>Add a 3D model</b><br /><span className="faint">A .glb up to 40 MB, laid under the grid. Without one, the 3D view raises relief from the hex terrain.</span></span>
+                    </button>
+                  )}
                 </div>
                 <div className="layer-group">
                   <div className="layer-title"><Eye size={14} /> Party fog</div>
@@ -654,6 +768,7 @@ export function MapView() {
         </div>
       )}
       <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void uploadArt(f); }} />
+      <input ref={modelRef} type="file" accept=".glb,model/gltf-binary" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void uploadModel(f); }} />
 
       {/* Art alignment. */}
       <AnimatePresence>
@@ -681,8 +796,8 @@ export function MapView() {
               </div>
               <button className="btn sm" onClick={async () => { const m = await saveArt(null, true); if (m) setAlign({ ...m.placement }); }}><RotateCcw size={13} /> Fit to grid</button>
               <span className="spacer" />
-              <button className="btn sm ghost" onClick={() => setAlign(null)}>Cancel</button>
-              <button className="btn sm primary" onClick={async () => { const m = await saveArt(align); if (m) { setAlign(null); toast('Art alignment saved'); } }}>Save alignment</button>
+              <button className="btn sm ghost" onClick={() => { setAlign(null); setAlignIn2d(false); }}>Cancel</button>
+              <button className="btn sm primary" onClick={async () => { const m = await saveArt(align); if (m) { setAlign(null); setAlignIn2d(false); toast('Art alignment saved'); } }}>Save alignment</button>
             </div>
           </motion.div>
         )}
@@ -693,6 +808,23 @@ export function MapView() {
         <button onClick={() => r?.zoomAt(r.viewport.w / 2, r.viewport.h / 2, 1.6)} title="Zoom in (+)" aria-label="Zoom in"><Plus size={15} /></button>
         <button onClick={() => { if (r) { const c = r.fitCamera(); r.flyTo(c.x, c.y, c.zoom); } }} title="Whole map (F)" aria-label="Fit map"><Maximize size={14} /></button>
         <button onClick={() => r?.zoomAt(r.viewport.w / 2, r.viewport.h / 2, 1 / 1.6)} title="Zoom out (-)" aria-label="Zoom out"><Minus size={15} /></button>
+        {mode === '3d' && (
+          <>
+            <span className="zoombar-sep" />
+            <button onClick={() => r3()?.rotate(Math.PI / 8)} title="Turn left (Q) · right-drag to turn and tip" aria-label="Turn left"><RotateCcw size={14} /></button>
+            <button onClick={() => r3()?.faceNorth()} title="Face north (N)" aria-label="Face north"><Compass size={14} /></button>
+            <button onClick={() => r3()?.rotate(-Math.PI / 8)} title="Turn right (E)" aria-label="Turn right"><RotateCw size={14} /></button>
+            <button onClick={() => { const x = r3(); if (x) x.setOverhead(!x.overhead); }} title="Look straight down (T)" aria-label="Overhead view"><Grid3x3 size={14} /></button>
+          </>
+        )}
+        {HAS_WEBGL2 && (
+          <>
+            <span className="zoombar-sep" />
+            <button className="mode-toggle" onClick={() => setModePref(mode === '3d' ? '2d' : '3d')} title={mode === '3d' ? 'Flat map' : '3D island'} aria-label={mode === '3d' ? 'Switch to the flat map' : 'Switch to the 3D island'}>
+              {mode === '3d' ? <MapIcon size={14} /> : <Mountain size={14} />}<span>{mode === '3d' ? '2D' : '3D'}</span>
+            </button>
+          </>
+        )}
       </div>
 
       {hover && hoverInfo && !focus && !align && (
@@ -729,6 +861,10 @@ export function MapView() {
         )}
       </AnimatePresence>
 
+      <Dialog open={confirmArt === 'remove-model'} onClose={() => setConfirmArt(null)} title="Remove the 3D model?">
+        <p className="muted" style={{ marginTop: 0 }}>The hexes stay exactly as they are. The 3D view falls back to relief raised from the hex terrain.</p>
+        <div className="actions"><button className="btn ghost" onClick={() => setConfirmArt(null)}>Keep it</button><button className="btn danger-solid" onClick={() => { setConfirmArt(null); void removeModel(); }}>Remove model</button></div>
+      </Dialog>
       <Dialog open={confirmArt === 'remove'} onClose={() => setConfirmArt(null)} title="Remove the map art?">
         <p className="muted" style={{ marginTop: 0 }}>The hexes, borders and markers stay exactly as they are. The map falls back to painted terrain.</p>
         <div className="actions"><button className="btn ghost" onClick={() => setConfirmArt(null)}>Keep it</button><button className="btn danger-solid" onClick={() => { setConfirmArt(null); void removeArt(); }}>Remove art</button></div>

@@ -7,9 +7,10 @@
  * The only things changed are listed in FIXES. Re-running it creates another world; deleting that world removes it all.
  */
 import fs from 'node:fs';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, isNull, like, sql } from 'drizzle-orm';
 import type { Db, DbOrTx } from '../db/index.js';
-import { appMeta, factions, hexes, meterDefinitions, wikiLinks, wikiPages, worlds } from '../db/schema.js';
+import { appMeta, events, factions, hexes, mapModel, maps, meterDefinitions, wikiLinks, wikiPages, worlds } from '../db/schema.js';
+import { fitModelPlacement } from '../placement.js';
 import { SIGNATURE_BANDS } from '../defaults.js';
 import { setMeter, logEvent } from '../history.js';
 import { axialToOffset } from '../../shared/hex.js';
@@ -320,27 +321,14 @@ const FACTIONS: { page: PageKey; name: string; color: string; sigil: string; met
 // ---------------------------------------------------------------- island
 
 /**
- * A blocked-out island: deep sea, a shallow shelf, rainforest lowlands, and one mountain range
- * through the middle, as the source describes. Shape and orientation are placeholders to repaint.
+ * The island is the owner's 3D model (server/assets/island.glb, baked from the Meshy export by
+ * scripts/bake-model.mjs). Each hex's terrain was read off the model by scripts/model-terrain.mjs,
+ * so the grid describes the land it sits on. No claims, settlements or names: the lore gives none.
  */
+type IslandTerrain = { cols: number; rows: number; terrain: string[] };
+const islandTerrainData = () => JSON.parse(fs.readFileSync(new URL('../assets/lore/new-world-terrain.json', import.meta.url), 'utf8')) as IslandTerrain;
+const islandModel = () => fs.readFileSync(new URL('../assets/island.glb', import.meta.url));
 export const ISLAND = { cols: 48, rows: 32 };
-export function islandTerrain(col: number, row: number): string {
-  const { cols, rows } = ISLAND;
-  const nx = (col + 0.5) / cols * 2 - 1;
-  const ny = (row + 0.5) / rows * 2 - 1;
-  const a = Math.atan2(ny, nx);
-  const wobble = 1 + 0.07 * Math.sin(3 * a + 0.6) + 0.05 * Math.sin(5 * a + 2.1) + 0.03 * Math.sin(9 * a + 4);
-  const d = Math.hypot(nx / 0.84, ny / 0.78) / wobble;
-  if (d > 1.12) return 'deep';
-  if (d > 1) return 'water';
-  // The range runs the long way across the island, widest in the middle.
-  const ridge = 0.06 * Math.sin(nx * 2.4 + 0.5);
-  const off = Math.abs(ny - ridge);
-  const half = 0.15 * Math.max(0, 1 - Math.pow(Math.abs(nx) / 0.8, 2));
-  if (off < half && d < 0.86) return 'mountains';
-  if (off < half + 0.07 && d < 0.8) return 'hills';
-  return 'jungle';
-}
 
 // ---------------------------------------------------------------- seed
 
@@ -352,6 +340,7 @@ export async function seedNewWorld(db: Db, opts: { name?: string } = {}) {
       description: 'What explorers found was an enormous tropical island or isolated continent covered almost entirely in rainforest.',
     });
     await paintIsland(tx, map.id);
+    await tx.insert(mapModel).values({ mapId: map.id, bytes: islandModel(), name: 'island.glb', placement: fitModelPlacement(map.layout) });
 
     // Pages first, so links have ids to point at.
     const specs: PageSpec[] = [{ key: 'index', title: opts.name ?? 'The New World', category: 'Lore' }, ...PAGES];
@@ -407,12 +396,13 @@ export async function seedNewWorld(db: Db, opts: { name?: string } = {}) {
   });
 }
 
-async function paintIsland(tx: DbOrTx, mapId: string) {
+export async function paintIsland(tx: DbOrTx, mapId: string) {
+  const data = islandTerrainData();
   const rows = await tx.select({ id: hexes.id, q: hexes.q, r: hexes.r }).from(hexes).where(eq(hexes.mapId, mapId));
   const by = new Map<string, string[]>();
   for (const h of rows) {
     const { col, row } = axialToOffset(h.q, h.r, 'flat');
-    const terrain = islandTerrain(col, row);
+    const terrain = data.terrain[row * data.cols + col] ?? 'deep';
     by.set(terrain, [...(by.get(terrain) ?? []), h.id]);
   }
   for (const [terrain, ids] of by) await tx.update(hexes).set({ terrain }).where(inArray(hexes.id, ids));
@@ -426,4 +416,33 @@ export async function seedNewWorldOnce(db: Db): Promise<string | null> {
   await db.update(worlds).set({ sortOrder: -1 }).where(eq(worlds.id, world.id));
   await db.insert(appMeta).values({ key: LORE_SEED_KEY, value: world.id }).onConflictDoNothing();
   return `imported "${world.name}" from ${LORE_FILE}`;
+}
+
+/**
+ * Worlds imported before the island model existed get it once: the model goes under the map, and if
+ * nobody has touched the placeholder terrain yet, the hexes are re-read from the model so they agree.
+ */
+export async function upgradeNewWorldIsland(db: Db): Promise<string[]> {
+  const notes: string[] = [];
+  const imported = await db.selectDistinct({ worldId: events.worldId }).from(events)
+    .where(and(eq(events.kind, 'note'), like(events.summary, `Lore imported from ${LORE_FILE}%`)));
+  for (const { worldId } of imported) {
+    const key = `upgrade:island-model:${worldId}`;
+    if ((await db.select().from(appMeta).where(eq(appMeta.key, key))).length) continue;
+    const [map] = await db.select().from(maps).where(and(eq(maps.worldId, worldId), isNull(maps.parentHexId)));
+    if (!map) continue;
+    const has = await db.select({ v: mapModel.version }).from(mapModel).where(eq(mapModel.mapId, map.id));
+    if (has.length) { await db.insert(appMeta).values({ key, value: 'done' }).onConflictDoNothing(); continue; } // imported with the model already
+    await db.transaction(async (tx) => {
+      await tx.insert(mapModel).values({ mapId: map.id, bytes: islandModel(), name: 'island.glb', placement: fitModelPlacement(map.layout) });
+      const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(events)
+        .where(and(eq(events.worldId, worldId), inArray(events.kind, ['hex.edited', 'hex.painted', 'hexes.painted'])));
+      const layout = map.layout as { cols: number; rows: number };
+      const fits = layout.cols === ISLAND.cols && layout.rows === ISLAND.rows;
+      if (n === 0 && fits) { await paintIsland(tx, map.id); notes.push(`re-read the hexes of world ${worldId} from the island model`); }
+      else notes.push(`added the island model under world ${worldId}; its edited terrain was kept`);
+      await tx.insert(appMeta).values({ key, value: 'done' }).onConflictDoNothing();
+    });
+  }
+  return notes;
 }

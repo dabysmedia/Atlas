@@ -9,10 +9,10 @@ import { buildApp } from '../server/index';
 import { ensureOwner } from '../server/auth';
 import { deflateSync } from 'node:zlib';
 import { seedDemoWorld, upgradeDemo, DEMO_VERSION } from '../server/worlds';
-import { seedNewWorldOnce, FIXES, LORE_FILE } from '../server/lore/newworld';
+import { seedNewWorldOnce, upgradeNewWorldIsland, FIXES, LORE_FILE } from '../server/lore/newworld';
 import { readFileSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
-import { wikiPages, wikiLinks } from '../server/db/schema';
+import { wikiPages, wikiLinks, mapModel, maps, appMeta } from '../server/db/schema';
 
 const URL = process.env.TEST_DATABASE_URL ?? 'postgres://postgres@localhost:5432/atlas_test';
 let app: FastifyInstance;
@@ -305,6 +305,84 @@ describe('lore import', () => {
     const seeded = list.find((x) => x.name === 'The New World')!;
     await call('DELETE', `/api/worlds/${seeded.id}`);
     expect(await seedNewWorldOnce(db)).toBeNull();
+  });
+});
+
+describe('3D map', () => {
+  it('stores a terrain model per map: validates, serves cached, places and removes', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Modelled', cols: 8, rows: 6 })).body;
+    expect((await call('GET', `/api/worlds/${w.id}/map`)).body.map.model).toBeNull();
+    const put = (payload: Buffer, name = 'isle.glb') => app.inject({ method: 'PUT', url: `/api/worlds/${w.id}/map/model`, headers: { cookie, 'content-type': 'model/gltf-binary', 'x-file-name': name }, payload });
+    expect((await put(Buffer.from('definitely not a binary gltf file, just text'))).statusCode).toBe(400);
+    const glb = Buffer.alloc(64);
+    glb.writeUInt32LE(0x46546c67, 0); glb.writeUInt32LE(2, 4); glb.writeUInt32LE(64, 8);
+    const up = await put(glb);
+    expect(up.statusCode).toBe(200);
+    const meta = JSON.parse(up.body);
+    expect(meta).toMatchObject({ version: 1, name: 'isle.glb', size: 64 });
+    // Placed as the largest square centred on the grid, at natural height.
+    expect(meta.placement.w).toBeCloseTo(meta.placement.h, 6);
+    expect(meta.placement.heightScale).toBe(1);
+    const got = await app.inject({ method: 'GET', url: `/api/worlds/${w.id}/map/model?v=1`, headers: { cookie } });
+    expect(got.headers['content-type']).toBe('model/gltf-binary');
+    expect(got.headers['cache-control']).toContain('immutable');
+    expect(Buffer.compare(got.rawPayload, glb)).toBe(0);
+    const moved = (await call('PATCH', `/api/worlds/${w.id}/map/model`, { placement: { heightScale: 0.6 } })).body;
+    expect(moved.placement).toMatchObject({ heightScale: 0.6, w: meta.placement.w });
+    expect((await call('GET', `/api/worlds/${w.id}/map`)).body.map.model).toMatchObject({ version: 1, placement: { heightScale: 0.6 } });
+    expect(JSON.parse((await put(glb, 'v2.glb')).body).version).toBe(2);
+    expect((await call('DELETE', `/api/worlds/${w.id}/map/model`)).status).toBe(200);
+    expect((await call('GET', `/api/worlds/${w.id}/map`)).body.map.model).toBeNull();
+    // Hexes are untouched by any of it.
+    expect((await call('GET', `/api/worlds/${w.id}/map`)).body.hexes).toHaveLength(48);
+  });
+
+  it('gives The New World its island model, with hexes read from it', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Isle check', template: 'newworld' })).body;
+    const map = (await call('GET', `/api/worlds/${w.id}/map`)).body;
+    expect(map.map.model).toMatchObject({ version: 1 });
+    expect(map.map.model.size).toBeLessThan(8e6);
+    const terrain = JSON.parse(readFileSync(new globalThis.URL('../server/assets/lore/new-world-terrain.json', import.meta.url), 'utf8'));
+    const counts = (xs: string[]) => xs.reduce((m: Record<string, number>, t) => ((m[t] = (m[t] ?? 0) + 1), m), {});
+    expect(counts(map.hexes.map((h: { terrain: string }) => h.terrain))).toEqual(counts(terrain.terrain));
+  });
+
+  it('upgrades an already imported New World: adds the model, re-reads untouched hexes, keeps edited ones', async () => {
+    const strip = async (worldId: string) => {
+      const [m] = await db.select().from(maps).where(eq(maps.worldId, worldId));
+      await db.delete(mapModel).where(eq(mapModel.mapId, m.id));
+      await db.delete(appMeta).where(eq(appMeta.key, `upgrade:island-model:${worldId}`));
+    };
+    const a = (await call('POST', '/api/worlds', { name: 'Old import', template: 'newworld' })).body;
+    const b = (await call('POST', '/api/worlds', { name: 'Old edited import', template: 'newworld' })).body;
+    const hexB = (await call('GET', `/api/worlds/${b.id}/map`)).body.hexes[0];
+    await call('POST', `/api/worlds/${b.id}/hexes/paint`, { hexIds: [hexB.id], terrain: 'desert' });
+    await strip(a.id); await strip(b.id);
+    const notes = await upgradeNewWorldIsland(db);
+    expect(notes.some((n) => n.includes(a.id) && n.includes('re-read'))).toBe(true);
+    expect(notes.some((n) => n.includes(b.id) && n.includes('kept'))).toBe(true);
+    for (const w of [a, b]) expect((await call('GET', `/api/worlds/${w.id}/map`)).body.map.model).not.toBeNull();
+    expect((await call('GET', `/api/worlds/${b.id}/map`)).body.hexes.find((h: { id: string }) => h.id === hexB.id).terrain).toBe('desert');
+    expect(await upgradeNewWorldIsland(db)).toEqual([]);
+  });
+
+  it('keeps the time of day per world, and a running clock rolls the day over once', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Clockwork', cols: 4, rows: 4 })).body;
+    const fresh = (await call('GET', `/api/worlds/${w.id}`)).body;
+    expect(fresh.daylight).toMatchObject({ speed: 'paused' });
+    const set = (await call('PATCH', `/api/worlds/${w.id}/daylight`, { hour: 23.5, speed: 'fast' })).body.daylight;
+    expect(set).toMatchObject({ hour: 23.5, speed: 'fast' });
+    const other = (await call('POST', '/api/worlds', { name: 'Other clock', cols: 4, rows: 4 })).body;
+    expect((await call('GET', `/api/worlds/${other.id}`)).body.daylight.speed).toBe('paused');
+    const day = fresh.currentDay;
+    // A stale tab asking to roll over from a day that's already gone changes nothing.
+    expect((await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day - 1 } })).body.currentDay).toBe(day);
+    const rolled = (await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day } })).body;
+    expect(rolled.currentDay).toBe(day + 1);
+    expect(rolled.daylight.hour).toBeLessThan(24);
+    expect((await call('POST', `/api/worlds/${w.id}/day`, { rollover: { from: day } })).body.currentDay).toBe(day + 1);
+    const evs = (await call('GET', `/api/worlds/${w.id}/events`)).body as { kind: string; actor: string }[];
+    expect(evs.filter((e) => e.kind === 'day.changed' && e.actor === 'system')).toHaveLength(1);
   });
 });
 

@@ -55,43 +55,43 @@ export type Layers = {
 
 export class HexMapRenderer {
   canvas: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D;
-  private dpr = 1;
-  private w = 0;
-  private h = 0;
+  protected ctx: CanvasRenderingContext2D;
+  protected dpr = 1;
+  protected w = 0;
+  protected h = 0;
 
   cam: Camera = { x: 0, y: 0, zoom: 1 };
   target: Camera = { x: 0, y: 0, zoom: 1 };
-  private drawnCam: Camera = { x: 0, y: 0, zoom: 0 };
-  private baseCache: { canvas: HTMLCanvasElement; sig: string; minX: number; maxX: number; minY: number; maxY: number } | null = null;
-  private baseRev = 0;
-  private lastBaseSig = '';
-  private buildingBase = false;
-  private fastArt = false;
-  private artWasFast = false;
-  private anchor: { sx: number; sy: number; wx: number; wy: number } | null = null;
-  private velocity = { x: 0, y: 0 };
+  protected drawnCam: Camera = { x: 0, y: 0, zoom: 0 };
+  protected baseCache: { canvas: HTMLCanvasElement; sig: string; minX: number; maxX: number; minY: number; maxY: number } | null = null;
+  protected baseRev = 0;
+  protected lastBaseSig = '';
+  protected buildingBase = false;
+  protected fastArt = false;
+  protected artWasFast = false;
+  protected anchor: { sx: number; sy: number; wx: number; wy: number } | null = null;
+  protected velocity = { x: 0, y: 0 };
 
-  private o: Orientation = 'flat';
-  private hexes: HexR[] = [];
-  private byKey = new Map<string, HexR>();
-  private byId = new Map<string, HexR>();
-  private chunks = new Map<string, Chunk>();
-  private hexPath!: Path2D; // unit hex at origin
-  private terrainColor = new Map<string, string>();
-  private terrainGlyph = new Map<string, string>();
-  private stateColor = new Map<string, string>();
-  private factionColor = new Map<string, string>();
-  private factions: FactionLite[] = [];
-  private control = new Map<string, string>(); // hexId -> factionId
-  private contested = new Map<string, string[]>(); // hexId -> factionIds
-  private influence = new Map<string, string[]>();
-  private territories = new Map<string, Territory>();
-  private tokens: Token[] = [];
-  private fog: Set<string> | null = null;
-  private fogPath: Path2D | null = null;
-  private painter = new TerrainPainter();
-  private art: { img: CanvasImageSource; width: number; height: number; mips: { img: ImageBitmap; width: number }[] } | null = null;
+  protected o: Orientation = 'flat';
+  protected hexes: HexR[] = [];
+  protected byKey = new Map<string, HexR>();
+  protected byId = new Map<string, HexR>();
+  protected chunks = new Map<string, Chunk>();
+  protected hexPath!: Path2D; // unit hex at origin
+  protected terrainColor = new Map<string, string>();
+  protected terrainGlyph = new Map<string, string>();
+  protected stateColor = new Map<string, string>();
+  protected factionColor = new Map<string, string>();
+  protected factions: FactionLite[] = [];
+  protected control = new Map<string, string>(); // hexId -> factionId
+  protected contested = new Map<string, string[]>(); // hexId -> factionIds
+  protected influence = new Map<string, string[]>();
+  protected territories = new Map<string, Territory>();
+  protected tokens: Token[] = [];
+  protected fog: Set<string> | null = null;
+  protected fogPath: Path2D | null = null;
+  protected painter = new TerrainPainter();
+  protected art: { img: CanvasImageSource; width: number; height: number; mips: { img: ImageBitmap; width: number }[] } | null = null;
   artPlacement: ArtPlacement | null = null;
   layers: Layers = { terrainOverlay: 0, grid: true, territory: true };
   /** True while a terrain or state brush is active: terrain colors surface over the art so edits are visible. */
@@ -104,18 +104,25 @@ export class HexMapRenderer {
   focusFactionId: string | null = null;
   brushIds: Set<string> = new Set();
   dragToken: { token: Token; x: number; y: number } | null = null;
-  private flashes = new Map<string, number>();
-  private raf = 0;
-  private last = performance.now();
-  private dirty = true;
-  private settledFrames = 0;
-  private painting_pending = false;
+  protected flashes = new Map<string, number>();
+  protected raf = 0;
+  protected last = performance.now();
+  protected dirty = true;
+  protected settledFrames = 0;
+  protected painting_pending = false;
   onCameraChange?: (c: Camera) => void;
   onAfterFrame?: () => void;
+  /**
+   * Set by the 3D view, which drapes this renderer's output over terrain: the ground (art, painted
+   * terrain) comes from the 3D scene, the background stays transparent, markers are drawn upright
+   * by the 3D view, and level of detail follows the 3D camera's zoom rather than the overlay's.
+   */
+  protected overlayMode = false;
+  protected lodZoom: number | null = null;
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, opts: { alpha?: boolean } = {}) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d', { alpha: false })!;
+    this.ctx = canvas.getContext('2d', { alpha: !!opts.alpha })!;
     this.loop = this.loop.bind(this);
     this.raf = requestAnimationFrame(this.loop);
     // Labels use web fonts; redraw once they arrive.
@@ -186,7 +193,7 @@ export class HexMapRenderer {
     this.dirty = true;
   }
 
-  private hexesIn(minX: number, minY: number, maxX: number, maxY: number): PaintHex[] {
+  protected hexesIn(minX: number, minY: number, maxX: number, maxY: number): PaintHex[] {
     const out: PaintHex[] = [];
     for (const c of this.chunks.values()) {
       if (c.maxX < minX || c.minX > maxX || c.maxY < minY || c.minY > maxY) continue;
@@ -286,13 +293,13 @@ export class HexMapRenderer {
     this.setFog(this.fog);
   }
 
-  private flash(id: string) { this.flashes.set(id, performance.now()); this.dirty = true; }
+  protected flash(id: string) { this.flashes.set(id, performance.now()); this.dirty = true; }
 
   /**
    * Territories: exact hex fills, plus border loops chained from boundary edges and
    * smoothed (Chaikin) so borders read as inked lines rather than hex staircases.
    */
-  private rebuildTerritories() {
+  protected rebuildTerritories() {
     this.baseRev++;
     this.territories = new Map();
     const dirs = DIRS[this.o];
@@ -382,7 +389,7 @@ export class HexMapRenderer {
   }
 
   /** The border line, inset toward the territory so neighbors' borders sit side by side. */
-  private insetLine(t: Territory, z: number): Path2D {
+  protected insetLine(t: Territory, z: number): Path2D {
     const bucket = Math.round(Math.log2(z) * 3);
     let p = t.line.get(bucket);
     if (p) return p;
@@ -414,7 +421,7 @@ export class HexMapRenderer {
   worldToScreen(x: number, y: number) {
     return { x: (x - this.cam.x) * this.cam.zoom + this.w / 2, y: (y - this.cam.y) * this.cam.zoom + this.h / 2 };
   }
-  private hexAtWorld(x: number, y: number) {
+  protected hexAtWorld(x: number, y: number) {
     const a = pixelToHex(x, y, HEX_SIZE, this.o);
     return this.byKey.get(key(a.q, a.r));
   }
@@ -431,6 +438,7 @@ export class HexMapRenderer {
       if (!pos) continue;
       const s = this.worldToScreen(pos.x, pos.y);
       const r = Math.max(10, this.markerRadius(t.kind));
+      s.y -= this.tokenLift(t.kind, this.markerRadius(t.kind));
       if ((sx - s.x) ** 2 + (sy - s.y) ** 2 <= r * r) return t;
     }
     return undefined;
@@ -479,7 +487,7 @@ export class HexMapRenderer {
   invalidate() { this.dirty = true; }
 
   // ---------------------------------------------------------------- frame
-  private loop(now: number) {
+  protected loop(now: number) {
     this.raf = requestAnimationFrame(this.loop);
     const dt = Math.min(0.05, (now - this.last) / 1000);
     this.last = now;
@@ -500,7 +508,7 @@ export class HexMapRenderer {
   }
 
   /** Ease the camera toward its target. Returns true while still moving. */
-  private step(dt: number): boolean {
+  protected step(dt: number): boolean {
     const k = 1 - Math.exp(-dt * 14);
     let moving = false;
     if (Math.abs(this.velocity.x) + Math.abs(this.velocity.y) > 2) {
@@ -551,20 +559,23 @@ export class HexMapRenderer {
     return c;
   }
 
-  private draw(now: number, opts: { still?: boolean } = {}) {
+  protected draw(now: number, opts: { still?: boolean } = {}) {
     const { ctx, cam } = this;
     const z = cam.zoom;
-    const R = HEX_SIZE * z; // on-screen hex radius
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    // Open sea beyond the map.
-    const bg = ctx.createRadialGradient(this.w / 2, this.h / 2, 0, this.w / 2, this.h / 2, Math.max(this.w, this.h) * 0.75);
-    bg.addColorStop(0, '#0f2230'); bg.addColorStop(1, '#070e14');
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, this.w, this.h);
+    if (this.overlayMode) ctx.clearRect(0, 0, this.w, this.h);
+    else {
+      // Open sea beyond the map.
+      const bg = ctx.createRadialGradient(this.w / 2, this.h / 2, 0, this.w / 2, this.h / 2, Math.max(this.w, this.h) * 0.75);
+      bg.addColorStop(0, '#0f2230'); bg.addColorStop(1, '#070e14');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, this.w, this.h);
+    }
 
     // Level-of-detail weights: 0 = continental, 1 = hexcrawl detail.
-    const detail = smoothstep(7, 22, R);
-    const fine = smoothstep(46, 70, R);
+    const RL = HEX_SIZE * (this.lodZoom ?? z);
+    const detail = smoothstep(7, 22, RL);
+    const fine = smoothstep(46, 70, RL);
 
     ctx.setTransform(this.dpr * z, 0, 0, this.dpr * z, this.dpr * (this.w / 2 - cam.x * z), this.dpr * (this.h / 2 - cam.y * z));
     const view = {
@@ -581,7 +592,7 @@ export class HexMapRenderer {
     // 1–2. Ground and territory washes. Static between edits, so while the zoom holds still they are
     // rendered once into an offscreen layer and blitted; panning then costs one image copy.
     const sig = this.baseSignature(z);
-    const stable = !opts.still && z === this.drawnCam.zoom && sig === this.lastBaseSig && !this.painting_pending;
+    const stable = !this.overlayMode && !opts.still && z === this.drawnCam.zoom && sig === this.lastBaseSig && !this.painting_pending;
     this.lastBaseSig = sig;
     if (!stable || !this.drawBaseCached(view, z, detail, sig)) this.drawBase(view, z, visible, detail, !!opts.still);
 
@@ -598,10 +609,10 @@ export class HexMapRenderer {
     if (this.layers.grid && detail > 0.01) {
       const path = new Path2D();
       // Over art, open ocean stays clean; the grid starts at the shallows.
-      for (const c of visible) for (const h of c.hexes) if (inView(h) && !(this.art && h.terrain === 'deep')) path.addPath(this.hexPath, new DOMMatrix([1, 0, 0, 1, h.cx, h.cy]));
+      for (const c of visible) for (const h of c.hexes) if (inView(h) && !((this.art || this.overlayMode) && h.terrain === 'deep')) path.addPath(this.hexPath, new DOMMatrix([1, 0, 0, 1, h.cx, h.cy]));
       ctx.lineWidth = 1 / z;
       ctx.lineJoin = 'round';
-      if (this.art) {
+      if (this.art || this.overlayMode) {
         ctx.globalAlpha = detail * 0.35; ctx.strokeStyle = 'rgba(6,12,16,0.9)'; ctx.lineWidth = 2 / z; ctx.stroke(path);
         ctx.globalAlpha = detail * 0.3; ctx.strokeStyle = '#e9f2ee'; ctx.lineWidth = 0.9 / z; ctx.stroke(path);
       } else {
@@ -745,7 +756,7 @@ export class HexMapRenderer {
     }
 
     // 8. Faction names over their territory when zoomed out: engraved capitals.
-    const labelAlpha = 1 - smoothstep(16, 34, R);
+    const labelAlpha = 1 - smoothstep(16, 34, RL);
     if (labelAlpha > 0.01 && this.layers.territory) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -777,10 +788,10 @@ export class HexMapRenderer {
       ctx.textBaseline = 'alphabetic';
     }
 
-    this.drawTokens(now, z, opts.still);
+    if (!this.overlayMode) this.drawTokens(now, z, opts.still);
   }
 
-  private flatFills(visible: Chunk[]) {
+  protected flatFills(visible: Chunk[]) {
     const ctx = this.ctx;
     for (const c of visible) {
       if (!c.fills) c.fills = this.buildFills(c);
@@ -788,7 +799,7 @@ export class HexMapRenderer {
     }
   }
 
-  private buildFills(c: Chunk): Map<string, Path2D> {
+  protected buildFills(c: Chunk): Map<string, Path2D> {
     const m = new Map<string, Path2D>();
     for (const h of c.hexes) {
       const color = this.terrainColor.get(h.terrain) ?? '#2a2f38';
@@ -801,9 +812,14 @@ export class HexMapRenderer {
 
   /** Contested: bold hatching in the rivals' colors, ringed by an alternating dashed border. */
   /** Ground (art or painted terrain) and territory washes, in world space on this.ctx. */
-  private drawBase(view: { minX: number; maxX: number; minY: number; maxY: number }, z: number, visible: Chunk[], detail: number, still: boolean) {
+  protected drawBase(view: { minX: number; maxX: number; minY: number; maxY: number }, z: number, visible: Chunk[], detail: number, still: boolean) {
     const ctx = this.ctx;
-    if (this.art && this.artPlacement) {
+    if (this.overlayMode) {
+      // The 3D scene is the ground; show terrain colors only when asked for or while painting terrain.
+      this.painting_pending = false;
+      const overlay = Math.max(this.layers.terrainOverlay * 0.7, this.painting ? 0.5 : 0);
+      if (overlay > 0.01) { ctx.globalAlpha = overlay; this.flatFills(visible); ctx.globalAlpha = 1; }
+    } else if (this.art && this.artPlacement) {
       this.painting_pending = false;
       const p = this.artPlacement;
       // Pick the smallest mip that still has at least one texel per device pixel.
@@ -869,13 +885,13 @@ export class HexMapRenderer {
   }
 
   /** Signature of everything the base layer depends on; any change rebuilds the cache. */
-  private baseSignature(z: number): string {
+  protected baseSignature(z: number): string {
     const p = this.artPlacement, l = this.layers;
     return [z, this.dpr, this.w, this.h, this.baseRev, this.art ? this.art.mips.length : -1,
       p ? `${p.x},${p.y},${p.w},${p.h},${p.opacity}` : '', l.terrainOverlay, l.territory, this.painting, this.focusFactionId].join('|');
   }
 
-  private drawBaseCached(view: { minX: number; maxX: number; minY: number; maxY: number }, z: number, detail: number, sig: string): boolean {
+  protected drawBaseCached(view: { minX: number; maxX: number; minY: number; maxY: number }, z: number, detail: number, sig: string): boolean {
     const M = 160; // css px of slack around the viewport
     let c = this.baseCache;
     if (!c || c.sig !== sig || view.minX < c.minX || view.maxX > c.maxX || view.minY < c.minY || view.maxY > c.maxY) {
@@ -906,7 +922,7 @@ export class HexMapRenderer {
     return true;
   }
 
-  private drawContested(h: HexR, fids: string[], z: number, now: number, still?: boolean) {
+  protected drawContested(h: HexR, fids: string[], z: number, now: number, still?: boolean) {
     const ctx = this.ctx;
     ctx.save();
     ctx.translate(h.cx, h.cy);
@@ -940,7 +956,7 @@ export class HexMapRenderer {
 
   // ---------------------------------------------------------------- tokens
   /** Marker radius in CSS px: readable when zoomed out, a touch larger up close. */
-  private markerRadius(kind: TokenKind) {
+  protected markerRadius(kind: TokenKind) {
     return MARKER_RADIUS[kind] * clamp(0.62 + this.cam.zoom * 0.3, 0.62, 1.3);
   }
 
@@ -967,11 +983,16 @@ export class HexMapRenderer {
     return { x: h.cx + Math.cos(ang) * rad, y: h.cy + Math.sin(ang) * rad };
   }
 
-  private drawTokens(now: number, z: number, still?: boolean) {
+  /** How far a marker stands above its ground point, in CSS px (the 3D view stands markers up). */
+  protected tokenLift(_kind: TokenKind, _r: number) { return 0; }
+  /** Opacity for a marker at a world point (the 3D view dims markers hidden behind terrain). */
+  protected tokenAlpha(_x: number, _y: number) { return 1; }
+
+  protected drawTokens(now: number, z: number, still?: boolean) {
     const ctx = this.ctx;
     const ordered = [...this.tokens].sort((a, b) => order(a) - order(b));
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    const plates: { text: string; x: number; y: number; kind: TokenKind; color: string; side: boolean }[] = [];
+    const plates: { text: string; x: number; y: number; kind: TokenKind; color: string; side: boolean; alpha: number }[] = [];
     for (const t of ordered) {
       const p = this.tokenPos(t);
       if (!p) continue;
@@ -980,6 +1001,17 @@ export class HexMapRenderer {
       if (s.x < -60 || s.y < -60 || s.x > this.w + 60 || s.y > this.h + 60) continue;
       const color = t.color ?? (t.factionId ? this.factionColor.get(t.factionId) : undefined) ?? '#b9b2a3';
       const dragging = this.dragToken?.token.id === t.id;
+      const lift = this.tokenLift(t.kind, r);
+      const fade = this.tokenAlpha(p.x, p.y);
+      ctx.globalAlpha = fade;
+      if (lift > 0) {
+        // Standing on the ground: a contact shadow at the foot and a short post up to the marker.
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
+        ctx.beginPath(); ctx.ellipse(s.x, s.y, r * 0.75, r * 0.3, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = 'rgba(12, 14, 16, 0.85)'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(s.x, s.y - lift + r * 0.6); ctx.stroke();
+        s.y -= lift;
+      }
       if (t.kind === 'party') {
         const pulse = still ? 0.5 : 0.5 + 0.5 * Math.sin(now / 520);
         const g = ctx.createRadialGradient(s.x, s.y, r * 0.6, s.x, s.y, r * (2.1 + pulse * 0.5));
@@ -993,14 +1025,14 @@ export class HexMapRenderer {
       }
       const sprite = markerSprite(t.kind, color, r * (dragging ? 1.15 : 1), this.dpr);
       const size = sprite.canvas.width / this.dpr;
-      ctx.globalAlpha = dragging ? 0.85 : 1;
+      ctx.globalAlpha = (dragging ? 0.85 : 1) * fade;
       ctx.drawImage(sprite.canvas, s.x - size / 2, s.y - size / 2, size, size);
       ctx.globalAlpha = 1;
       const showName = t.kind === 'city' ? z > 0.18 : t.kind === 'outpost' ? z > 0.45 : t.kind === 'party' ? z > 0.3 : z > 0.8;
       if (showName && !dragging) {
         const beside = t.kind !== 'city' && t.kind !== 'outpost'
           && this.tokens.some((x) => x.hexId === t.hexId && (x.kind === 'city' || x.kind === 'outpost'));
-        plates.push({ text: t.name, x: beside ? s.x + r + 6 : s.x, y: beside ? s.y : s.y + r + 11, kind: t.kind, color, side: beside });
+        plates.push({ text: t.name, x: beside ? s.x + r + 6 : s.x, y: beside ? s.y : s.y + r + 11 + (lift ? lift * 0.55 : 0), kind: t.kind, color, side: beside, alpha: fade });
       }
     }
     // Name plates on top of every marker.
@@ -1014,6 +1046,7 @@ export class HexMapRenderer {
       const w = ctx.measureText(text).width;
       const padX = 7, hgt = px + 8;
       const x0 = pl.side ? pl.x : pl.x - w / 2 - padX;
+      ctx.globalAlpha = pl.alpha;
       ctx.fillStyle = 'rgba(9, 13, 17, 0.82)';
       ctx.beginPath(); ctx.roundRect(x0, pl.y - hgt / 2, w + padX * 2, hgt, hgt / 2); ctx.fill();
       ctx.strokeStyle = settlement ? 'rgba(214, 178, 104, 0.55)' : 'rgba(255,255,255,0.12)'; ctx.lineWidth = 1; ctx.stroke();
@@ -1022,6 +1055,7 @@ export class HexMapRenderer {
       ctx.fillText(text, x0 + padX, pl.y + 0.5);
       setSpacing(ctx, '0px');
     }
+    ctx.globalAlpha = 1;
     ctx.textBaseline = 'alphabetic';
   }
 }

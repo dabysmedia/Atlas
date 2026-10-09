@@ -23,3 +23,6 @@ export const ambientPref = {
   set(v: boolean) { ambientStore.set(v); ambientSubs.forEach((f) => f()); },
   subscribe(f: () => void) { ambientSubs.add(f); return () => { ambientSubs.delete(f); }; },
 };
+
+/** 3D map (default) or the flat 2D map, per browser. */
+export const mapModePref = store<'3d' | '2d'>('atlas.mapMode');

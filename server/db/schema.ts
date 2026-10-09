@@ -54,6 +54,8 @@ export const worlds = pgTable('worlds', {
   terrainTypes: jsonb('terrain_types').$type<TerrainType[]>().notNull(),
   hexStates: jsonb('hex_states').$type<HexStateType[]>().notNull(),
   accent: text('accent').notNull().default('#c8a24a'),
+  /** Time of day on the 3D map: the hour (0-24) at an instant, and how fast it runs (see shared/daylight.ts). */
+  daylight: jsonb('daylight').$type<{ hour: number; speed: string; at: string }>(),
   /** Which bundled demo produced this world, if any (lets a later release upgrade an untouched demo). */
   demo: text('demo'),
   sortOrder: integer('sort_order').notNull().default(0),
@@ -129,6 +131,18 @@ export const mapArt = pgTable('map_art', {
   width: integer('width').notNull(),
   height: integer('height').notNull(),
   placement: jsonb('placement').$type<ArtPlacement>().notNull(),
+  version: integer('version').notNull().default(1),
+  updatedAt: updated(),
+});
+
+/** Where a 3D model sits: its footprint (x and z in -1..1) maps onto this world rectangle; height scales with it. */
+export type ModelPlacement = { x: number; y: number; w: number; h: number; heightScale: number };
+/** A 3D terrain model under the grid (web-weight GLB). Purely visual: hexes stay the source of truth. */
+export const mapModel = pgTable('map_model', {
+  mapId: uuid('map_id').primaryKey().references(() => maps.id, { onDelete: 'cascade' }),
+  bytes: bytea('bytes').notNull(),
+  name: text('name').notNull().default('model.glb'),
+  placement: jsonb('placement').$type<ModelPlacement>().notNull(),
   version: integer('version').notNull().default(1),
   updatedAt: updated(),
 });

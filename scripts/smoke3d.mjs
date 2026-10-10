@@ -65,7 +65,7 @@ await step('orbit-pan-zoom', async () => {
   const panned = await R(() => ({ ...window.__atlasMap.target }));
   await p.mouse.move(720, 480); await p.mouse.down({ button: 'right' }); await p.mouse.move(820, 460, { steps: 6 }); await p.mouse.up({ button: 'right' });
   const turned = await R(() => window.__atlasMap.yawT);
-  expect(zoomed > before.zoom * 1.5, 'wheel did not zoom');
+  expect(zoomed > before.zoom * 1.2 && zoomed < before.zoom * 1.4, 'wheel did not use fine zoom increments');
   expect(Math.hypot(panned.x - before.x, panned.y - before.y) > 5, 'drag did not pan');
   expect(Math.abs(turned - before.yaw) > 0.2, 'right-drag did not turn');
   await R(() => { const r = window.__atlasMap; r.advance(3); });

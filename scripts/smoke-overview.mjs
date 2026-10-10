@@ -65,6 +65,56 @@ try {
   assert.equal(results.fades[3].border,0);
   assert.equal(results.fades[3].label,0,'nation names must fade out with their borders');
   assert(results.dotted&&!results.throughCloudPass);
+  // Exercise the wheel handler itself, including device units and large wheel events.
+  results.wheel=await page.evaluate(()=>{
+    const r=window.__atlasMap,canvas=r.hud,fit=r.fitCamera();
+    const box=canvas.getBoundingClientRect();
+    const wheel=(deltaY,deltaMode=0,ctrlKey=false)=>canvas.dispatchEvent(new WheelEvent('wheel',{
+      deltaY,deltaMode,ctrlKey,clientX:box.left+r.viewport.w/2,clientY:box.top+r.viewport.h/2,bubbles:true,cancelable:true
+    }));
+    r.saved=null;r.setCamera(fit);
+    const levels=[r.target.zoom];
+    for(let i=0;i<100;i++){
+      wheel(-120);const z=r.target.zoom;
+      if(z===levels.at(-1))break;
+      levels.push(z);r.advance(2);
+    }
+    const upper=r.target.zoom;
+    const down=[];
+    for(let i=0;i<100;i++){
+      wheel(120);const z=r.target.zoom;
+      if(z===down.at(-1))break;
+      down.push(z);r.advance(2);
+    }
+    const variants=[];
+    for(const [name,dy,mode,ctrl] of [['pixels',-120,0,false],['lines',-3,1,false],['pages',-1,2,false],['large',-1200,0,false],['trackpad',-2,0,false],['pinch',-2,0,true]]){
+      r.setCamera({...fit,zoom:1.5});wheel(dy,mode,ctrl);
+      variants.push({name,ratio:r.target.zoom/1.5});
+    }
+    r.setCamera(fit);
+    return {levels,down,upper,lower:down.at(-1),min:fit.zoom,variants};
+  });
+  assert(results.wheel.levels.length>=30,'full zoom range must offer many fine wheel increments');
+  assert.equal(results.wheel.upper,4,'wheel must still reach the original maximum zoom');
+  assert.equal(results.wheel.lower,results.wheel.min,'wheel must still reach the overview limit');
+  assert(results.wheel.levels.every((z,i,a)=>!i||(z>a[i-1]&&z/a[i-1]<1.06)),'normal wheel notch must change zoom by less than 6%');
+  assert(results.wheel.variants.filter(v=>v.name!=='pinch').every(v=>v.ratio>1&&v.ratio<1.08),'wheel devices must use small continuous increments');
+  assert(Math.abs(results.wheel.variants.find(v=>v.name==='pinch').ratio-Math.exp(.024))<1e-6,'trackpad pinch sensitivity must be preserved');
+  // A real browser wheel event must animate through intermediate magnifications.
+  const bounds=await page.evaluate(()=>{const b=window.__atlasMap.hud.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height}});
+  await page.mouse.move(bounds.x+bounds.width/2,bounds.y+bounds.height/2);
+  await page.mouse.wheel(0,-120);
+  const animation=await page.evaluate(async()=>{
+    const samples=[];
+    for(let i=0;i<24;i++){
+      await new Promise(requestAnimationFrame);
+      samples.push(window.__atlasMap.cam.zoom);
+    }
+    return {samples,target:window.__atlasMap.target.zoom};
+  });
+  assert(new Set(animation.samples.map(z=>z.toFixed(6))).size>3,'wheel animation must have intermediate zoom values');
+  assert(animation.samples.every((z,i,a)=>!i||z>=a[i-1]),'wheel zoom must animate monotonically');
+  results.wheel.animation=animation;
   // Real hex clicks must retain magnification, and leave the country overview fixed.
   results.selection=[];
   for(const ratio of [3,1]) {

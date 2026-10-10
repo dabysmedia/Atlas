@@ -585,7 +585,11 @@ export function MapView() {
       const p = pos(e);
       // Trackpad pinch arrives as ctrl+wheel with small deltas; mouse wheels give ~100 per notch.
       const scale = e.ctrlKey ? 0.012 : e.deltaMode === 1 ? 0.05 : 0.0018;
-      const factor = Math.exp(-e.deltaY * scale);
+      // 3D wheel zoom uses four times finer increments. Normalize line/page wheels and cap
+      // unusually large events so a coarse wheel never jumps over the overview transition.
+      const delta = e.deltaMode === 1 ? e.deltaY * (0.05 / 0.0018) : e.deltaMode === 2 ? e.deltaY * r().viewport.h : e.deltaY;
+      const exponent = is3d(r()) && !e.ctrlKey ? Math.max(-0.072, Math.min(0.072, -delta * 0.00045)) : -e.deltaY * scale;
+      const factor = Math.exp(exponent);
       if (toolRef.current.align && e.altKey) {
         // Alt + wheel scales the art about the cursor.
         const w = r().screenToWorld(p.x, p.y);

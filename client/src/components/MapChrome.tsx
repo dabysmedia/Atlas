@@ -37,27 +37,33 @@ function useFan() {
 
 /**
  * Frosted glass costs a blur of whatever is behind it every frame, and behind the map's chrome is a scene that
- * redraws every frame. While the map is open, watch the browser's pace; a machine that can't keep up (frames
- * slower than ~25 a second for a few seconds, or a crawl) trades the blur for thicker tint. Once per session.
+ * redraws every frame. While the map is open, watch the browser's pace: a crawl (a few frames in a row slower
+ * than a quarter second: no GPU) or frames slower than ~25 a second for a couple of seconds trade the blur for
+ * thicker tint. A start-up stall on a good machine shows up as a pace that recovers, which brings the glass back
+ * (once, so a machine on the edge doesn't flicker between the two). A choice in World settings overrides it.
  */
 export const glassLite = {
   get: () => document.documentElement.classList.contains('glass-lite'),
   set: (on: boolean) => { document.documentElement.classList.toggle('glass-lite', on); },
 };
 if (typeof document !== 'undefined' && glassPref.get() === 'lite') glassLite.set(true);
+let autoLite = false, restored = false;
 export function useGlassBudget() {
   useEffect(() => {
-    if (glassLite.get() || glassPref.get()) return;
-    let raf = 0, last = 0, pace = 16, slow = 0;
+    if (glassPref.get() || (glassLite.get() && (!autoLite || restored))) return;
+    let raf = 0, last = 0, pace = 16, crawl = 0, slow = 0, quick = 0;
     const tick = (now: number) => {
       const dt = last ? now - last : 0;
       last = now;
-      if (dt > 0 && dt < 5000 && !document.hidden) {
-        pace = pace * 0.95 + dt * 0.05;
-        slow = pace > 40 ? slow + 1 : 0;
-        if (slow > 120 || (slow > 3 && pace > 400)) {
-          glassLite.set(true);
-          return;
+      if (dt > 0 && dt < 8000 && !document.hidden) {
+        pace = pace * 0.9 + dt * 0.1;
+        if (!autoLite) {
+          crawl = dt > 250 ? crawl + 1 : 0;
+          slow = pace > 40 ? slow + 1 : 0;
+          if (crawl >= 3 || slow > 90) { autoLite = true; quick = 0; glassLite.set(true); }
+        } else {
+          quick = pace < 20 ? quick + 1 : 0;
+          if (quick > 240 && !restored) { autoLite = false; restored = true; glassLite.set(false); return; }
         }
       }
       raf = requestAnimationFrame(tick);

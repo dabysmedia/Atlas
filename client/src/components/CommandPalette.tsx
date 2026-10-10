@@ -54,7 +54,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     <AnimatePresence>
       {open && (
         <>
-          <motion.div className="switcher-backdrop" style={{ zIndex: 299 }} onMouseDown={onClose}
+          <motion.div className="palette-backdrop" onMouseDown={onClose}
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} />
           <motion.div className="palette" initial={{ opacity: 0, y: -10, x: '-50%', scale: 0.98 }} animate={{ opacity: 1, y: 0, x: '-50%', scale: 1 }}
             exit={{ opacity: 0, y: -6, x: '-50%' }} transition={{ type: 'spring', stiffness: 500, damping: 34 }}>

@@ -207,6 +207,10 @@ export function MapView() {
   }, [layers, align, world.id, gen]);
   useEffect(() => { const r = rendererRef.current; if (r) { r.painting = tool === 'terrain' || tool === 'state'; r.invalidate(); } }, [tool, gen]);
   useEffect(() => { panelPrefs.set({ ...panelPrefs.get(), territories: territoriesOpen }); }, [territoriesOpen]);
+  // One card at a time beside the control stack: opening one folds the others away.
+  useEffect(() => { if (layersOpen) { setTerritoriesOpen(false); setKeysOpen(false); } }, [layersOpen]);
+  useEffect(() => { if (territoriesOpen) { setLayersOpen(false); setKeysOpen(false); } }, [territoriesOpen]);
+  useEffect(() => { if (keysOpen) { setLayersOpen(false); setTerritoriesOpen(false); } }, [keysOpen]);
 
   /** Fly to a point, centered in the map area the focus panel leaves visible. */
   const centerOn = (x: number, y: number, zoom: number) => {

@@ -16,7 +16,7 @@
   --text: #ece3cf;
   /* Lifted from the old flat chrome so secondary text keeps AA contrast on glass. */
   --text-dim: #bdb4a0;
-  --text-faint: #8d918a;
+  --text-faint: #a0a39b;
   --gold: #d6b06a;
   --gold-hi: #f0d496;
   --gold-soft: rgba(214, 176, 106, 0.14);
@@ -38,12 +38,12 @@
   /* ---- Glass: one recipe for every floating surface. Tune it here.
    * The backdrop is blurred, saturated and dimmed before the tint goes over it, so a white cloud behind
    * a control still reads as a dark ground: body and secondary text stay at AA contrast or better. */
-  --glass-tint: rgba(12, 21, 27, 0.6);
+  --glass-tint: rgba(12, 21, 27, 0.64);
   --glass-tint-top: rgba(24, 38, 46, 0.62);
   --glass-tint-strong: rgba(11, 19, 24, 0.8);     /* reading surfaces: inspector, dialogs, palette */
   --glass-solid: rgba(12, 20, 25, 0.95);          /* popovers that open inside glass: no blur of their own */
   --glass-sheet: rgba(10, 17, 21, 0.74);          /* page sheets over the (already blurred) ambient map */
-  --glass-blur: blur(22px) saturate(1.55) brightness(0.72);
+  --glass-blur: blur(22px) saturate(1.5) brightness(0.68);
   --glass-edge: rgba(240, 226, 196, 0.13);        /* the hairline */
   --glass-edge-hi: rgba(240, 212, 150, 0.34);
   --glass-sheen: linear-gradient(180deg, rgba(255, 250, 235, 0.06), rgba(255, 250, 235, 0) 42%);
@@ -362,8 +362,10 @@ button.chip:hover { border-color: var(--glass-edge-hi); color: var(--text); }
 /* A deep scrim, not a full-screen blur: blurring the whole live map every frame costs more than it gives. */
 .switcher-backdrop {
   position: fixed; inset: 0; z-index: 100;
-  background: radial-gradient(120% 90% at 50% 20%, rgba(10, 18, 23, 0.82), rgba(3, 6, 8, 0.94));
+  background: radial-gradient(120% 90% at 50% 20%, rgba(12, 21, 27, 0.95), rgba(3, 6, 8, 0.98));
 }
+/* The palette keeps the page faintly in view behind it. */
+.palette-backdrop { position: fixed; inset: 0; z-index: 299; background: rgba(3, 6, 8, 0.66); }
 .switcher { position: fixed; inset: 0; z-index: 101; overflow: auto; padding: 64px 48px; display: flex; flex-direction: column; align-items: center; }
 .switcher-inner { width: min(1100px, 100%); }
 .switcher h2 { font-size: 30px; margin: 0 0 4px; letter-spacing: 0.07em; color: var(--gold-hi); text-shadow: 0 0 30px rgba(214, 176, 106, 0.25); }
@@ -568,6 +570,11 @@ mark { background: rgba(214,176,106,0.3); color: var(--text); border-radius: 2px
   transition: right 0.45s var(--ease-out);
 }
 .stack-cards > * { pointer-events: auto; }
+/* The dock centres itself in the map left clear by the inspector and any card beside the stack. */
+.mapview { --dock-right: calc(var(--chrome-inset) + 66px); }
+.mapview:has(.stack-cards > *) { --dock-right: calc(var(--chrome-inset) + 66px + 336px); }
+.mapview:has(.inspector) { --dock-right: calc(var(--chrome-inset) + 372px + 66px); }
+.mapview:has(.inspector):has(.stack-cards > *) { --dock-right: calc(var(--chrome-inset) + 372px + 66px + 336px); }
 .mapview:has(.inspector) .stack-col { right: calc(var(--chrome-inset) + 372px); }
 .mapview:has(.inspector) .stack-cards { right: calc(var(--chrome-inset) + 372px + 54px + 12px); }
 .territories, .keys-card { flex: none; order: 1; }
@@ -595,16 +602,17 @@ mark { background: rgba(214,176,106,0.3); color: var(--text); border-radius: 2px
 .lg-border { height: 2px !important; background: var(--gold-hi); box-shadow: 0 0 6px 1px rgba(240, 212, 150, 0.7); }
 
 /* Keyboard sheet. */
-.keys-card { width: 288px; padding: 8px 10px 12px; }
-.keys-list { margin: 0; padding: 0 6px; display: grid; gap: 6px; }
-.keys-list > div { display: grid; grid-template-columns: 88px 1fr; gap: 10px; align-items: center; font-size: 12.5px; }
+.keys-card { width: 316px; padding: 8px 10px 12px; }
+.keys-list { margin: 0; padding: 0 6px; display: grid; gap: 7px; }
+.keys-list > div { display: grid; grid-template-columns: 76px 1fr; gap: 10px; align-items: center; font-size: 12.5px; }
 .keys-list dt { display: flex; gap: 3px; align-items: center; }
 .keys-list dd { margin: 0; color: var(--text-dim); }
 
 /* Bottom dock: the tool in hand, with its brushes tiling up above it. Centred with margins, not a transform:
    the entry animation owns transform. */
 .dock-wrap {
-  position: absolute; left: 0; right: 0; margin: 0 auto; width: fit-content; max-width: calc(100% - 180px);
+  position: absolute; left: var(--chrome-left); right: var(--dock-right); margin: 0 auto; width: fit-content; max-width: calc(100% - var(--chrome-left) - var(--dock-right));
+  transition: right 0.45s var(--ease-out);
   bottom: calc(var(--chrome-bottom) + var(--chrome-inset)); z-index: 6; display: flex; flex-direction: column; align-items: center; gap: 10px;
   pointer-events: none;
   animation: rise-in 0.6s var(--spring) both 0.28s;
@@ -618,10 +626,10 @@ mark { background: rgba(214,176,106,0.3); color: var(--text); border-radius: 2px
   transition: background 0.18s, color 0.18s, box-shadow 0.25s;
 }
 .dock button > svg { flex: none; margin: 0 12px; }
+.dock button:has(.dock-label) > svg { margin-right: 9px; }
 .dock button:hover { background: rgba(255,255,255,0.08); color: var(--text); }
 .dock button.on { color: var(--gold-hi); background: radial-gradient(circle at 50% 30%, rgba(214,176,106,0.26), rgba(214,176,106,0.07) 72%); box-shadow: var(--gilt-glow); }
 .dock-label { display: inline-flex; align-items: center; gap: 8px; overflow: hidden; font-size: 13px; font-weight: 500; letter-spacing: 0.01em; }
-.dock-label > span { margin-left: -4px; }
 .dock-label .kbd { margin-right: 12px; }
 .brushbar {
   display: grid; grid-template-columns: 1fr auto; grid-template-areas: 'title size' 'list list'; align-items: center; gap: 10px 16px;
@@ -720,7 +728,7 @@ input[type='range']::-moz-range-thumb { width: 11px; height: 11px; border-radius
   position: absolute; top: var(--chrome-top); right: var(--chrome-inset); bottom: var(--chrome-inset); width: 360px; z-index: 9;
   display: flex; flex-direction: column; overflow: hidden; border-radius: 24px;
 }
-.panel.inspector { background: var(--glass-sheen), linear-gradient(180deg, rgba(18, 30, 37, 0.8), var(--glass-tint-strong)); }
+.panel.inspector { background: var(--glass-sheen), linear-gradient(180deg, rgba(17, 28, 35, 0.86), rgba(11, 19, 24, 0.88)); }
 .panel-art { position: relative; height: 158px; flex: none; overflow: hidden; background: var(--ink-0); }
 .panel-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; animation: art-in 0.5s var(--ease-out); }
 @keyframes art-in { from { opacity: 0; transform: scale(1.06); } to { opacity: 1; transform: none; } }
@@ -730,7 +738,7 @@ input[type='range']::-moz-range-thumb { width: 11px; height: 11px; border-radius
   background: linear-gradient(180deg, rgba(8,14,18,0.2), transparent 35%, transparent 50%, rgba(11,19,24,0.92)),
     radial-gradient(120% 100% at 50% 40%, transparent 50%, rgba(8,14,18,0.45));
 }
-.panel-art::after { content: ''; position: absolute; left: 18%; right: 18%; bottom: 0; height: 1px; background: var(--tint, var(--gold)); opacity: 0.85; box-shadow: 0 0 14px 1px var(--tint, var(--gold)); }
+.panel-art::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--tint, var(--line-strong)) 30%, var(--tint, var(--line-strong)) 70%, transparent); opacity: 0.9; }
 .panel-close { position: absolute; top: 10px; right: 10px; z-index: 2; background: rgba(5,9,11,0.55); border-color: var(--glass-edge); color: var(--text); border-radius: 999px; }
 .art-chip {
   position: absolute; left: 14px; top: 12px; z-index: 2; display: inline-flex; align-items: center; gap: 6px;
@@ -817,10 +825,12 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 
 /* Phones: the map's chrome sits above the tab bar; the inspector becomes a sheet rising from the bottom. */
 @media (max-width: 600px) {
-  .dock-wrap { max-width: calc(100% - 2 * var(--chrome-inset)); z-index: 7; }
+  .mapview, .mapview:has(.stack-cards > *) { --dock-right: var(--chrome-inset); }
+  .dock-wrap { z-index: 7; }
   .brushbar { max-width: calc(100vw - 2 * var(--chrome-inset)); }
   .brushbar .brush-list { min-width: 0; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); max-height: 30vh; overflow: auto; }
-  .stack-cards { right: calc(var(--chrome-inset) + 54px + 8px); max-height: calc(100% - var(--chrome-top) - var(--chrome-bottom) - 20px); }
+  /* Cards rise clear of the dock, which shares the bottom edge on a phone. */
+  .stack-cards { right: calc(var(--chrome-inset) + 54px + 8px); bottom: calc(var(--chrome-bottom) + var(--chrome-inset) + 64px); max-height: calc(100% - var(--chrome-top) - var(--chrome-bottom) - 84px); }
   .layers, .territories, .keys-card { width: min(324px, calc(100vw - 86px)); }
   .inspector { top: auto; left: var(--chrome-inset); right: var(--chrome-inset); bottom: calc(var(--chrome-bottom) + var(--chrome-inset)); width: auto; height: min(62vh, 560px); z-index: 12; }
   .mapview:has(.inspector) .stack-col, .mapview:has(.inspector) .dock-wrap, .mapview:has(.inspector) .stack-cards { opacity: 0; pointer-events: none; }
@@ -916,6 +926,8 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 /* Pages on small screens: the sheet runs edge to edge between the chrome. */
 @media (max-width: 700px) {
   .pagebody { padding: 22px 18px 48px; border-radius: 20px; }
+  .tabs { display: flex; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .tabs button { white-space: nowrap; padding: 7px 12px; flex: none; }
   .wiki { grid-template-columns: 1fr; grid-template-rows: minmax(0, 36%) minmax(0, 1fr); gap: 10px; }
   .wiki-doc { padding: 26px 20px 80px; }
   .faction-grid { grid-template-columns: 1fr; }

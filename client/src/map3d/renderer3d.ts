@@ -1100,7 +1100,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     const out = document.createElement('canvas');
     out.width = Math.round(w * this.dpr); out.height = Math.round(h * this.dpr);
     if (!this.w || !this.h || w > this.w || h > this.h) return out;
-    const saved = { cam: { ...this.cam }, tilt: this.tiltNow, g: this.groundY, hover: this.hoverId, sel: this.selectedId, brush: this.brushIds, selTok: this.selectedTokenId };
+    const saved = { cam: { ...this.cam }, tilt: this.tiltNow, g: this.groundY, hover: this.hoverId, sel: this.selectedId, brush: this.brushIds, selTok: this.selectedTokenId, beacon: this.beacon.group.visible };
     try {
       this.cam = { x, y, zoom };
       this.tiltNow = clamp(this.autoTilt(zoom) + 0.32, 0.55, 1.05);
@@ -1122,7 +1122,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     } finally {
       this.cam = saved.cam; this.tiltNow = saved.tilt; this.groundY = saved.g;
       this.hoverId = saved.hover; this.selectedId = saved.sel; this.brushIds = saved.brush; this.selectedTokenId = saved.selTok;
-      this.stills = false;
+      this.stills = false; this.beacon.group.visible = saved.beacon;
       this.updateCamera();
       this.updateOverlay(performance.now(), true);
       this.fitShadow();

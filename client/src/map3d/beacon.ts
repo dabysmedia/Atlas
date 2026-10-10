@@ -143,12 +143,12 @@ export class Beacon {
     const dt = this.last ? Math.min(0.1, (now - this.last) / 1000) : 0;
     this.last = now;
     // Shoots up fast, sinks away a little faster.
-    this.grow = this.want > this.grow ? Math.min(1, this.grow + dt * 1.9) : Math.max(0, this.grow - dt * 3);
+    this.grow = this.want ? Math.min(1, this.grow + dt * 1.9) : Math.max(0, this.grow - dt * 3);
     this.group.visible = this.grow > 0.001 && !!this.at;
     if (!this.group.visible) return;
     // The ripple grows with distance so it still reads from far out (looking straight down, the
     // shaft itself is end on).
-    const R = Math.max(hexSize * 1.25, camDist * 0.016);
+    const R = Math.max(hexSize * 1.25, camDist * 0.022);
     if (!this.R || Math.abs(R - this.R) > this.R * 0.15) this.layRipple(R);
     const e = 1 - (1 - this.grow) ** 3;
     const t = (now / 1000) % 3600;

@@ -57,7 +57,9 @@ void main() {
   vec2 t = d1 + d2;
   t = dot(t, t) > 1e-6 ? normalize(t) : d1;
   vec2 nrm = vec2(-t.y, t.x);
-  float miter = 1.0 / max(dot(nrm, vec2(-d1.y, d1.x)), 0.5);
+  // Mitre gentle bends; at a hairpin (a line climbing straight at the camera over a ridge) a full
+  // mitre would spike, so it fades back to a plain join and the halo doesn't double up.
+  float miter = mix(1.0, 1.0 / max(dot(nrm, vec2(-d1.y, d1.x)), 0.5), smoothstep(-0.2, 0.5, dot(d1, d2)));
   // Neighbouring territories share their border: each line steps a little toward its own side.
   float s = 0.0;
   if (dot(aIn, aIn) > 0.0) s = sign(dot(nrm, scr(pm * vec4(position + vec3(aIn.x, 0.0, aIn.y), 1.0)) - cs));
@@ -71,7 +73,7 @@ void main() {
 `;
 
 const FRAG = /* glsl */`
-uniform float uTime, uCore, uFlowLen, uDashLen, uInfl, uCont, uOpacity, uGlow;
+uniform float uTime, uCore, uFlowLen, uDashLen, uInfl, uCont, uOpacity, uGlow, uAdd;
 varying vec3 vColor;
 varying vec3 vStyle;
 varying float vAcross, vDist, vHalf;
@@ -105,7 +107,7 @@ void main() {
   vec3 rgb = (tube * core * 1.25 * flow + vColor * glow * uGlow * flow) * k;
   // A whisper of dark just outside the core keeps the line crisp on bright ground.
   float rim = (1.0 - smoothstep(uCore + 0.5, uCore + 2.6, px)) * 0.28;
-  float a = max(core * 0.9, rim) * k;
+  float a = max(core * 0.9, rim) * k * (1.0 - uAdd);
   gl_FragColor = vec4(rgb * uOpacity, a * uOpacity);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -118,22 +120,31 @@ export class NeonBorders {
   readonly uniforms = {
     uRes: { value: new THREE.Vector2(1, 1) }, uHalf: { value: 8 }, uShift: { value: 1.6 }, uBias: { value: 0.006 },
     uTime: { value: 0 }, uCore: { value: 1.1 }, uFlowLen: { value: 400 }, uDashLen: { value: 10 }, uInfl: { value: 1 }, uCont: { value: 1 },
-    uOpacity: { value: 1 }, uGlow: { value: 1 },
+    uOpacity: { value: 1 }, uGlow: { value: 1 }, uAdd: { value: 0 },
   };
+  /** The lines, then their glow again over the clouds and rain (see the constructor). */
+  readonly group = new THREE.Group();
   readonly mesh: THREE.Mesh;
+  protected through: THREE.Mesh;
+  /** How strongly the lines shine through cloud and rain drawn over them. */
+  readonly throughU = { uOpacity: { value: 0.32 }, uGlow: { value: 0.8 }, uAdd: { value: 1 } };
   protected tmp = new THREE.Color();
 
   constructor() {
-    const mat = new THREE.ShaderMaterial({
-      uniforms: this.uniforms, vertexShader: VERT, fragmentShader: FRAG,
+    const blend = {
       transparent: true, depthWrite: false, depthTest: true,
       blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
       blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
-    });
-    this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
-    this.mesh.frustumCulled = false;
-    // After the sea, the clouds and the rain: the borders glow through weather.
-    this.mesh.renderOrder = 8;
+    } as const;
+    const geo = new THREE.BufferGeometry();
+    // Under the clouds, so a cloud drifting over a border veils it as it would the ground...
+    this.mesh = new THREE.Mesh(geo, new THREE.ShaderMaterial({ uniforms: this.uniforms, vertexShader: VERT, fragmentShader: FRAG, ...blend }));
+    this.mesh.renderOrder = 3;
+    // ...and a purely additive second pass after the clouds and rain, so the light still shows
+    // through them like a lamp through mist and the lines stay readable in any weather.
+    this.through = new THREE.Mesh(geo, new THREE.ShaderMaterial({ uniforms: { ...this.uniforms, ...this.throughU }, vertexShader: VERT, fragmentShader: FRAG, ...blend }));
+    this.through.renderOrder = 8;
+    for (const m of [this.mesh, this.through]) { m.frustumCulled = false; this.group.add(m); }
   }
 
   /**
@@ -171,12 +182,19 @@ export class NeonBorders {
       col.set(line.color);
       const hsl = col.getHSL({ h: 0, s: 0, l: 0 });
       col.setHSL(hsl.h, Math.max(hsl.s, 0.72), clamp(hsl.l, 0.56, 0.68));
-      const hy = new Float32Array(n);
+      const raw = new Float32Array(n), env = new Float32Array(n), hy = new Float32Array(n);
       for (let i = 0; i < n; i++) {
         const j0 = i > 0 ? i - 1 : line.closed ? n - 2 : 0, j1 = i < n - 1 ? i + 1 : line.closed ? 1 : n - 1;
         const tx = xs[j1] - xs[j0], ty = ys[j1] - ys[j0], tl = Math.hypot(tx, ty) || 1;
-        hy[i] = height(xs[i], ys[i], tx / tl, ty / tl);
+        raw[i] = height(xs[i], ys[i], tx / tl, ty / tl);
       }
+      // Ease the profile over ridges: a running max then a running mean over the same reach stays
+      // on or above every sample but loses the sawtooth that folds the ribbon over itself on screen.
+      const K = 2, m = line.closed ? n - 1 : n;
+      const at = line.closed ? (i: number) => ((i % m) + m) % m : (i: number) => Math.max(0, Math.min(n - 1, i));
+      for (let i = 0; i < m; i++) { let e = -Infinity; for (let k = -K; k <= K; k++) e = Math.max(e, raw[at(i + k)]); env[i] = e; }
+      for (let i = 0; i < m; i++) { let s = 0; for (let k = -K; k <= K; k++) s += env[at(i + k)]; hy[i] = Math.max(raw[i], s / (2 * K + 1)); }
+      if (line.closed) hy[n - 1] = hy[0];
       let dist = 0;
       const base = v;
       for (let i = 0; i < n; i++) {
@@ -207,7 +225,7 @@ export class NeonBorders {
     for (const [k, n] of ATTRS) geo.setAttribute(k, new THREE.BufferAttribute(buf[k], n));
     geo.setIndex(new THREE.BufferAttribute(index, 1));
     this.mesh.geometry.dispose();
-    this.mesh.geometry = geo;
+    this.mesh.geometry = this.through.geometry = geo;
     return total;
   }
 
@@ -231,7 +249,7 @@ export class NeonBorders {
     u.uInfl.value = smooth(1.6, 0.9, worldPerPx);
   }
 
-  dispose() { this.mesh.geometry.dispose(); (this.mesh.material as THREE.Material).dispose(); }
+  dispose() { this.mesh.geometry.dispose(); for (const m of [this.mesh, this.through]) (m.material as THREE.Material).dispose(); }
 }
 
 function set3(a: Float32Array, i: number, x: number, y: number, z: number) { a[i * 3] = x; a[i * 3 + 1] = y; a[i * 3 + 2] = z; }

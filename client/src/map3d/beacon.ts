@@ -67,9 +67,10 @@ void main() {
   for (int i = 0; i < 3; i++) {
     float t = fract(uTime * 0.42 + float(i) / 3.0);
     float d = abs(r - t);
-    rings += exp(-d * d * 900.0) * (1.0 - t) * (1.0 - t);
+    rings += exp(-d * d * 2200.0) * (1.0 - t) * (1.0 - t) * 1.4;
   }
-  float pool = exp(-r * r * 18.0) * 0.7 + exp(-r * r * 500.0) * 2.2;
+  // A small hot spot where the shaft meets the ground; a wide pool would gild the slope like paint.
+  float pool = exp(-r * r * 40.0) * 0.18 + exp(-r * r * 700.0) * 1.8;
   float fade = 1.0 - smoothstep(0.85, 1.0, r);
   vec3 c = uColor * (rings * 1.3 + pool) * fade;
   gl_FragColor = vec4(c * uAlpha, 1.0);

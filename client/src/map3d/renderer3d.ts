@@ -166,7 +166,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.water.uniforms.uOverlay.value = this.ovTex;
     this.water.uniforms.uOverlayRect = this.ovUniforms.uOverlayRect;
     this.water.uniforms.uOverlayGlow = this.ovUniforms.uOverlayGlow;
-    this.scene.add(this.neon.mesh, this.beacon.group);
+    this.scene.add(this.neon.group, this.beacon.group);
     this.labels.wheelTarget = hud;
     this.labels.onHover = (id) => { if (!id) { this.hoverArea = null; this.onFactionHover?.(null, null); } this.dirty = true; };
     this.labels.onClick = (id) => this.onFactionClick?.(id);
@@ -799,7 +799,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
    */
   protected updateNeon(now: number) {
     const on = this.layers.territory;
-    this.neon.mesh.visible = on;
+    this.neon.group.visible = on;
     const sig = `${this.territoryRev}|${this.ground?.id ?? 0}`;
     if (on && sig !== this.neonSig && this.ground && now - this.neonAt > 140) {
       this.neonSig = sig;
@@ -909,17 +909,13 @@ export class HexMapRenderer3D extends HexMapRenderer {
     const dt = this.labelLast ? Math.min(0.1, (now - this.labelLast) / 1000) : 0;
     this.labelLast = now;
     L.step(dt);
-    const on = this.layers.territory;
-    const relief = Math.max(0, this.hf.maxH - this.sea);
-    const cam = this.camera, V = this.tmpV;
-    const k = this.h / (2 * Math.tan(THREE.MathUtils.degToRad(FOV / 2)));
     // Markers and their name plates (as drawTokens lays them out) push labels up and keep the pointer.
     let nb = 0;
-    const z = this.cam.zoom;
+    const z = this.cam.zoom, s = this.scr;
     for (const tok of this.tokens) {
       const p = this.tokenPos(tok);
       if (!p) continue;
-      const s = this.worldToScreen(p.x, p.y);
+      this.groundScreen(p.x, p.y, s);
       const r = this.markerRadius(tok.kind), lift = this.tokenLift(tok.kind, r);
       if (s.x < -200 || s.y < -200 || s.x > this.w + 200 || s.y > this.h + 200) continue;
       const settle = tok.kind === 'city' || tok.kind === 'outpost';
@@ -929,32 +925,10 @@ export class HexMapRenderer3D extends HexMapRenderer {
       const b = (this.blocked[nb++] ??= { x: 0, y: 0, w: 0, h: 0 });
       b.x = s.x - Math.max(r, pw / 2); b.w = Math.max(r, pw / 2) * 2; b.y = top; b.h = bottom - top;
     }
-    this.blocked.length = nb;
     this.tetherN = 0;
-    const place = (s: LabelSpot, hot: number): LabelPlace | null => {
-      const t = this.territories.get(s.id);
-      if (!t || !on) return null;
-      const gx = t.label.x, gy = t.label.y;
-      const ground = this.groundAt(gx, gy);
-      const lift = Math.max(HEX_SIZE * 2.4, relief * 0.36) * (1 + 0.25 * hot);
-      V.set(gx, ground + lift, gy).applyMatrix4(cam.matrixWorldInverse);
-      const depth = -V.z;
-      if (depth <= cam.near) return null;
-      const ppw = k / depth;
-      V.set(gx, ground + lift, gy).project(cam);
-      // A little screen lift too, so the tether shows even looking straight down.
-      const x = ((V.x + 1) / 2) * this.w, y = ((1 - V.y) / 2) * this.h - 16 - 8 * hot;
-      // Gone at hexcrawl detail, where hexes, names and markers take over; dimmed beside a focus.
-      let alpha = (1 - smooth(1.15, 1.75, ppw)) * (1 - smooth(1.25, 1.8, this.cam.zoom));
-      if (this.focusFactionId && this.focusFactionId !== s.id) alpha *= 0.65;
-      if (alpha <= 0.02) return null;
-      const g = this.worldToScreen(gx, gy);
-      const th = (this.tethers[this.tetherN++] ??= { id: '', gx: 0, gy: 0, lx: 0, ly: 0, color: '', a: 0, hot: 0 });
-      th.id = s.id; th.gx = g.x; th.gy = g.y; th.lx = x; th.ly = y; th.color = s.color; th.hot = hot;
-      th.a = alpha * this.tokenAlpha(gx, gy);
-      return { x, y, ppw, alpha };
-    };
-    L.layout(place, this.w, this.h, this.blocked);
+    this.labelK = this.h / (2 * Math.tan(THREE.MathUtils.degToRad(FOV / 2)));
+    this.labelRelief = Math.max(0, this.hf.maxH - this.sea);
+    L.layout(this.placeLabel, this.w, this.h, this.blocked, nb);
     // The hovered label's card follows it as the view moves.
     const id = L.hovered;
     const r = id ? L.rect(id) : null;
@@ -968,6 +942,45 @@ export class HexMapRenderer3D extends HexMapRenderer {
     }
   }
   protected labelLast = 0;
+  protected labelK = 1;
+  protected labelRelief = 0;
+  protected scr = { x: 0, y: 0 };
+  protected labelPlace: LabelPlace = { x: 0, y: 0, ppw: 1, alpha: 0 };
+
+  /** Where a faction's name stands this frame (see layoutLabels), and its tether to the ground. */
+  protected placeLabel = (s: LabelSpot, hot: number): LabelPlace | null => {
+    const t = this.territories.get(s.id);
+    if (!t || !this.layers.territory) return null;
+    const cam = this.camera, V = this.tmpV;
+    const gx = t.label.x, gy = t.label.y;
+    const ground = this.groundAt(gx, gy);
+    const lift = Math.max(HEX_SIZE * 2.4, this.labelRelief * 0.36) * (1 + 0.25 * hot);
+    V.set(gx, ground + lift, gy).applyMatrix4(cam.matrixWorldInverse);
+    const depth = -V.z;
+    if (depth <= cam.near) return null;
+    const ppw = this.labelK / depth;
+    V.set(gx, ground + lift, gy).project(cam);
+    // A little screen lift too, so the tether shows even looking straight down.
+    const x = ((V.x + 1) / 2) * this.w, y = ((1 - V.y) / 2) * this.h - 16 - 8 * hot;
+    // Gone at hexcrawl detail, where hexes, names and markers take over; dimmed beside a focus.
+    let alpha = (1 - smooth(1.15, 1.75, ppw)) * (1 - smooth(1.25, 1.8, this.cam.zoom));
+    if (this.focusFactionId && this.focusFactionId !== s.id) alpha *= 0.65;
+    if (alpha <= 0.02) return null;
+    const g = this.groundScreen(gx, gy, this.scr);
+    const th = (this.tethers[this.tetherN++] ??= { id: '', gx: 0, gy: 0, lx: 0, ly: 0, color: '', a: 0, hot: 0 });
+    th.id = s.id; th.gx = g.x; th.gy = g.y; th.lx = x; th.ly = y; th.color = s.color; th.hot = hot;
+    th.a = alpha * this.tokenAlpha(gx, gy);
+    const P = this.labelPlace;
+    P.x = x; P.y = y; P.ppw = ppw; P.alpha = alpha;
+    return P;
+  };
+
+  /** worldToScreen without the garbage: writes the ground point's screen position into `out`. */
+  protected groundScreen(x: number, y: number, out: { x: number; y: number }) {
+    const v = this.tmpV.set(x, this.groundAt(x, y), y).project(this.camera);
+    out.x = ((v.x + 1) / 2) * this.w; out.y = ((1 - v.y) / 2) * this.h;
+    return out;
+  }
 
   /** Thin tethers from each floating name down to its ground, with a spark where they land. */
   protected drawTethers() {
@@ -981,7 +994,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
       if (Math.hypot(t.lx - t.gx, t.ly - t.gy) < 6) continue;
       const g = ctx.createLinearGradient(t.gx, t.gy, t.lx, t.ly);
       g.addColorStop(0, t.color); g.addColorStop(1, 'rgba(255, 244, 220, 0.85)');
-      ctx.globalAlpha = t.a * (0.55 + 0.45 * t.hot);
+      ctx.globalAlpha = t.a * this.labels.fadeOf(t.id) * (0.55 + 0.45 * t.hot);
       ctx.strokeStyle = g; ctx.lineWidth = 1 + 0.6 * t.hot;
       ctx.beginPath(); ctx.moveTo(t.gx, t.gy); ctx.lineTo(t.lx, t.ly); ctx.stroke();
       ctx.fillStyle = t.color;

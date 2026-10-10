@@ -127,28 +127,6 @@ float mistAt(vec3 wp, vec3 eye) {
 }
 `;
 
-/**
- * For the clouds: how strongly the map drawn on the ground below a point (borders, labels) shows
- * there, read from the draped overlay where the view ray meets the ground, blurred into a soft halo.
- */
-const MAP_UV_GLSL = /* glsl */`
-uniform sampler2D uOverlay; uniform vec4 uOverlayRect; uniform float uGroundY;
-vec2 groundUv(vec3 wp) {
-  vec3 d = wp - cameraPosition;
-  vec3 g = cameraPosition + d * ((cameraPosition.y - uGroundY) / max(cameraPosition.y - wp.y, 1e-3));
-  return (g.xz - uOverlayRect.xy) / uOverlayRect.zw;
-}
-`;
-const MAP_SHOW_GLSL = MAP_UV_GLSL + /* glsl */`
-float mapShowAt(vec2 uv) {
-  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;
-  // Lines and lettering rather than the broad territory washes: what stands out from its blurred
-  // surroundings, plus anything solid.
-  float a = texture2D(uOverlay, uv, 1.0).a, blur = texture2D(uOverlay, uv, 4.5).a;
-  return max(smoothstep(0.04, 0.24, a - blur), smoothstep(0.6, 0.9, blur));
-}
-`;
-
 type Puff = { x: number; y: number; z: number; size: number; seed: number; shade: number };
 
 /** The weather the sky shows this frame. */
@@ -186,27 +164,26 @@ export class Atmosphere {
   protected fogScale = 1;
   protected amb = new THREE.Color();
   protected tmp = new THREE.Color();
-  protected mapShow: { uOverlay: { value: THREE.Texture | null }; uOverlayRect: { value: THREE.Vector4 }; uGroundY: { value: number } };
   on = true;
 
   constructor() {
     const shared = {
       uLit: { value: new THREE.Color() }, uShade: { value: new THREE.Color() },
-      uOverlay: { value: null as THREE.Texture | null }, uOverlayRect: { value: new THREE.Vector4(0, 0, 1, 1) }, uGroundY: { value: 0 },
     };
-    this.mapShow = shared;
+    // Only the terrain-following hovered hex writes 1 into the stencil. Clouds cover every
+    // other map pixel; they never sample, reproject or bend the map texture.
+    const hoverMask = { stencilWrite: true, stencilWriteMask: 0, stencilRef: 1, stencilFunc: THREE.NotEqualStencilFunc };
     this.cloudMat = new THREE.ShaderMaterial({
       uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
-        uPuffs: { value: this.puffTex }, uOpacity: { value: 1 }, uMapShow: { value: 0.6 }, uThinOut: { value: 0 }, uRim: { value: new THREE.Color() }, uKeyDir: { value: new THREE.Vector3(0, 1, 0) }, uStretch: { value: 1 },
+        uPuffs: { value: this.puffTex }, uOpacity: { value: 1 }, uThinOut: { value: 0 }, uRim: { value: new THREE.Color() }, uKeyDir: { value: new THREE.Vector3(0, 1, 0) }, uStretch: { value: 1 },
       }]),
-      transparent: true, depthWrite: false, fog: true,
+      transparent: true, depthWrite: false, fog: true, ...hoverMask,
       vertexShader: /* glsl */`
         #include <fog_pars_vertex>
         ${ATMOS_GLSL}
-        ${MAP_UV_GLSL}
         attribute vec3 aPos; attribute vec3 aMeta; // size, seed, shade
         uniform float uStretch, uThinOut;
-        varying vec2 vUv, vTornUv, vMapUv; varying float vAlpha, vShade, vSeed; varying vec3 vWp;
+        varying vec2 vUv, vTornUv; varying float vAlpha, vShade, vSeed; varying vec3 vWp;
         void main() {
           vec3 c = aPos;
           c.y += uCloudTile.w;
@@ -230,7 +207,6 @@ export class Atmosphere {
           // Where this corner lies on the deck, for shredding torn cloud (the view's inverse rotation is its transpose).
           vec3 corner = c + transpose(mat3(viewMatrix)) * vec3(off, 0.0);
           vTornUv = cloudTearUv(corner.xz);
-          vMapUv = groundUv(corner);
           // Clouds part as the camera comes down through them.
           vAlpha = edge * smoothstep(0.12, 0.7, cov) * smoothstep(uCloudNear.x, uCloudNear.y, -mvPosition.z);
           vAlpha *= smoothstep(uThinOut - 0.1, uThinOut + 0.1, fract(aMeta.y * 13.7));
@@ -244,9 +220,8 @@ export class Atmosphere {
         #include <common>
         #include <fog_pars_fragment>
         ${ATMOS_GLSL}
-        ${MAP_SHOW_GLSL}
-        uniform sampler2D uPuffs; uniform float uOpacity, uMapShow; uniform vec3 uLit, uShade, uRim, uKeyDir;
-        varying vec2 vUv, vTornUv, vMapUv; varying float vAlpha, vShade, vSeed; varying vec3 vWp;
+        uniform sampler2D uPuffs; uniform float uOpacity; uniform vec3 uLit, uShade, uRim, uKeyDir;
+        varying vec2 vUv, vTornUv; varying float vAlpha, vShade, vSeed; varying vec3 vWp;
         void main() {
           vec2 cell = vec2(floor(vSeed * 3.99), 0.0);
           cell.y = floor(cell.x / 2.0); cell.x = mod(cell.x, 2.0);
@@ -254,9 +229,8 @@ export class Atmosphere {
           float a = t.a * vAlpha * uOpacity;
           // A gale shreds the puffs into streaks along the wind.
           if (uCloudCov.z > 0.0) a *= mix(1.0, smoothstep(0.4, 0.56, texture2D(uCloudMap, vTornUv).b), uCloudCov.z * 0.9);
-          // Borders and labels on the map below stay readable through the cloud.
-          a *= 1.0 - uMapShow * mapShowAt(vMapUv);
-          if (a < 0.004) discard;
+          // Coverage determines the silhouette, never transparency through a cloud body.
+          if (a < 0.04) discard;
           // t.r: how much of the puff faces up into the light; vShade: how high in its cloud it sits.
           float lit = clamp(t.r * 0.75 + vShade * 0.45, 0.0, 1.0);
           vec3 V = normalize(cameraPosition - vWp);
@@ -264,15 +238,15 @@ export class Atmosphere {
           vec3 col = mix(uShade, uLit, lit) + uRim * rim;
           // Lightning lights the cloud from inside, most where it is thick.
           col += uFlashCol * flashAt(vWp) * (0.5 + 0.9 * t.a);
-          gl_FragColor = vec4(col, a);
+          gl_FragColor = vec4(col, 1.0);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
           #include <fog_fragment>
         }`,
     });
     this.deckMat = new THREE.ShaderMaterial({
-      uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { uOpacity: { value: 0 }, uMapShow: { value: 0.6 }, uSolid: { value: 0 }, uDeckRim: { value: new THREE.Vector4(0, 0, 1, 2) } }]),
-      transparent: true, depthWrite: false, fog: true,
+      uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { uOpacity: { value: 0 }, uSolid: { value: 0 }, uDeckRim: { value: new THREE.Vector4(0, 0, 1, 2) } }]),
+      transparent: true, depthWrite: false, fog: true, ...hoverMask,
       vertexShader: /* glsl */`
         #include <fog_pars_vertex>
         varying vec3 vWp; varying float vDepth;
@@ -288,8 +262,7 @@ export class Atmosphere {
         #include <common>
         #include <fog_pars_fragment>
         ${ATMOS_GLSL}
-        ${MAP_SHOW_GLSL}
-        uniform float uOpacity, uMapShow, uSolid; uniform vec3 uLit, uShade; uniform vec4 uDeckRim;
+        uniform float uOpacity, uSolid; uniform vec3 uLit, uShade; uniform vec4 uDeckRim;
         varying vec3 vWp; varying float vDepth;
         void main() {
           // Parts as the camera comes down, and fades out far past the map, where the plane ends.
@@ -311,9 +284,10 @@ export class Atmosphere {
             : clamp(0.36 + 0.3 * f.g - 0.32 * thick, 0.0, 1.0);
           vec3 col = mix(uShade, uLit, lit);
           col += uFlashCol * flashAt(vWp) * (0.45 + 0.6 * thick);
-          // Thin places in the deck let the map through, and so do its borders and labels.
+          // Thin places are gaps; occupied cloud pixels fully obscure the map.
           float a = cov * uOpacity * vFade * mix(0.25, 1.0, thick * thick) * mix(0.5, 1.2, f.g);
-          gl_FragColor = vec4(col, a * (1.0 - uMapShow * mapShowAt(groundUv(vWp))));
+          if (a < 0.04) discard;
+          gl_FragColor = vec4(col, 1.0);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
           #include <fog_fragment>
@@ -479,10 +453,10 @@ export class Atmosphere {
   /** How far out the camera is: 0 close in, 1 at the whole-island view. */
   farness(camDist: number) { return 1 - smooth(1.5, 0.6, camDist / this.span); }
 
-  /** The draped map overlay, so its borders and labels can show through the clouds. */
+  /** The ground overlay keeps labels legible in low mist; clouds never read it. */
   setOverlay(tex: THREE.Texture | null, rect: THREE.Vector4) {
-    this.mapShow.uOverlay.value = this.uniforms.uAtmOverlay.value = tex;
-    this.mapShow.uOverlayRect.value = this.uniforms.uAtmOvRect.value = rect;
+    this.uniforms.uAtmOverlay.value = tex;
+    this.uniforms.uAtmOvRect.value = rect;
   }
 
   /** The field density below which a share `f` of the tile lies. */
@@ -492,9 +466,8 @@ export class Atmosphere {
   }
 
   /** Follow the time of day, the weather and the camera. `dt` is seconds since the last frame. */
-  update(now: number, dt: number, L: Lighting, camDist: number, zoom: number, groundY: number, wx: SkyWeather) {
+  update(now: number, dt: number, L: Lighting, camDist: number, zoom: number, wx: SkyWeather) {
     const u = this.uniforms, w = wx.look;
-    this.mapShow.uGroundY.value = groundY;
     u.uAtmTime.value = now / 1000;
     u.uAtmOn.value = this.on ? 1 : 0;
     u.uAtmKeyDir.value.copy(L.keyDir);

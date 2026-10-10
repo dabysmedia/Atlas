@@ -122,12 +122,12 @@ export class NeonBorders {
     uTime: { value: 0 }, uCore: { value: 1.1 }, uFlowLen: { value: 400 }, uDashLen: { value: 10 }, uInfl: { value: 1 }, uCont: { value: 1 },
     uOpacity: { value: 1 }, uGlow: { value: 1 }, uAdd: { value: 0 },
   };
-  /** The lines, then their glow again over the clouds and rain (see the constructor). */
+  /** Terrain lines; the optional second pass stays disabled while clouds occlude the map. */
   readonly group = new THREE.Group();
   readonly mesh: THREE.Mesh;
   protected through: THREE.Mesh;
-  /** How strongly the lines shine through cloud and rain drawn over them. */
-  readonly throughU = { uOpacity: { value: 0.32 }, uGlow: { value: 0.8 }, uAdd: { value: 1 } };
+  /** Optional additive pass, disabled so atmosphere hides map lines. */
+  readonly throughU = { uOpacity: { value: 0 }, uGlow: { value: 0.8 }, uAdd: { value: 1 } };
   protected tmp = new THREE.Color();
 
   constructor() {
@@ -140,10 +140,11 @@ export class NeonBorders {
     // Under the clouds, so a cloud drifting over a border veils it as it would the ground...
     this.mesh = new THREE.Mesh(geo, new THREE.ShaderMaterial({ uniforms: this.uniforms, vertexShader: VERT, fragmentShader: FRAG, ...blend }));
     this.mesh.renderOrder = 3;
-    // ...and a purely additive second pass after the clouds and rain, so the light still shows
-    // through them like a lamp through mist and the lines stay readable in any weather.
+    // Retain the additive pass, but keep it disabled: cloud bodies must hide map lines.
     this.through = new THREE.Mesh(geo, new THREE.ShaderMaterial({ uniforms: { ...this.uniforms, ...this.throughU }, vertexShader: VERT, fragmentShader: FRAG, ...blend }));
     this.through.renderOrder = 8;
+    // Atmosphere occludes map lines. Only the hovered surface mask clears clouds.
+    this.through.visible = false;
     for (const m of [this.mesh, this.through]) { m.frustumCulled = false; this.group.add(m); }
   }
 

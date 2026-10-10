@@ -1,6 +1,5 @@
 /**
- * The selected hex's beacon: a thin column of gilt light shooting up from the ground, so the
- * selection can be found at any zoom and through cloud, with a ripple spreading over the terrain
+ * The selected hex's beacon: a short gilt marker above the ground, with a ripple over the terrain
  * at its foot. Two draw calls, both additive, all motion in the shaders.
  *
  * The column is a camera-facing strip turned only about the vertical, at least a few pixels wide
@@ -21,7 +20,7 @@ void main() {
   vec3 toCam = cameraPosition - uBase;
   vec3 right = normalize(vec3(toCam.z, 0.0, -toCam.x) + vec3(1e-5, 0.0, 0.0));
   // Wide enough to see from far out: never under uMinPx pixels at the base's distance.
-  float w = max(uWidth, uMinPx * length(toCam) * uPixAngle);
+  float w = min(uWidth * 2.0, max(uWidth, uMinPx * length(toCam) * uPixAngle));
   vec3 p = uBase + right * (uv.x - 0.5) * w + vec3(0.0, uv.y * uHeight * uGrow, 0.0);
   gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
 }
@@ -84,7 +83,7 @@ export class Beacon {
   protected column: THREE.Mesh;
   protected ripple: THREE.Mesh;
   protected cu = {
-    uBase: { value: new THREE.Vector3() }, uHeight: { value: 400 }, uWidth: { value: 10 }, uMinPx: { value: 30 }, uPixAngle: { value: 0.001 },
+    uBase: { value: new THREE.Vector3() }, uHeight: { value: 60 }, uWidth: { value: 6 }, uMinPx: { value: 4 }, uPixAngle: { value: 0.001 },
     uGrow: { value: 0 }, uColor: { value: GILT.clone() }, uTime: { value: 0 }, uAlpha: { value: 0 },
   };
   protected ru = { uBias: { value: 0.004 }, uColor: { value: GILT.clone() }, uTime: { value: 0 }, uAlpha: { value: 0 } };
@@ -102,7 +101,7 @@ export class Beacon {
       new THREE.ShaderMaterial({ uniforms: this.cu, vertexShader: COLUMN_VERT, fragmentShader: COLUMN_FRAG, side: THREE.DoubleSide, ...add }));
     this.ripple = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, 24, 24).rotateX(-Math.PI / 2),
       new THREE.ShaderMaterial({ uniforms: this.ru, vertexShader: RIPPLE_VERT, fragmentShader: RIPPLE_FRAG, ...add }));
-    // Drawn after the clouds and rain, so the shaft pierces the deck.
+    // The short selection marker draws over weather; its footprint stays within its hex.
     this.ripple.renderOrder = 9;
     this.column.renderOrder = 10;
     for (const m of [this.column, this.ripple]) m.frustumCulled = false;
@@ -139,25 +138,23 @@ export class Beacon {
     this.ripple.position.set(p.x, 0.6, p.y);
   }
 
-  /** Per frame. `camDist` sizes the shaft so it always reaches well up the screen. */
-  update(now: number, camDist: number, hexSize: number, pixAngle: number) {
+  /** Per frame. Dimensions stay local to one hex at every camera distance. */
+  update(now: number, hexSize: number, pixAngle: number) {
     const dt = this.last ? Math.min(0.1, (now - this.last) / 1000) : 0;
     this.last = now;
     // Shoots up fast, sinks away a little faster.
     this.grow = this.want ? Math.min(1, this.grow + dt * 1.9) : Math.max(0, this.grow - dt * 3);
     this.group.visible = this.grow > 0.001 && !!this.at;
     if (!this.group.visible) return;
-    // The ripple grows with distance so it still reads from far out (looking straight down, the
-    // shaft itself is end on).
-    const R = Math.max(hexSize * 1.25, camDist * 0.022);
+    const R = hexSize * 0.85;
     if (!this.R || Math.abs(R - this.R) > this.R * 0.15) this.layRipple(R);
     const e = 1 - (1 - this.grow) ** 3;
     const t = (now / 1000) % 3600;
     const c = this.cu;
     c.uGrow.value = e;
     c.uAlpha.value = this.want ? Math.min(1, this.grow * 3) : e;
-    c.uHeight.value = Math.max(hexSize * 9, camDist * 0.42);
-    c.uWidth.value = hexSize * 0.5;
+    c.uHeight.value = hexSize * 1.5;
+    c.uWidth.value = hexSize * 0.15;
     c.uPixAngle.value = pixAngle;
     c.uTime.value = t;
     this.ru.uTime.value = t;

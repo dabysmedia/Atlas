@@ -189,10 +189,11 @@ export function MapView() {
   useEffect(() => {
     const r = rendererRef.current;
     if (!r) return;
+    const previousFaction = r.focusFactionId;
     r.selectedId = focus?.kind === 'hex' ? focus.id : null;
     r.selectedTokenId = focus?.kind === 'token' ? focus.id : null;
     r.focusFactionId = focus?.kind === 'faction' ? focus.id : null;
-    r.invalidate();
+    if (!is3d(r) || previousFaction !== r.focusFactionId) r.invalidate();
   }, [focus, gen]);
   // 3D: choosing a place is a slow move onto it; letting go returns to exactly the view before.
   useEffect(() => {
@@ -455,9 +456,10 @@ export function MapView() {
       if (!rendererRef.current) return;
       const p = pos(e);
       if (pointers.has(e.pointerId)) pointers.set(e.pointerId, p);
+      if (is3d(r())) (r() as HexMapRenderer3D).pointer = toolRef.current.align ? null : p;
       const h = r().hexAt(p.x, p.y);
       const hid = toolRef.current.align ? null : h?.id ?? null;
-      if (r().hoverId !== hid) { r().hoverId = hid; r().invalidate(); }
+      if (r().hoverId !== hid) { r().hoverId = hid; if (!is3d(r())) r().invalidate(); }
       setHover(h && mode === 'none' && !toolRef.current.align ? { x: p.x, y: p.y, hexId: h.id } : null);
       const t = toolRef.current.tool;
       if (t !== 'select' && h && !toolRef.current.align) { r().brushIds = new Set(handlers.current.brushArea(h)); r().invalidate(); }
@@ -547,7 +549,7 @@ export function MapView() {
       const h = r().hexAt(p.x, p.y);
       if (h && !is3d(r())) r().flyTo(h.cx, h.cy, Math.max(r().target.zoom * 2, 1.4));
     };
-    const onLeave = () => { setHover(null); if (rendererRef.current) { r().hoverId = null; r().brushIds = new Set(); r().invalidate(); } };
+    const onLeave = () => { setHover(null); if (rendererRef.current) { if (is3d(r())) (r() as HexMapRenderer3D).pointer = null; r().hoverId = null; r().brushIds = new Set(); r().invalidate(); } };
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.closest('input, textarea, select, [contenteditable="true"]') || !rendererRef.current) return;
       if (e.code === 'Space') { space = e.type === 'keydown'; canvas.style.cursor = space ? 'grab' : ''; if (space) e.preventDefault(); return; }
@@ -628,7 +630,7 @@ export function MapView() {
   const snapAt = (x: number, y: number, zoom = 1.6) => () => {
     const rr = rendererRef.current;
     if (!rr) return null;
-    try { return rr.snapshot(x, y, zoom, 380, 168).toDataURL('image/jpeg', 0.86); } catch { return null; }
+    try { return (is3d(rr) ? rr.captureView(x, y, 380, 168) : rr.snapshot(x, y, zoom, 380, 168))?.toDataURL('image/jpeg', 0.86) ?? null; } catch { return null; }
   };
   const focusHex = focus?.kind === 'hex' && data ? data.hexes.find((h) => h.id === focus.id) : undefined;
   const focusToken = focus?.kind === 'token' && data ? data.tokens.find((t) => t.id === focus.id) : undefined;

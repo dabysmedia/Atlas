@@ -657,7 +657,7 @@ export function MapView() {
               <motion.div key={tool} className="panel brushbar" initial={{ opacity: 0, y: 14, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.98, transition: { duration: 0.12 } }}
                 transition={{ type: 'spring', stiffness: 420, damping: 32 }}>
                 <span className="brushbar-title">{TOOLS.find((t) => t.id === tool)?.label}</span>
-                <div className="brush-list">
+                <div className={`brush-list ${tool === 'claim' ? 'wide' : ''}`}>
                   {tool === 'terrain' && world.terrainTypes.map((t) => (
                     <button key={t.key} className={`brush ${brush.terrain === t.key ? 'on' : ''}`} onClick={() => setBrush({ ...brush, terrain: t.key })}>
                       <span className="swatch" style={{ background: t.color }} /><span className="brush-name">{t.name}</span>

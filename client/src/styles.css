@@ -16,7 +16,7 @@
   --text: #ece3cf;
   /* Lifted from the old flat chrome so secondary text keeps AA contrast on glass. */
   --text-dim: #bdb4a0;
-  --text-faint: #a0a39b;
+  --text-faint: #a9aca3;
   --gold: #d6b06a;
   --gold-hi: #f0d496;
   --gold-soft: rgba(214, 176, 106, 0.14);
@@ -38,12 +38,12 @@
   /* ---- Glass: one recipe for every floating surface. Tune it here.
    * The backdrop is blurred, saturated and dimmed before the tint goes over it, so a white cloud behind
    * a control still reads as a dark ground: body and secondary text stay at AA contrast or better. */
-  --glass-tint: rgba(12, 21, 27, 0.64);
-  --glass-tint-top: rgba(24, 38, 46, 0.62);
+  --glass-tint: rgba(12, 21, 27, 0.68);
+  --glass-tint-top: rgba(24, 38, 46, 0.66);
   --glass-tint-strong: rgba(11, 19, 24, 0.8);     /* reading surfaces: inspector, dialogs, palette */
   --glass-solid: rgba(12, 20, 25, 0.95);          /* popovers that open inside glass: no blur of their own */
   --glass-sheet: rgba(10, 17, 21, 0.74);          /* page sheets over the (already blurred) ambient map */
-  --glass-blur: blur(22px) saturate(1.5) brightness(0.68);
+  --glass-blur: blur(22px) saturate(1.5) brightness(0.52);
   --glass-edge: rgba(240, 226, 196, 0.13);        /* the hairline */
   --glass-edge-hi: rgba(240, 212, 150, 0.34);
   --glass-sheen: linear-gradient(180deg, rgba(255, 250, 235, 0.06), rgba(255, 250, 235, 0) 42%);
@@ -589,9 +589,10 @@ mark { background: rgba(214,176,106,0.3); color: var(--text); border-radius: 2px
 .stack-cards > * { pointer-events: auto; }
 /* The dock centres itself in the map left clear by the inspector and any card beside the stack. */
 .mapview { --dock-right: calc(var(--chrome-inset) + 66px); }
-.mapview:has(.stack-cards > *) { --dock-right: calc(var(--chrome-inset) + 66px + 336px); }
+/* A card beside the stack only moves the dock when the brushes are out and would run under it. */
+.mapview:has(.stack-cards > *):has(.brushbar) { --dock-right: calc(var(--chrome-inset) + 66px + 336px); }
 .mapview:has(.inspector) { --dock-right: calc(var(--chrome-inset) + 372px + 66px); }
-.mapview:has(.inspector):has(.stack-cards > *) { --dock-right: calc(var(--chrome-inset) + 372px + 66px + 336px); }
+.mapview:has(.inspector):has(.stack-cards > *):has(.brushbar) { --dock-right: calc(var(--chrome-inset) + 372px + 66px + 336px); }
 .mapview:has(.inspector) .stack-col { right: calc(var(--chrome-inset) + 372px); }
 .mapview:has(.inspector) .stack-cards { right: calc(var(--chrome-inset) + 372px + 54px + 12px); }
 .territories, .keys-card { flex: none; order: 1; }
@@ -660,6 +661,8 @@ mark { background: rgba(214,176,106,0.3); color: var(--text); border-radius: 2px
 .brushbar .brush-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 5px; min-width: min(640px, calc(100vw - 48px)); }
 .brushbar .brush { min-width: 0; }
 .brush-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Faction names run long: fewer, wider tiles. */
+.brushbar .brush-list.wide { grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); }
 .brush {
   display: flex; align-items: center; gap: 7px; padding: 5px 10px; border-radius: 10px; border: 1px solid transparent; background: transparent;
   cursor: pointer; color: var(--text-dim); font-size: 12.5px; white-space: nowrap;
@@ -844,7 +847,7 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 
 /* Phones: the map's chrome sits above the tab bar; the inspector becomes a sheet rising from the bottom. */
 @media (max-width: 600px) {
-  .mapview, .mapview:has(.stack-cards > *) { --dock-right: var(--chrome-inset); }
+  .mapview, .mapview:has(.stack-cards > *):has(.brushbar) { --dock-right: var(--chrome-inset); }
   .dock-wrap { z-index: 7; width: auto; }
   /* The brushes keep left of the control stack; the dock stays centred over the tab bar. */
   .brushbar { align-self: flex-start; max-width: calc(100vw - 2 * var(--chrome-inset) - 62px); }
@@ -866,8 +869,8 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
   padding: var(--chrome-top) var(--chrome-inset) calc(var(--chrome-bottom) + 24px) var(--chrome-left);
   background: radial-gradient(1200px 700px at 50% -10%, rgba(214,176,106,0.07), transparent 60%), radial-gradient(900px 600px at 90% 110%, rgba(64,140,150,0.08), transparent 60%), var(--ink-1);
   /* The sheet scrolls under the top islands: fade it out there instead of sliding it behind them. */
-  -webkit-mask-image: linear-gradient(180deg, transparent 18px, #000 calc(var(--chrome-top) - 4px));
-  mask-image: linear-gradient(180deg, transparent 18px, #000 calc(var(--chrome-top) - 4px));
+  -webkit-mask-image: linear-gradient(180deg, transparent calc(var(--chrome-top) - 30px), #000 calc(var(--chrome-top) + 2px));
+  mask-image: linear-gradient(180deg, transparent calc(var(--chrome-top) - 30px), #000 calc(var(--chrome-top) + 2px));
 }
 .pagebody {
   max-width: 1120px; margin: 0 auto; padding: 32px 38px 72px; border-radius: 24px; min-height: calc(100% - 4px);

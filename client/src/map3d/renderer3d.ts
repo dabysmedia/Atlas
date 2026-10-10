@@ -2,9 +2,11 @@
  * The 3D map: the island as a place, lit by a living sky.
  *
  * Hexes stay the source of truth. This renderer reuses the 2D renderer for everything derived from
- * them (territory washes, borders, grid, fog, labels, selection, brushes) by drawing that output
- * into an offscreen canvas over the part of the world in view, and draping it onto the terrain and
- * the sea as a texture looked up by world position, so it follows every slope. Markers stand on the
+ * them (territory washes, grid, fog, hex names, selection, brushes) by drawing that output into an
+ * offscreen canvas over the part of the world in view, and draping it onto the terrain and the sea
+ * as a texture looked up by world position, so it follows every slope. Faction borders are glowing
+ * lines in the scene just above the ground (neon.ts), faction names float over their land
+ * (labels3d.ts), and a beacon of light rises from the selected hex (beacon.ts). Markers stand on the
  * ground in a screen-space layer above the scene.
  *
  * Ground comes from a world's 3D model when it has one, or from relief raised out of its hex
@@ -944,7 +946,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
       const x = ((V.x + 1) / 2) * this.w, y = ((1 - V.y) / 2) * this.h - 16 - 8 * hot;
       // Gone at hexcrawl detail, where hexes, names and markers take over; dimmed beside a focus.
       let alpha = (1 - smooth(1.15, 1.75, ppw)) * (1 - smooth(1.25, 1.8, this.cam.zoom));
-      if (this.focusFactionId && this.focusFactionId !== s.id) alpha *= 0.5;
+      if (this.focusFactionId && this.focusFactionId !== s.id) alpha *= 0.65;
       if (alpha <= 0.02) return null;
       const g = this.worldToScreen(gx, gy);
       const th = (this.tethers[this.tetherN++] ??= { id: '', gx: 0, gy: 0, lx: 0, ly: 0, color: '', a: 0, hot: 0 });

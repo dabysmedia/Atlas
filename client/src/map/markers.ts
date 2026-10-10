@@ -68,6 +68,26 @@ export const MARKER_RADIUS: Record<TokenKind, number> = { city: 17, outpost: 13,
 
 const cache = new Map<string, HTMLCanvasElement>();
 
+/** Upright place diamond, with the same SVG paths as the place picker. */
+export function placeDiamond(kind: TokenKind, color: string, dpr: number, major: boolean) {
+  const k = `diamond|${kind}|${color}|${dpr}|${major}`;
+  const cached = cache.get(k);
+  if (cached) return cached;
+  if (cache.size > 400) cache.clear();
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(56 * dpr);
+  const g = c.getContext('2d')!;
+  g.scale(dpr, dpr); g.translate(28, 28);
+  g.beginPath(); g.moveTo(0, -22); g.lineTo(22, 0); g.lineTo(0, 22); g.lineTo(-22, 0); g.closePath();
+  g.shadowColor = 'rgba(0,0,0,0.8)'; g.shadowBlur = 5;
+  g.fillStyle = 'rgba(12,22,28,0.92)'; g.fill();
+  g.shadowBlur = 0; g.strokeStyle = color; g.lineWidth = 1.5; g.stroke();
+  g.save(); g.scale(0.75, 0.75); g.translate(-12, -12);
+  g.lineCap = 'round'; g.lineJoin = 'round'; g.strokeStyle = '#f4ead4'; g.lineWidth = 1.8;
+  g.stroke(major ? MAJOR_CITY_ICON : ICONS[kind]); g.restore();
+  cache.set(k, c); return c;
+}
+
 function shade(hex: string, amt: number) {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex);
   const n = m ? parseInt(m[1], 16) : 0x888888;

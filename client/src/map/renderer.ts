@@ -517,6 +517,7 @@ export class HexMapRenderer {
 
   tokenAt(sx: number, sy: number): Token | undefined {
     for (const t of [...this.tokens].sort((a, b) => order(b) - order(a))) {
+      if (this.floatingPlace(t)) continue;
       if (this.tokenVisibility(t) < 0.05) continue;
       const pos = this.tokenPos(t);
       if (!pos) continue;
@@ -1111,6 +1112,8 @@ export class HexMapRenderer {
   protected tokenAlpha(_x: number, _y: number) { return 1; }
   /** Drawing and hit testing share mode visibility. */
   protected tokenVisibility(_token: Token) { return 1; }
+  /** The 3D view gives notable places their own shared drawing/picking layout. */
+  protected floatingPlace(_token: Token) { return false; }
 
   protected drawTokens(now: number, z: number, still?: boolean) {
     const ctx = this.ctx;
@@ -1118,6 +1121,7 @@ export class HexMapRenderer {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     const plates: { text: string; x: number; y: number; kind: TokenKind; color: string; side: boolean; alpha: number }[] = [];
     for (const t of ordered) {
+      if (this.floatingPlace(t)) continue;
       const visibility = this.tokenVisibility(t);
       if (visibility < 0.01) continue;
       const p = this.tokenPos(t);

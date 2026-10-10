@@ -37,12 +37,14 @@ import { GridProjection, GRID_GLSL } from './gridProjection';
 import { isNotableKind, isMajorCity } from '../../../shared/markers';
 import { FactionLabels, type LabelPlace, type LabelSpot } from './labels3d';
 import type { CardAnchor, FactionArea } from '../map/FactionCard';
+import { placeDiamond } from '../map/markers';
 
 const FOV = 24; // degrees, vertical; narrow so the overhead view stays close to a flat map
 const MAX_TILT = 1.32;
 /** Sea level on a model, in its normalized height units (its base sits at 0). */
 const MODEL_SEA = 0.008;
 const OVERLAY_MAX = 2048;
+type PlaceTile = { token: Token; x: number; y: number; gx: number; gy: number; lines: string[]; width: number; height: number; alpha: number; color: string };
 
 export type ModelSource = { url: string; placement: ModelPlacement };
 
@@ -499,6 +501,95 @@ export class HexMapRenderer3D extends HexMapRenderer {
   }
 
   protected tokenLift(kind: TokenKind, r: number) { return r * (kind === 'city' || kind === 'outpost' ? 1.15 : 1.35); }
+  protected floatingPlace(token: Token) { return isNotableKind(token.kind); }
+  protected placeTiles: PlaceTile[] = [];
+
+  /** Project the world-up anchor, then tile upright diamonds in camera-facing rows. */
+  protected layoutPlaces() {
+    const groups = new Map<string, Token[]>();
+    for (const token of this.tokens) {
+      if (!this.floatingPlace(token) || !token.hexId || this.tokenVisibility(token) < 0.01) continue;
+      const key = this.dragToken?.token.id === token.id ? `drag:${token.id}` : token.hexId;
+      const group = groups.get(key) ?? [];
+      group.push(token); groups.set(key, group);
+    }
+    const tiles: PlaceTile[] = [];
+    const ctx = this.hudCtx;
+    ctx.save(); ctx.font = "600 12px 'EB Garamond Variable', Georgia, serif";
+    for (const group of groups.values()) {
+      const hex = this.byId.get(group[0].hexId!);
+      if (!hex) continue;
+      group.sort((a, b) => a.id.localeCompare(b.id));
+      const dragged = this.dragToken?.token.id === group[0].id ? this.dragToken : null;
+      const gx = dragged?.x ?? hex.cx, gy = dragged?.y ?? hex.cy;
+      const ground = this.groundAt(gx, gy);
+      const v = new THREE.Vector3(gx, ground + HEX_SIZE * 0.8, gy);
+      if (-v.clone().applyMatrix4(this.camera.matrixWorldInverse).z <= this.camera.near) continue;
+      const anchor = this.projectPoint(gx, gy, ground + HEX_SIZE * 0.8);
+      const foot = this.groundScreen(gx, gy, { x: 0, y: 0 });
+      // Keep a small visible gap even in the straight-down overview.
+      anchor.y = Math.min(anchor.y, foot.y - 30);
+      const columns = Math.min(3, Math.ceil(Math.sqrt(group.length)));
+      const labels = group.map(token => {
+        const lines: string[] = []; let line = '';
+        for (const word of token.name.split(/\s+/)) {
+          if (line && ctx.measureText(`${line} ${word}`).width > 126) { lines.push(line); line = word; }
+          else line = line ? `${line} ${word}` : word;
+        }
+        lines.push(line);
+        return lines;
+      });
+      const width = Math.max(72, ...labels.flat().map(line => ctx.measureText(line).width + 18));
+      const rowHeight = 62 + Math.max(...labels.map(lines => lines.length)) * 14;
+      const rows = Math.ceil(group.length / columns);
+      group.forEach((token, index) => {
+        const row = Math.floor(index / columns), count = Math.min(columns, group.length - row * columns);
+        const x = anchor.x + (index % columns - (count - 1) / 2) * width;
+        const y = anchor.y - (rows - 1 - row) * rowHeight - rowHeight / 2;
+        tiles.push({ token, x, y, gx: foot.x, gy: foot.y, lines: labels[index], width, height: rowHeight,
+          alpha: this.tokenVisibility(token) * this.tokenAlpha(gx, gy),
+          color: token.color ?? (token.factionId ? this.factionColor.get(token.factionId) : undefined) ?? '#d6b06a' });
+      });
+    }
+    ctx.restore(); this.placeTiles = tiles;
+  }
+
+  tokenAt(sx: number, sy: number): Token | undefined {
+    this.layoutPlaces();
+    for (const tile of [...this.placeTiles].reverse()) {
+      if (tile.alpha < 0.05) continue;
+      if (Math.abs(sx - tile.x) <= tile.width / 2 && sy >= tile.y - 24 && sy <= tile.y + 30 + tile.lines.length * 14) return tile.token;
+    }
+    return super.tokenAt(sx, sy);
+  }
+
+  protected drawTokens(now: number, z: number, still?: boolean) {
+    super.drawTokens(now, z, still);
+    this.layoutPlaces();
+    const ctx = this.ctx;
+    ctx.save(); ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    for (const tile of this.placeTiles) {
+      if (tile.x < -tile.width || tile.x > this.w + tile.width || tile.y < -tile.height || tile.y > this.h + tile.height) continue;
+      ctx.globalAlpha = tile.alpha;
+      ctx.strokeStyle = tile.color; ctx.lineWidth = 1;
+      const tether = ctx.createLinearGradient(tile.gx, tile.gy, tile.x, tile.y + 22);
+      tether.addColorStop(0, 'rgba(214,176,106,0.08)'); tether.addColorStop(1, 'rgba(214,176,106,0.5)');
+      ctx.strokeStyle = tether; ctx.beginPath(); ctx.moveTo(tile.gx, tile.gy); ctx.lineTo(tile.x, tile.y + 22); ctx.stroke();
+      if (this.selectedTokenId === tile.token.id) {
+        ctx.strokeStyle = '#8fe8e2'; ctx.lineWidth = 2; ctx.shadowColor = '#8fe8e2'; ctx.shadowBlur = 8;
+        ctx.beginPath(); ctx.moveTo(tile.x, tile.y - 26); ctx.lineTo(tile.x + 26, tile.y); ctx.lineTo(tile.x, tile.y + 26); ctx.lineTo(tile.x - 26, tile.y); ctx.closePath(); ctx.stroke(); ctx.shadowBlur = 0;
+      }
+      const sprite = placeDiamond(tile.token.kind, tile.color, this.dpr, isMajorCity(tile.token));
+      ctx.drawImage(sprite, tile.x - 28, tile.y - 28, 56, 56);
+      ctx.font = "600 12px 'EB Garamond Variable', Georgia, serif";
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+      ctx.strokeStyle = 'rgba(6,12,17,0.95)'; ctx.lineWidth = 3; ctx.fillStyle = '#f4ead4';
+      tile.lines.forEach((line, index) => {
+        ctx.strokeText(line, tile.x, tile.y + 34 + index * 14); ctx.fillText(line, tile.x, tile.y + 34 + index * 14);
+      });
+    }
+    ctx.restore();
+  }
   protected tokenVisibility(token: Token) {
     return isNotableKind(token.kind) && !isMajorCity(token) ? 1 - this.overviewAlpha() : 1;
   }
@@ -1016,6 +1107,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     let nb = 0;
     const z = this.cam.zoom, s = this.scr;
     for (const tok of this.tokens) {
+      if (this.floatingPlace(tok)) continue;
       if (this.tokenVisibility(tok) < 0.05) continue;
       const p = this.tokenPos(tok);
       if (!p) continue;
@@ -1028,6 +1120,12 @@ export class HexMapRenderer3D extends HexMapRenderer {
       const top = s.y - lift - r, bottom = s.y - lift + r + (pw ? lift * 0.55 + 20 : 0);
       const b = (this.blocked[nb++] ??= { x: 0, y: 0, w: 0, h: 0 });
       b.x = s.x - Math.max(r, pw / 2); b.w = Math.max(r, pw / 2) * 2; b.y = top; b.h = bottom - top;
+    }
+    this.layoutPlaces();
+    for (const tile of this.placeTiles) {
+      if (tile.alpha < 0.05) continue;
+      const b = (this.blocked[nb++] ??= { x: 0, y: 0, w: 0, h: 0 });
+      b.x = tile.x - tile.width / 2; b.y = tile.y - 24; b.w = tile.width; b.h = 58 + tile.lines.length * 14;
     }
     this.tetherN = 0;
     this.labelK = this.h / (2 * Math.tan(THREE.MathUtils.degToRad(FOV / 2)));

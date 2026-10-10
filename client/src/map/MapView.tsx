@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import {
@@ -43,6 +43,7 @@ export function MapView() {
   const world = useWorld();
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
+  const location = useLocation();
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const glRef = useRef<HTMLCanvasElement>(null);
@@ -246,7 +247,7 @@ export function MapView() {
   // Deep links from search: ?focus=hex:<id> | token:<id> | faction:<id>
   useEffect(() => {
     const f = params.get('focus');
-    if (!f || !data) return;
+    if (!f || !data || !location.pathname.endsWith('/map')) return;
     const [kind, id] = f.split(':') as [Focus['kind'], string];
     const r = rendererRef.current;
     if (kind === 'hex' || kind === 'token' || kind === 'faction') {
@@ -261,7 +262,7 @@ export function MapView() {
     }
     params.delete('focus');
     setParams(params, { replace: true });
-  }, [params, data]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [params, data, location.pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- cache helpers (optimistic edits flow through the query cache)
   const patchCache = (fn: (d: MapData) => MapData) => qc.setQueryData<MapData>(qk.map(world.id), (d) => (d ? fn(d) : d));
@@ -608,7 +609,8 @@ export function MapView() {
     };
     const onLeave = () => { setHover(null); if (rendererRef.current) { if (is3d(r())) (r() as HexMapRenderer3D).pointer = null; r().hoverId = null; r().brushIds = new Set(); r().invalidate(); } };
     const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.closest('input, textarea, select, [contenteditable="true"]') || !rendererRef.current) return;
+      if (e.code === 'Space' && e.type === 'keyup') { space = false; canvas.style.cursor = ''; }
+      if ((e.target as HTMLElement)?.closest('.world-module, input, textarea, select, [contenteditable="true"]') || !rendererRef.current) return;
       if (e.code === 'Space') { space = e.type === 'keydown'; canvas.style.cursor = space ? 'grab' : ''; if (space) e.preventDefault(); return; }
       if (e.type !== 'keydown' || e.metaKey || e.ctrlKey || e.altKey) return;
       const idx = ['1', '2', '3', '4', '5'].indexOf(e.key);

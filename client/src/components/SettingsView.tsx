@@ -92,7 +92,7 @@ export function SettingsView() {
         <h3 className="display" style={{ margin: '28px 0 6px' }}>Display</h3>
         <p className="muted" style={{ marginTop: 0 }}>Saved in this browser only.</p>
         <div className="card"><div className="card-body">
-          <label className="toggle"><input type="checkbox" checked={ambient} onChange={(e) => ambientPref.set(e.target.checked)} /> Show the world map behind pages</label>
+          <label className="toggle"><input type="checkbox" checked={ambient} onChange={(e) => ambientPref.set(e.target.checked)} /> Translucent module sheets</label>
           <label className="toggle" style={{ marginTop: 10 }}>
             <input type="checkbox" checked={glass} onChange={(e) => { const on = e.target.checked; glassPref.set(on ? 'full' : 'lite'); glassLite.set(!on); setGlass(on); }} />
             Frosted glass behind panels

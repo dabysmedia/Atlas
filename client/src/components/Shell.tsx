@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import {
   BookOpen, ChevronLeft, ChevronRight, ChevronsUpDown, Cloud, CloudDrizzle, CloudFog, CloudLightning, CloudMoon, CloudRain, CloudRainWind, CloudSun,
-  Dices, Flag, Hexagon, LogOut, Moon, Pause, Play, ScrollText, Search, Settings, Sunrise, Sunset, Swords, Sun, Wind, type LucideIcon,
+  Dices, Flag, Hexagon, LogOut, Maximize2, Minimize2, Moon, Pause, Play, ScrollText, Search, Settings, Sunrise, Sunset, Swords, Sun, Wind, X, type LucideIcon,
 } from 'lucide-react';
 import { api, ApiError, qk } from '../api';
 import { live, useLive } from '../live';
@@ -22,7 +22,7 @@ import { FactionsView } from '../factions/FactionsView';
 import { ChronicleView } from '../chronicle/ChronicleView';
 import { CampaignsView } from './CampaignsView';
 import { SettingsView } from './SettingsView';
-import { AmbientMap, useAmbientPref } from './AmbientMap';
+import { useAmbientPref } from './AmbientMap';
 import { daySweep, formatHour, useHour } from '../daylight';
 import { DAY_SPEEDS, hoursNow, type Daylight, type DaySpeed } from '../../../shared/daylight';
 import { WEATHER, WEATHER_KINDS, type Weather, type WeatherKind } from '../../../shared/weather';
@@ -218,7 +218,11 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
           {NAV.map((n, i) => (
             <span key={n.to} className="rail-slot">
               {i === NAV.length - 1 && <span className="rail-sep" aria-hidden />}
-              <NavLink to={`/w/${w.id}/${n.to}`} className={({ isActive }) => `${isActive ? 'active' : ''} ${i === NAV.length - 1 ? 'end' : ''}`} data-tip={n.label} aria-label={n.label}>
+              <NavLink to={`/w/${w.id}/${n.to}`} onClick={(e) => {
+                if (n.to !== 'map' && section === n.to && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+                  e.preventDefault(); navigate(`/w/${w.id}/map`);
+                }
+              }} className={({ isActive }) => `${isActive ? 'active' : ''} ${i === NAV.length - 1 ? 'end' : ''}`} data-tip={n.label} aria-label={n.label}>
                 {({ isActive }) => (
                   <>
                     {isActive && <motion.span layoutId="rail-mark" className="rail-mark" transition={{ type: 'spring', stiffness: 500, damping: 38 }} />}
@@ -234,7 +238,6 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
         <main className={`main ${ambient ? 'ambient-live' : ''}`}>
           {w && (
             <WorldCtx.Provider value={w}>
-              <AmbientMap key={w.id} section={section} />
               {/* Keyed by world: switching worlds remounts instead of cross-animating two worlds' routes. */}
               <WorldRoutes key={w.id} />
               <CommandPalette open={palette} onClose={() => setPalette(false)} />
@@ -251,15 +254,37 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
 
 function WorldRoutes() {
   const loc = useLocation();
-  // World id + section: switching either cross-fades; moving between wiki pages doesn't.
-  const section = loc.pathname.split('/').slice(0, 4).join('/');
+  const navigate = useNavigate();
+  const { worldId } = useParams();
+  const section = loc.pathname.split('/')[3] ?? 'map';
+  const module = NAV.find((n) => n.to === section && n.to !== 'map');
+  const [expanded, setExpanded] = useState(false);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (module) closeButton.current?.focus({ preventScroll: true }); }, [section]);
+  const close = () => {
+    navigate(`/w/${worldId}/map`);
+    document.querySelector<HTMLElement>('.rail a[aria-label="Map"]')?.focus({ preventScroll: true });
+  };
   return (
-    <AnimatePresence mode="popLayout" initial={false}>
-      <motion.div key={section} className="page-enter"
-        initial={{ opacity: 0, scale: 0.995 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }}>
-        <Suspense fallback={null}>
+    <>
+      {/* Only switching worlds replaces this map; routes operate in a sibling panel. */}
+      <div className="page-enter"><MapView /></div>
+      {module && <section className={`world-module ${expanded ? 'expanded' : ''}`} role="region" tabIndex={-1} aria-label={`${module.label} panel`}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' && !e.defaultPrevented && !(e.target as HTMLElement).closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) {
+            e.stopPropagation(); close();
+          }
+        }}>
+        <header className="world-module-head">
+          <module.icon size={18} /><strong>{module.label}</strong><span className="grow" />
+          <button className="iconbtn" aria-label={expanded ? 'Restore panel size' : 'Expand panel'} onClick={() => setExpanded((v) => !v)}>
+            {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
+          <button ref={closeButton} className="iconbtn" aria-label={`Close ${module.label}`} onClick={close}><X size={18} /></button>
+        </header>
+        <div className="world-module-content">
+        <Suspense fallback={<div className="world-module-loading">Loading {module.label}…</div>}>
           <Routes location={loc}>
-          <Route path="map" element={<MapView />} />
           <Route path="wiki" element={<WikiView />} />
           <Route path="wiki/:pageId" element={<WikiView />} />
           <Route path="factions" element={<FactionsView />} />
@@ -269,8 +294,10 @@ function WorldRoutes() {
           <Route path="*" element={<Navigate to="map" replace />} />
         </Routes>
         </Suspense>
-      </motion.div>
-    </AnimatePresence>
+        </div>
+      </section>}
+      {!module && section !== 'map' && <Navigate to="map" replace />}
+    </>
   );
 }
 

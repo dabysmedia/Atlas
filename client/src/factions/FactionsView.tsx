@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import { BookOpen, Check, ChevronDown, Dices, History, Plus, Trash2, X } from 'lucide-react';
 import { api, qk } from '../api';
+import { useDraft } from '../live';
 import type { Faction, FactionMeter, MeterBand, MeterChange, MeterDef, RollEntry, RollTable } from '../types';
 import { useWorld } from '../world';
 import { isLowTone } from '../../../shared/meters';
@@ -126,7 +127,7 @@ function FactionRow({ faction, meters, tables, open, onToggle }: { faction: Fact
   const qc = useQueryClient();
   const navigate = useNavigate();
   const pages = usePageIndex(world.id);
-  const [name, setName] = useState(faction.name);
+  const [name, setName] = useDraft(faction.name, faction.id);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const patch = async (p: Partial<Faction>) => {
     qc.setQueryData<Faction[]>(qk.factions(world.id), (xs) => xs?.map((f) => (f.id === faction.id ? { ...f, ...p } : f)));
@@ -380,7 +381,7 @@ function MeterDefs() {
 
 function MeterDefCard({ def, onChange }: { def: MeterDef; onChange: () => void }) {
   const world = useWorld();
-  const [d, setD] = useState(def);
+  const [d, setD] = useDraft(def, def.id);
   const dirty = JSON.stringify(d) !== JSON.stringify(def);
   const save = async () => {
     try {

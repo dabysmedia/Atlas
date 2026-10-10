@@ -731,8 +731,9 @@ export class HexMapRenderer3D extends HexMapRenderer {
     if (!this.w || !this.h) return;
     this.watchPace(raw);
     const moving = this.step(dt);
+    const gliding = this.stepGlides(dt, now);
     // Idle: the sea and sky still move, at half rate.
-    if (!moving && !this.dirty && !this.dragToken && (this.idleTick++ & 1)) return;
+    if (!moving && !gliding && !this.dirty && !this.dragToken && (this.idleTick++ & 1)) return;
     const t0 = performance.now();
     this.frame(now, moving);
     const ms = performance.now() - t0;

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import { Pencil, Plus, Trash2, X } from 'lucide-react';
 import { api, qk } from '../api';
+import { useDraft } from '../live';
 import type { WorldSummary } from '../types';
 import { Dialog } from './Dialog';
 import { toast, toastError } from './toast';
@@ -165,9 +166,9 @@ function CreateWorldDialog({ open, onClose, onCreated }: { open: boolean; onClos
 
 function RenameDialog({ world, onClose }: { world: WorldSummary | null; onClose: () => void }) {
   const qc = useQueryClient();
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  useEffect(() => { if (world) { setName(world.name); setDescription(world.description); } }, [world]);
+  // Keyed by world, not the row: the list refetching (another screen's change) mustn't wipe what's being typed.
+  const [name, setName] = useDraft(world?.name ?? '', world?.id);
+  const [description, setDescription] = useDraft(world?.description ?? '', world?.id);
   const save = useMutation({
     mutationFn: () => api(`/api/worlds/${world!.id}`, { method: 'PATCH', body: { name, description } }),
     onSuccess: () => {
@@ -194,7 +195,7 @@ function RenameDialog({ world, onClose }: { world: WorldSummary | null; onClose:
 function DeleteDialog({ world, onClose, onDeleted }: { world: WorldSummary | null; onClose: () => void; onDeleted: (id: string) => void }) {
   const qc = useQueryClient();
   const [confirm, setConfirm] = useState('');
-  useEffect(() => setConfirm(''), [world]);
+  useEffect(() => setConfirm(''), [world?.id]);
   const del = useMutation({
     mutationFn: () => api(`/api/worlds/${world!.id}`, { method: 'DELETE' }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: qk.worlds }); toast(`Deleted ${world!.name}`); onDeleted(world!.id); },

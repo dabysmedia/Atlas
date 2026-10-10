@@ -9,6 +9,7 @@ import { gridBounds, hexLabel, type Orientation } from '../../shared/hex.js';
 import { imageSize } from '../imagesize.js';
 import { fitModelPlacement } from '../placement.js';
 import { archiveModel, installModel, listArchive, restoreModel } from '../modelArchive.js';
+import { changed } from '../live.js';
 
 type P = { w: string; id: string };
 
@@ -29,6 +30,10 @@ async function worldHexes(db: Db, worldId: string, ids: string[]) {
 }
 
 const HexIds = z.array(Uuid).min(1).max(20_000);
+
+/** The fields a screen's map cache keeps, for live patches. */
+const hexRow = (h: typeof hexes.$inferSelect) => ({ id: h.id, q: h.q, r: h.r, terrain: h.terrain, state: h.state, name: h.name, notes: h.notes, wikiPageId: h.wikiPageId, data: h.data });
+const claimRow = (c: typeof claims.$inferSelect) => ({ id: c.id, hexId: c.hexId, factionId: c.factionId, kind: c.kind, sinceDay: c.sinceDay, note: c.note });
 
 const artMeta = { version: mapArt.version, width: mapArt.width, height: mapArt.height, mime: mapArt.mime, placement: mapArt.placement, updatedAt: mapArt.updatedAt };
 
@@ -83,13 +88,14 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const body = HexPatch.parse(req.body);
     const before = await db.query.hexes.findFirst({ where: eq(hexes.id, hex.id) });
     const [row] = await db.update(hexes).set({ ...body, updatedAt: new Date() }).where(eq(hexes.id, hex.id)).returning();
+    changed(req, { patches: [{ op: 'hex', hex: hexRow(row) }] });
     // Note edits are frequent autosaves; log the structural changes only.
-    const changed = (['terrain', 'state', 'name'] as const).filter((k) => body[k] !== undefined && body[k] !== before?.[k]);
-    if (changed.length) {
+    const edited = (['terrain', 'state', 'name'] as const).filter((k) => body[k] !== undefined && body[k] !== before?.[k]);
+    if (edited.length) {
       await logEvent(db, {
         worldId: w.id, kind: 'hex.edited',
-        summary: `Hex ${hex.label}: ${changed.map((k) => `${k} ${before?.[k] || '–'} → ${body[k] || '–'}`).join(', ')}`,
-        payload: { hexId: hex.id, from: Object.fromEntries(changed.map((k) => [k, before?.[k]])), to: Object.fromEntries(changed.map((k) => [k, body[k]])) },
+        summary: `Hex ${hex.label}: ${edited.map((k) => `${k} ${before?.[k] || '–'} → ${body[k] || '–'}`).join(', ')}`,
+        payload: { hexId: hex.id, from: Object.fromEntries(edited.map((k) => [k, before?.[k]])), to: Object.fromEntries(edited.map((k) => [k, body[k]])) },
       });
     }
     return row;
@@ -107,6 +113,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     if (body.terrain) set.terrain = body.terrain;
     if (body.state) set.state = body.state;
     await db.update(hexes).set(set).where(inArray(hexes.id, ids));
+    changed(req, { patches: [{ op: 'hexes', ids, set: { terrain: body.terrain, state: body.state } }] });
     const label = body.terrain
       ? `${w.terrainTypes.find((t) => t.key === body.terrain)?.name ?? body.terrain}`
       : `${w.hexStates.find((s) => s.key === body.state)?.name ?? body.state}`;
@@ -156,6 +163,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
       }
       return tx.select().from(claims).where(inArray(claims.hexId, ids));
     });
+    changed(req, { patches: [{ op: 'claims', hexIds: ids, claims: result.map(claimRow) }] });
     return result;
   });
 
@@ -170,6 +178,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const day = await worldDay(db, w.id);
     const [row] = await db.insert(claims).values({ ...body, note: body.note ?? '', sinceDay: day }).onConflictDoNothing().returning();
     if (row) await logEvent(db, { worldId: w.id, gameDay: day, kind: 'claim.changed', summary: `${faction.name} lays a ${body.kind} claim on hex ${hex.label}`, payload: { claimId: row.id, hexId: hex.id } });
+    if (row) changed(req, { patches: [{ op: 'claim', claim: claimRow(row) }] });
     return row ?? null;
   });
 
@@ -181,6 +190,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const [hex] = await worldHexes(db, w.id, [claim.hexId]);
     const faction = await db.query.factions.findFirst({ where: eq(factions.id, claim.factionId) });
     await db.delete(claims).where(eq(claims.id, claim.id));
+    changed(req, { patches: [{ op: 'claimGone', id: claim.id }] });
     await logEvent(db, { worldId: w.id, kind: 'claim.changed', summary: `${faction?.name ?? 'A faction'} drops its ${claim.kind} claim on hex ${hex.label}`, payload: { claim } });
     return { ok: true };
   });
@@ -210,6 +220,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     } else {
       await db.delete(campaignFog).where(and(eq(campaignFog.campaignId, camp.id), inArray(campaignFog.hexId, ids)));
     }
+    changed(req, { patches: [{ op: 'fog', campaignId: camp.id, hexIds: ids, explored: body.explored }] });
     await logEvent(db, {
       worldId: w.id, gameDay: day, campaignId: camp.id, kind: body.explored ? 'fog.revealed' : 'fog.hidden',
       summary: `${camp.name}: ${body.explored ? 'revealed' : 're-fogged'} ${ids.length} hex${ids.length === 1 ? '' : 'es'}`,
@@ -238,6 +249,8 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
       settlementId = s.id;
     }
     const [row] = await db.insert(tokens).values({ ...body, worldId: w.id, mapId: map.id, settlementId }).returning();
+    // A city or outpost brings a settlement row with it, so screens refetch the map for both.
+    changed(req, settlementId ? { scopes: ['map'] } : { patches: [{ op: 'token', token: row }] });
     await logEvent(db, { worldId: w.id, kind: 'token.created', summary: `${cap(body.kind)} "${body.name}" placed`, payload: { tokenId: row.id, hexId: body.hexId } });
     return row;
   });
@@ -260,6 +273,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
       });
     }
     if (body.name && tok.settlementId) await db.update(settlements).set({ name: body.name }).where(eq(settlements.id, tok.settlementId));
+    changed(req, { patches: [{ op: 'token', token: row }], scopes: body.name && tok.settlementId ? ['map'] : [] });
     return row;
   });
 
@@ -271,6 +285,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     // Removing a settlement token removes the settlement (it cascades to the token).
     if (tok.settlementId) await db.delete(settlements).where(eq(settlements.id, tok.settlementId));
     else await db.delete(tokens).where(eq(tokens.id, tok.id));
+    changed(req, tok.settlementId ? { scopes: ['map'] } : { patches: [{ op: 'tokenGone', id: tok.id }] });
     await logEvent(db, { worldId: w.id, kind: 'token.removed', summary: `${cap(tok.kind)} "${tok.name}" removed`, payload: { token: tok } });
     return { ok: true };
   });
@@ -294,6 +309,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
       .onConflictDoUpdate({ target: mapArt.mapId, set: { ...values, version: (prev?.version ?? 0) + 1 } })
       .returning(artMeta);
     await logEvent(db, { worldId: w.id, kind: 'map.art', summary: `${prev ? 'Replaced' : 'Added'} the map art (${info.width}×${info.height})`, payload: { version: row.version } });
+    changed(req, { patches: [{ op: 'art', art: row }] });
     return row;
   });
 
@@ -321,6 +337,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const body = req.body as { placement?: unknown; reset?: boolean };
     const placement = body.reset ? coverPlacement(map.layout, art.width, art.height) : { ...art.placement, ...Placement.parse(body.placement ?? {}) };
     const [row] = await db.update(mapArt).set({ placement, updatedAt: new Date() }).where(eq(mapArt.mapId, map.id)).returning(artMeta);
+    changed(req, { patches: [{ op: 'art', art: row }] });
     return row;
   });
 
@@ -329,6 +346,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const map = await rootMap(db, w.id);
     const gone = await db.delete(mapArt).where(eq(mapArt.mapId, map.id)).returning({ v: mapArt.version });
     if (gone.length) await logEvent(db, { worldId: w.id, kind: 'map.art', summary: 'Removed the map art' });
+    changed(req, { patches: [{ op: 'art', art: null }] });
     return { ok: true };
   });
 }
@@ -350,6 +368,7 @@ export function modelRoutes(app: FastifyInstance, db: Db) {
     await db.transaction((tx) => installModel(tx, map.id, { bytes: body, name, placement }));
     const [row] = await db.select(modelMeta).from(mapModel).where(eq(mapModel.mapId, map.id));
     await logEvent(db, { worldId: w.id, kind: 'map.model', summary: `${prev ? 'Replaced' : 'Added'} the 3D terrain model (${(body.length / 1e6).toFixed(1)} MB)`, payload: { version: row.version } });
+    changed(req, { patches: [{ op: 'model', model: row }] });
     return row;
   });
 
@@ -376,6 +395,7 @@ export function modelRoutes(app: FastifyInstance, db: Db) {
     const body = req.body as { placement?: unknown; reset?: boolean };
     const placement = body.reset ? fitModelPlacement(map.layout) : { ...m.placement, ...MPlacement.parse(body.placement ?? {}) };
     const [row] = await db.update(mapModel).set({ placement, updatedAt: new Date() }).where(eq(mapModel.mapId, map.id)).returning(modelMeta);
+    changed(req, { patches: [{ op: 'model', model: row }] });
     return row;
   });
 
@@ -384,6 +404,7 @@ export function modelRoutes(app: FastifyInstance, db: Db) {
     const map = await rootMap(db, w.id);
     const archived = await db.transaction((tx) => archiveModel(tx, map.id, 'removed'));
     if (archived) await logEvent(db, { worldId: w.id, kind: 'map.model', summary: 'Removed the 3D terrain model (kept in the model archive)' });
+    changed(req, { patches: [{ op: 'model', model: null }] });
     return { ok: true, archived };
   });
 
@@ -404,6 +425,7 @@ export function modelRoutes(app: FastifyInstance, db: Db) {
     if (!done) throw notFound('Archived model');
     await logEvent(db, { worldId: w.id, kind: 'map.model', summary: `Restored the 3D terrain model ${done.name} from the archive`, payload: { version: done.version } });
     const [row] = await db.select(modelMeta).from(mapModel).where(eq(mapModel.mapId, map.id));
+    changed(req, { patches: [{ op: 'model', model: row }] });
     return row;
   });
 }

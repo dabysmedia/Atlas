@@ -108,6 +108,11 @@ export class HexMapRenderer {
   focusFactionId: string | null = null;
   brushIds: Set<string> = new Set();
   dragToken: { token: Token; x: number; y: number } | null = null;
+  /**
+   * Markers shown away from their hex: dragged on another screen (following its stream, `hold` until the drop
+   * lands), or easing to a new hex after a move. Without one, a marker sits in its slot on its hex.
+   */
+  protected glides = new Map<string, { x: number; y: number; tx: number; ty: number; hold: number; to?: string | null }>();
   protected flashes = new Map<string, number>();
   protected raf = 0;
   protected last = performance.now();
@@ -191,10 +196,82 @@ export class HexMapRenderer {
         glyph: (t) => this.terrainGlyph.get(t) ?? 'none',
       });
     } else if (terrainChanged.length) this.painter.invalidate(terrainChanged);
-    this.tokens = d.tokens;
-    this.setClaims(d.claims, false);
+    this.moveTokens(d.tokens);
+    // Another screen's border change flashes like a local one (a local stroke already shows, so it doesn't twice).
+    this.setClaims(d.claims, sameShape);
     this.setFog(d.fog);
     this.dirty = true;
+  }
+
+  /** New marker rows: one that changed hex glides there from where it was drawn, rather than jumping. */
+  protected moveTokens(next: Token[]) {
+    const was = new Map(this.tokens.map((t) => [t.id, t]));
+    const from = new Map<string, { x: number; y: number }>();
+    for (const t of next) {
+      const old = was.get(t.id);
+      if (!old || old.hexId === t.hexId || !t.hexId || this.dragToken?.token.id === t.id) continue;
+      const p = this.tokenPos(old);
+      if (p) from.set(t.id, p);
+    }
+    this.tokens = next;
+    for (const [id, p] of from) {
+      const g = this.glides.get(id);
+      // The move a held drop was waiting for has landed: go on from the drop point.
+      if (g) g.hold = 0;
+      else this.glides.set(id, { ...p, tx: p.x, ty: p.y, hold: 0 });
+    }
+    for (const id of this.glides.keys()) if (!next.some((t) => t.id === id)) this.glides.delete(id);
+  }
+
+  /** Another screen is dragging this marker; positions in map units, about 25 a second. */
+  remoteDrag(id: string, x: number, y: number) {
+    let g = this.glides.get(id);
+    if (!g) {
+      const t = this.tokens.find((x) => x.id === id);
+      const p = (t && this.tokenPos(t)) ?? { x, y };
+      g = { ...p, tx: x, ty: y, hold: 0 };
+      this.glides.set(id, g);
+    }
+    // Held while the stream keeps coming (the dragging screen repeats itself while the pointer rests); a screen
+    // that vanished mid-drag lets go after a few seconds.
+    g.tx = x; g.ty = y; g.hold = performance.now() + 4000;
+    this.dirty = true;
+  }
+
+  /**
+   * A drag let go (here or on another screen) at a point. When it was dropped on a new hex, the marker waits there
+   * for the move to land rather than drifting back first; otherwise (or if nothing lands) it eases home.
+   */
+  dropToken(id: string, at: { x: number; y: number } | null, to?: string | null) {
+    const t = this.tokens.find((x) => x.id === id);
+    if (!t) { this.glides.delete(id); return; }
+    let g = this.glides.get(id);
+    if (!g && at) { g = { ...at, tx: at.x, ty: at.y, hold: 0 }; this.glides.set(id, g); }
+    if (!g) return;
+    if (at) { g.tx = at.x; g.ty = at.y; }
+    g.to = to;
+    g.hold = to && to !== t.hexId ? performance.now() + 2500 : 0;
+    this.dirty = true;
+  }
+
+  /** Ease each gliding marker toward where it is going. Returns true while any still moves. */
+  protected stepGlides(dt: number, now: number) {
+    if (!this.glides.size) return false;
+    const k = 1 - Math.exp(-dt * 13);
+    for (const [id, g] of this.glides) {
+      const t = this.tokens.find((x) => x.id === id);
+      if (!t) { this.glides.delete(id); continue; }
+      let tx = g.tx, ty = g.ty;
+      if (g.hold <= now) {
+        const home = this.slotPos(t);
+        if (!home) { this.glides.delete(id); continue; }
+        tx = home.x; ty = home.y;
+      }
+      g.x += (tx - g.x) * k; g.y += (ty - g.y) * k;
+      if (g.hold <= now && Math.hypot(tx - g.x, ty - g.y) < 0.3) this.glides.delete(id);
+    }
+    this.dirty = true;
+    return true;
   }
 
   protected hexesIn(minX: number, minY: number, maxX: number, maxY: number): PaintHex[] {
@@ -520,11 +597,12 @@ export class HexMapRenderer {
     const dt = Math.min(0.05, (now - this.last) / 1000);
     this.last = now;
     const moving = this.step(dt);
+    const gliding = this.stepGlides(dt, now);
     // Art resamples cheaply while the camera moves; one sharp frame follows when it settles.
     const camChanged = this.cam.x !== this.drawnCam.x || this.cam.y !== this.drawnCam.y || this.cam.zoom !== this.drawnCam.zoom;
     this.fastArt = moving || camChanged;
     if (!this.fastArt && this.artWasFast) this.dirty = true;
-    const animating = moving || this.flashes.size > 0 || this.selectedId !== null || this.dragToken !== null
+    const animating = moving || gliding || this.flashes.size > 0 || this.selectedId !== null || this.dragToken !== null
       || this.painting_pending || this.tokens.some((t) => t.kind === 'party');
     if (!this.dirty && !animating) return;
     // Throttle idle ambient animation (selection pulse, party glow) to ~30fps.
@@ -998,6 +1076,13 @@ export class HexMapRenderer {
   /** Tokens sharing a hex fan out around the center: settlements stay central, movers orbit. */
   tokenPos(t: Token): { x: number; y: number } | null {
     if (this.dragToken?.token.id === t.id) return { x: this.dragToken.x, y: this.dragToken.y };
+    const g = this.glides.get(t.id);
+    if (g) return { x: g.x, y: g.y };
+    return this.slotPos(t);
+  }
+
+  /** Where a marker rests on its hex. */
+  protected slotPos(t: Token): { x: number; y: number } | null {
     if (!t.hexId) return null;
     const h = this.byId.get(t.hexId);
     if (!h) return null;

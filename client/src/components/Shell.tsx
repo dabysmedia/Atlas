@@ -7,6 +7,8 @@ import {
   Dices, Flag, Hexagon, LogOut, Moon, Pause, Play, ScrollText, Search, Settings, Sunrise, Sunset, Swords, Sun, Wind, type LucideIcon,
 } from 'lucide-react';
 import { api, ApiError, qk } from '../api';
+import { live, useLive } from '../live';
+import { Presence } from './Presence';
 import type { World } from '../types';
 import { WorldCtx } from '../world';
 import { lastWorld } from '../prefs';
@@ -45,10 +47,15 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
   const [switcher, setSwitcher] = useState(!!noWorld);
   const [palette, setPalette] = useState(false);
   const wxKey = ['weather', worldId];
-  // Polled gently so weather, the day and the clock set from another screen reach this one; unchanged data doesn't re-render.
-  // Not while a weather change is saving, whose answer could land before the poll's and be undone by it.
+  // Live sync: one socket for as long as someone is signed in here, carrying the world on screen.
+  useEffect(() => live.start(qc), [qc]);
+  useEffect(() => { live.view(worldId ?? null); }, [worldId]);
+  const linked = useLive().status === 'live';
+  // Changes from other screens arrive over the socket. While it is down, a gentle poll still brings the weather, the
+  // day and the clock; not while a weather change is saving, whose answer could land before the poll's and be undone by it.
   const world = useQuery({
-    queryKey: qk.world(worldId ?? ''), enabled: !!worldId, refetchInterval: () => (qc.isMutating({ mutationKey: wxKey }) ? false : 30_000),
+    queryKey: qk.world(worldId ?? ''), enabled: !!worldId,
+    refetchInterval: () => (linked || qc.isMutating({ mutationKey: wxKey }) ? false : 30_000),
     queryFn: () => api<World>(`/api/worlds/${worldId}`),
   });
 
@@ -203,7 +210,8 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
             <button onClick={() => day.mutate(1)} aria-label="Next day" data-tip="Next day"><ChevronRight size={14} /></button>
           </motion.div>
         )}
-        <motion.button className="glass signout" onClick={logout} data-tip="Sign out" aria-label="Sign out" {...rise(3)}><LogOut size={15} /></motion.button>
+        {w && <Presence {...rise(3)} />}
+        <motion.button className="glass signout" onClick={logout} data-tip="Sign out" aria-label="Sign out" {...rise(4)}><LogOut size={15} /></motion.button>
       </header>
       {w && (
         <motion.nav className="rail glass" aria-label="Sections" data-tip-side="right" {...rise(1, { x: -12 })}>

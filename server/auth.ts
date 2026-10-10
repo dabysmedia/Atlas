@@ -50,6 +50,14 @@ declare module 'fastify' {
   interface FastifyRequest { userId?: string }
 }
 
+/** The user a session cookie belongs to, while the session lasts. */
+export async function sessionUser(db: Db, token: string | undefined) {
+  if (!token) return null;
+  const [row] = await db.select({ id: users.id, username: users.username }).from(sessions).innerJoin(users, eq(users.id, sessions.userId))
+    .where(and(eq(sessions.tokenHash, sha256(token)), gt(sessions.expiresAt, new Date())));
+  return row ?? null;
+}
+
 export function registerAuth(app: FastifyInstance, db: Db, opts: { secureCookies: boolean }) {
   const cookieOpts = {
     path: '/', httpOnly: true, sameSite: 'lax' as const, secure: opts.secureCookies,

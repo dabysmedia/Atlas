@@ -6,7 +6,7 @@ import {
   Archive, Box, Brush, CloudFog, Eye, EyeOff, Flag, Grid3x3, Image as ImageIcon, Layers, Map as MapIcon, Mountain, MousePointer2, Move,
   RotateCcw, Shield, Stamp, Trash2, Upload, X,
 } from 'lucide-react';
-import { api, ApiError, qk } from '../api';
+import { api, ApiError, clientHeaders, pendingWrites, qk } from '../api';
 import type { ArchivedModel, ArtPlacement, Claim, Hex, MapArt, MapData, MapModel, Token } from '../types';
 import { useWorld } from '../world';
 import { cameraPref, fogCampaign, layerPrefs, mapModePref, panelPrefs } from '../prefs';
@@ -20,6 +20,7 @@ import { DIRS, key } from '../../../shared/hex';
 import type { HexMapRenderer3D } from '../map3d/renderer3d';
 import { is3d, load3d, webgl2Available } from '../map3d/support';
 import { daySweep } from '../daylight';
+import { live } from '../live';
 import type { Weather } from '../../../shared/weather';
 
 const HAS_WEBGL2 = typeof document !== 'undefined' && webgl2Available();
@@ -122,15 +123,29 @@ export function MapView() {
   useEffect(() => { mapModePref.set(modePref); }, [modePref]);
 
   const placedCamera = useRef(false);
+  // A brush stroke or marker drag in progress shows its own edits ahead of the cache; changes arriving from other
+  // screens meanwhile wait for it to end rather than wiping the stroke from view.
+  const interacting = useRef(false);
+  const [held, setHeld] = useState(0);
+  const heldData = useRef(false);
   useEffect(() => {
     const r = rendererRef.current;
     if (!r || !data) return;
+    if (interacting.current) { heldData.current = true; return; }
+    heldData.current = false;
     r.setData({
       orientation: data.map.layout.orientation, hexes: data.hexes, claims: data.claims, tokens: data.tokens,
       factions: data.factions, terrain: world.terrainTypes, states: world.hexStates,
       fog: fogCamp && fogQ.data ? new Set(fogQ.data) : null,
     });
-  }, [data, fogQ.data, fogCamp, world.terrainTypes, world.hexStates, world.id, gen]);
+  }, [data, fogQ.data, fogCamp, world.terrainTypes, world.hexStates, world.id, gen, held]);
+  // Markers other screens are dragging glide along with them.
+  useEffect(() => live.onDrag((m) => {
+    const r = rendererRef.current;
+    if (!r) return;
+    if (m.end) r.dropToken(m.token, { x: m.x, y: m.y }, m.to);
+    else r.remoteDrag(m.token, m.x, m.y);
+  }), [gen]);
 
   // 3D: the world's model (or relief from its hexes), and the time of day.
   const model: MapModel | null = data?.map.model ?? null;
@@ -284,7 +299,9 @@ export function MapView() {
       } else if (tool === 'claim') {
         const factionId = brush.claim === 'none' ? null : brush.claim;
         const claims = await api<Claim[]>(`/api/worlds/${world.id}/claims/control`, { body: { hexIds: ids, factionId } });
-        patchCache((d) => ({ ...d, claims: [...d.claims.filter((c) => !(ids.includes(c.hexId) && c.kind === 'control')), ...claims] }));
+        // The answer holds every claim now on those hexes, the others included.
+        const on = new Set(ids);
+        patchCache((d) => ({ ...d, claims: [...d.claims.filter((c) => !on.has(c.hexId)), ...claims] }));
         qc.invalidateQueries({ queryKey: qk.factions(world.id) });
       } else if (tool === 'fog' && fogCamp) {
         const explored = brush.fog === 'reveal';
@@ -318,7 +335,7 @@ export function MapView() {
     if (!/\.glb$/i.test(file.name)) { toast('That file is not a .glb model.'); return; }
     if (file.size > 40 * 1024 * 1024) { toast('Models up to 40 MB, please. Larger exports can be baked down with scripts/bake-model.mjs.'); return; }
     try {
-      const res = await fetch(`/api/worlds/${world.id}/map/model`, { method: 'PUT', body: file, headers: { 'content-type': 'model/gltf-binary', 'x-file-name': file.name }, credentials: 'same-origin' });
+      const res = await pendingWrites.track(fetch(`/api/worlds/${world.id}/map/model`, { method: 'PUT', body: file, headers: { ...clientHeaders, 'content-type': 'model/gltf-binary', 'x-file-name': file.name }, credentials: 'same-origin' }));
       const body = await res.json();
       if (!res.ok) throw new ApiError(res.status, body?.error ?? res.statusText);
       patchCache((d) => ({ ...d, map: { ...d.map, model: body as MapModel } }));
@@ -356,7 +373,7 @@ export function MapView() {
     if (!file.type.startsWith('image/')) { toast('That file is not an image.'); return; }
     if (file.size > 25 * 1024 * 1024) { toast('Images up to 25 MB, please.'); return; }
     try {
-      const res = await fetch(`/api/worlds/${world.id}/map/art`, { method: 'PUT', body: file, headers: { 'content-type': file.type }, credentials: 'same-origin' });
+      const res = await pendingWrites.track(fetch(`/api/worlds/${world.id}/map/art`, { method: 'PUT', body: file, headers: { ...clientHeaders, 'content-type': file.type }, credentials: 'same-origin' }));
       const body = await res.json();
       if (!res.ok) throw new ApiError(res.status, body?.error ?? res.statusText);
       const meta = body as MapArt;
@@ -403,6 +420,27 @@ export function MapView() {
     let dragTok: Token | null = null;
     let pinchDist = 0;
     let space = false;
+    // The marker being dragged streams to other screens: at most every 40 ms, its last position always, and
+    // repeated each second while the pointer rests so they keep holding it.
+    let dragOut: { token: string; x: number; y: number } | null = null;
+    let dragSent: { token: string; x: number; y: number } | null = null;
+    let dragTimer = 0, dragKeep = 0, lastSent = 0;
+    const flushDrag = () => { dragTimer = 0; if (dragOut) { live.drag(dragOut); dragSent = dragOut; dragOut = null; lastSent = performance.now(); } };
+    const streamDrag = (token: string, x: number, y: number) => {
+      dragOut = { token, x, y };
+      if (!dragTimer) dragTimer = window.setTimeout(flushDrag, Math.max(0, 40 - (performance.now() - lastSent)));
+      if (!dragKeep) dragKeep = window.setInterval(() => { if (dragSent && !dragOut) live.drag(dragSent); }, 1000);
+    };
+    const endDrag = (token: string, at: { x: number; y: number }, to: string | null) => {
+      window.clearTimeout(dragTimer); window.clearInterval(dragKeep);
+      dragTimer = dragKeep = 0;
+      if (dragSent || dragOut) live.drag({ token, ...at, end: true, to });
+      dragOut = dragSent = null;
+    };
+    const settle = () => {
+      interacting.current = false;
+      if (heldData.current) setHeld((n) => n + 1);
+    };
 
     const pos = (e: PointerEvent | WheelEvent | MouseEvent) => {
       const b = canvas.getBoundingClientRect();
@@ -443,11 +481,11 @@ export function MapView() {
       const t = toolRef.current.tool;
       if (t === 'select') {
         const tok = r().tokenAt(p.x, p.y);
-        if (tok) { dragTok = tok; mode = 'token'; return; }
+        if (tok) { dragTok = tok; mode = 'token'; interacting.current = true; return; }
         mode = 'maybe-click';
       } else {
         if (t === 'fog' && !toolRef.current.fogCamp) { mode = 'maybe-click'; return; }
-        mode = 'stroke'; stroke = new Set(); strokeAt(p);
+        mode = 'stroke'; stroke = new Set(); interacting.current = true; strokeAt(p);
       }
     };
 
@@ -490,6 +528,7 @@ export function MapView() {
         if (!r().dragToken && Math.hypot(p.x - start.x, p.y - start.y) < 4) { lastMove = { ...p, t: now }; return; }
         const w = r().screenToWorld(p.x, p.y);
         r().dragToken = { token: dragTok, x: w.x, y: w.y };
+        streamDrag(dragTok.id, w.x, w.y);
         r().invalidate();
         canvas.style.cursor = 'grabbing';
       } else {
@@ -502,6 +541,7 @@ export function MapView() {
       if (!rendererRef.current) return;
       const p = pos(e);
       pointers.delete(e.pointerId);
+      settle();
       if (mode === 'pinch') { if (pointers.size === 0) mode = 'none'; return; }
       if (mode === 'pan') {
         if (performance.now() - lastMove.t < 80 && Math.hypot(vel.x, vel.y) > 120) r().fling(vel.x, vel.y);
@@ -513,9 +553,16 @@ export function MapView() {
         stroke = new Set();
       } else if (mode === 'token' && dragTok) {
         const dragging = r().dragToken;
-        r().dragToken = null;
         const h = r().hexAt(p.x, p.y);
-        if (dragging && h && h.id !== dragTok.hexId) handlers.current.moveToken(dragTok, h.id);
+        const to = dragging && h && h.id !== dragTok.hexId ? h.id : null;
+        if (dragging) {
+          // Let go where it was dropped: it waits there for the move to land, or eases home if there's none.
+          const at = { x: dragging.x, y: dragging.y };
+          r().dropToken(dragTok.id, at, to);
+          endDrag(dragTok.id, at, to);
+        }
+        r().dragToken = null;
+        if (to) handlers.current.moveToken(dragTok, to);
         else if (!dragging) setFocus({ kind: 'token', id: dragTok.id });
         r().invalidate();
         dragTok = null;

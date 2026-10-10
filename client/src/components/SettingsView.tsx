@@ -8,6 +8,7 @@ import { toast, toastError } from './toast';
 import { ambientPref, glassPref } from '../prefs';
 import { glassLite } from './MapChrome';
 import { useAmbientPref } from './AmbientMap';
+import { useDraft } from '../live';
 
 const GLYPHS = ['none', 'grass', 'trees', 'hills', 'peaks', 'reeds', 'dunes', 'waves'];
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `t${Date.now()}`;
@@ -15,11 +16,12 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(
 export function SettingsView() {
   const world = useWorld();
   const qc = useQueryClient();
-  const [name, setName] = useState(world.name);
-  const [description, setDescription] = useState(world.description);
-  const [accent, setAccent] = useState(world.accent);
-  const [terrain, setTerrain] = useState<TerrainType[]>(world.terrainTypes);
-  const [states, setStates] = useState<HexStateType[]>(world.hexStates);
+  // Unsaved edits stay put; fields not touched here follow changes saved from other screens.
+  const [name, setName] = useDraft(world.name);
+  const [description, setDescription] = useDraft(world.description);
+  const [accent, setAccent] = useDraft(world.accent);
+  const [terrain, setTerrain] = useDraft<TerrainType[]>(world.terrainTypes);
+  const [states, setStates] = useDraft<HexStateType[]>(world.hexStates);
   const ambient = useAmbientPref();
   const [glass, setGlass] = useState(() => !glassLite.get());
   const dirty = name !== world.name || description !== world.description || accent !== world.accent

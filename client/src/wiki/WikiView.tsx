@@ -9,6 +9,7 @@ import {
   Bold, Heading2, Heading3, Italic, Link2, List, ListOrdered, Plus, Quote, Search, Strikethrough, Trash2,
 } from 'lucide-react';
 import { api, qk } from '../api';
+import { canonical } from '../live';
 import type { Page, PageIndex } from '../types';
 import { useWorld } from '../world';
 import { lastPage } from '../prefs';
@@ -152,6 +153,9 @@ function PageEditor({ pageId }: { pageId: string }) {
   const timer = useRef<number | undefined>(undefined);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const loaded = useRef(false);
+  const saving = useRef(false);
+  /** The stored page as this editor last took it in (or saved it), to tell another screen's edit from its own. */
+  const shown = useRef({ title: '', category: '', content: '' });
 
   const flush = async () => {
     window.clearTimeout(timer.current);
@@ -159,9 +163,11 @@ function PageEditor({ pageId }: { pageId: string }) {
     if (!Object.keys(body).length) return;
     pending.current = {};
     setSave('saving');
+    saving.current = true;
     try {
       if (body.content) body.content = resolveLinks(body.content);
       const row = await api<PageIndex>(`/api/worlds/${world.id}/pages/${pageId}`, { method: 'PATCH', body });
+      shown.current = { title: row.title, category: row.category, content: body.content ? canonical(body.content) : shown.current.content };
       setTitleError('');
       qc.setQueryData<PageIndex[]>(qk.pages(world.id), (xs) => [row, ...(xs ?? []).filter((x) => x.id !== row.id)]);
       qc.setQueryData<Page>(qk.page(world.id, pageId), (p) => (p ? { ...p, ...row, ...(body.content ? { content: body.content } : {}) } : p));
@@ -173,7 +179,7 @@ function PageEditor({ pageId }: { pageId: string }) {
       const msg = e instanceof Error ? e.message : 'Save failed';
       if (body.title && /title/.test(msg)) { setTitleError(msg); setSave('saved'); }
       else { pending.current = { ...body, ...pending.current }; setSave('error'); toastError(e); }
-    }
+    } finally { saving.current = false; }
   };
   const queue = (patch: typeof pending.current) => {
     pending.current = { ...pending.current, ...patch };
@@ -206,10 +212,28 @@ function PageEditor({ pageId }: { pageId: string }) {
     editor.commands.setContent(page.data.content as object, { emitUpdate: false });
     setTitle(page.data.title);
     setCategory(page.data.category);
+    shown.current = { title: page.data.title, category: page.data.category, content: canonical(page.data.content) };
     loaded.current = true;
     const fresh = (page.data as { _fresh?: boolean })._fresh;
     // A brand-new page: select the placeholder title so typing replaces it.
     if (fresh) requestAnimationFrame(() => { titleRef.current?.focus(); titleRef.current?.select(); });
+  }, [page.data, editor]);
+
+  // Another screen saved this page: take its version in, unless this one has typing of its own still to save
+  // (its save then wins). The cursor stays where it was, as near as the new text allows.
+  useEffect(() => {
+    const p = page.data;
+    if (!p || !editor || !loaded.current || saving.current || Object.keys(pending.current).length) return;
+    if (p.title !== shown.current.title) setTitle(p.title);
+    if (p.category !== shown.current.category) setCategory(p.category);
+    const content = canonical(p.content);
+    if (content !== shown.current.content) {
+      const { from, to } = editor.state.selection;
+      editor.commands.setContent(p.content as object, { emitUpdate: false });
+      const end = editor.state.doc.content.size;
+      editor.commands.setTextSelection({ from: Math.min(from, end), to: Math.min(to, end) });
+    }
+    shown.current = { title: p.title, category: p.category, content };
   }, [page.data, editor]);
 
   useEffect(() => {

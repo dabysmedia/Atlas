@@ -8,6 +8,30 @@ a wiki, factions with meters, campaigns with party fog, and an append-only chron
 - **Server:** Node 22, Fastify 5, Drizzle ORM on PostgreSQL. One process serves the API and the built client.
 - **Client:** React 19 + Vite, TanStack Query, TipTap (wiki editor), Motion (animation), Canvas 2D hex renderer.
 - **Search:** Postgres full-text search (weighted title + body, prefix matching) plus trigram fuzzy title matching.
+- **Live sync:** a WebSocket per open screen (`@fastify/websocket`), so every edit reaches everyone viewing the world at once.
+
+## Live sync
+
+Every screen keeps one socket, `GET /api/live`, signed in with the same session cookie (a cross-site Origin is refused)
+and subscribed to the world it shows. The server half is `server/live.ts`, the client half `client/src/live.ts`.
+
+- **Changes.** After a mutating route answers, everyone on that world hears what changed. Map edits that come in
+  bursts (hex paint and edits, claims, markers, fog, map art and models) carry the changed rows, which screens patch
+  into their query cache, so the map redraws without refetching. The world clock and weather carry the world's
+  fields. Everything else names the parts of the cache to refetch ("scopes"). `ROUTE_SCOPES` lists every mutating
+  route; one missing from it stops the server at boot.
+- **Echoes.** Each tab sends an `x-atlas-client` id with its requests; its own changes come back tagged with it and
+  are skipped. Refetches heard while the tab has a write of its own in flight wait for it to land, and form fields
+  keep what is being typed (`useDraft`); the last save wins.
+- **Marker drags** stream positions (about 25 a second, never stored) so others see the marker move; the drop saves
+  through the usual `PATCH`, and remote moves glide rather than jump.
+- **Presence.** The top bar shows who has the world open, one avatar per screen, and whether this one is live.
+- **Reconnects.** Heartbeats drop dead sockets on both ends; screens reconnect with backoff and refetch the world they
+  show. While disconnected, the world (clock and weather) is polled every 30 s.
+
+The hub delivers in-process, which suits the single Railway replica. Its `LiveBus` interface is where Postgres
+`LISTEN/NOTIFY` or Redis would go for more than one, and its `deliver` is where player accounts will filter what each
+connection receives.
 
 ## Run locally
 
@@ -23,6 +47,8 @@ Production build: `npm run build && npm start`.
 
 Tests: `TEST_DATABASE_URL=postgres://… npm test` (wipes and rebuilds the schema in that database).
 Browser smoke test: `BASE_URL=… ATLAS_PASS=… node scripts/smoke.mjs` (needs Playwright's Chromium).
+Live sync across browsers: `BASE_URL=… ATLAS_PASS=… node scripts/live.mjs` (`RESTART_CMD` also checks reconnecting
+after a server restart; `LIVE_3D=1` adds the 3D map).
 
 ## Deploy (Railway)
 

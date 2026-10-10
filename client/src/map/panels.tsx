@@ -15,6 +15,7 @@ import { toastError } from '../components/toast';
 import { Dialog } from '../components/Dialog';
 import { bandFor } from '../../../shared/meters';
 import { markerSprite } from './markers';
+import { useDraft } from '../live';
 
 export const TOKEN_KINDS: { kind: TokenKind; label: string }[] = [
   { kind: 'city', label: 'City' }, { kind: 'outpost', label: 'Outpost' }, { kind: 'party', label: 'Party' },
@@ -143,9 +144,8 @@ export function HexPanel({ hex, data, fogCampaignId, explored, label, onClose, o
   const { world, qc, patch, touch } = useMapCache();
   const navigate = useNavigate();
   const pages = usePageIndex(world.id);
-  const [name, setName] = useState(hex.name);
+  const [name, setName] = useDraft(hex.name, hex.id);
   const nameT = useRef<number | undefined>(undefined);
-  useEffect(() => setName(hex.name), [hex.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const patchHex = async (p: Partial<Hex>) => {
     patch((d) => ({ ...d, hexes: d.hexes.map((h) => (h.id === hex.id ? { ...h, ...p } : h)) }));
@@ -169,7 +169,8 @@ export function HexPanel({ hex, data, fogCampaignId, explored, label, onClose, o
   const setControl = async (factionId: string | null) => {
     try {
       const res = await api<Claim[]>(`/api/worlds/${world.id}/claims/control`, { body: { hexIds: [hex.id], factionId } });
-      patch((d) => ({ ...d, claims: [...d.claims.filter((c) => !(c.hexId === hex.id && c.kind === 'control')), ...res] }));
+      // The answer holds every claim now on the hex, the others included.
+      patch((d) => ({ ...d, claims: [...d.claims.filter((c) => c.hexId !== hex.id), ...res] }));
       qc.invalidateQueries({ queryKey: qk.factions(world.id) });
       touch();
     } catch (e) { toastError(e); }
@@ -363,8 +364,7 @@ export function TokenPanel({ token, data, onClose, onFocus, onLocate, snap }: {
   const faction = data.factions.find((f) => f.id === token.factionId);
   const color = token.color ?? faction?.color ?? '#b9b2a3';
   const hex = data.hexes.find((h) => h.id === token.hexId);
-  const [name, setName] = useState(token.name);
-  useEffect(() => setName(token.name), [token.id, token.name]);
+  const [name, setName] = useDraft(token.name, token.id);
 
   const patchToken = async (p: Partial<Token>) => {
     patch((d) => ({ ...d, tokens: d.tokens.map((t) => (t.id === token.id ? { ...t, ...p } : t)) }));

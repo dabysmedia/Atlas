@@ -4,10 +4,12 @@ import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
+import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
 import { z } from 'zod';
 import { createDb, runMigrations } from './db/index.js';
-import { registerAuth, ensureOwner } from './auth.js';
+import { registerAuth, ensureOwner, sessionUser, COOKIE } from './auth.js';
+import { LiveHub, LocalBus, liveRoutes } from './live.js';
 import { HttpError } from './history.js';
 import { worldRoutes } from './routes/worlds.js';
 import { wikiRoutes } from './routes/wiki.js';
@@ -25,9 +27,12 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
   await runMigrations(db);
 
   const app = Fastify({ logger: opts.logger ?? false, trustProxy: true, bodyLimit: 8 * 1024 * 1024 });
-  app.addHook('onClose', async () => { await pool.end(); });
+  // One process, so the hub's bus is in-process (see server/live.ts for running several).
+  const live = new LiveHub(new LocalBus(), async (token) => !!(await sessionUser(db, token)));
+  app.addHook('onClose', async () => { live.close(); await pool.end(); });
   await app.register(cookie);
   await app.register(rateLimit, { global: false });
+  await app.register(websocket, { options: { maxPayload: 64 * 1024 } });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof HttpError) return reply.code(err.status).send({ error: err.message });
@@ -44,6 +49,12 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
   // Everything else under /api requires the owner's session.
   await app.register(async (api) => {
     api.addHook('preHandler', app.requireUser);
+    // First, so every mutating route below is held to broadcasting its changes.
+    liveRoutes(api, live, async (req) => {
+      const token = req.cookies[COOKIE];
+      const u = await sessionUser(db, token);
+      return u && token ? { name: u.username, token } : null;
+    });
     worldRoutes(api, db);
     wikiRoutes(api, db);
     mapRoutes(api, db);
@@ -61,7 +72,7 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
       return reply.header('cache-control', 'no-cache').type('text/html').send(indexHtml);
     });
   }
-  return { app, db };
+  return { app, db, live };
 }
 
 async function main() {

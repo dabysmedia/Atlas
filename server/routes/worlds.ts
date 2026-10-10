@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Db, Tx } from '../db/index.js';
 import { worlds } from '../db/schema.js';
 import { logEvent, notFound } from '../history.js';
+import { changed } from '../live.js';
 import { createWorld, deleteWorld, seedDemoWorld } from '../worlds.js';
 import { seedNewWorld } from '../lore/newworld.js';
 import { DAY_SPEEDS, DEFAULT_DAYLIGHT, hoursNow, type Daylight, type DaySpeed } from '../../shared/daylight.js';
@@ -86,7 +87,7 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
     const w = await getWorld(db, (req.params as { w: string }).w);
     const body = DaylightBody.parse(req.body);
     // Locked like the day, so a pause and a midnight rollover from another screen apply one after the other.
-    return db.transaction(async (tx) => {
+    const res = await db.transaction(async (tx) => {
       let cur = await lockClock(tx, w.id);
       const now = new Date();
       // A pause or speed change in the moment after midnight, before any screen asked for the next day, starts it
@@ -98,6 +99,8 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
       await tx.update(worlds).set({ daylight }).where(eq(worlds.id, w.id));
       return { daylight, currentDay: cur.currentDay, weather: cur.weather };
     });
+    changed(req, { patches: [{ op: 'world', world: res }] });
+    return res;
   });
 
   /** Set today's weather by hand and/or whether each new day rolls its own (a per-world DM setting). */
@@ -115,6 +118,7 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
       if (changed) await logEvent(tx, { worldId: w.id, gameDay: currentDay, kind: 'weather.changed', summary: weatherSummary(next.kind, cur.kind), payload: { from: cur.kind, to: next.kind } });
       return next;
     });
+    changed(req, { patches: [{ op: 'world', world: { weather } }] });
     return { weather };
   });
 
@@ -130,6 +134,7 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
       await logEvent(tx, { worldId: w.id, gameDay: currentDay, kind: 'weather.changed', summary: weatherSummary(kind, cur.kind), payload: { from: cur.kind, to: kind, rolled: true } });
       return next;
     });
+    changed(req, { patches: [{ op: 'world', world: { weather } }] });
     return { weather };
   });
 
@@ -168,6 +173,7 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
     const body = Patch.parse(req.body);
     const [row] = await db.update(worlds).set({ ...body, updatedAt: new Date() }).where(eq(worlds.id, w.id)).returning();
     if (body.name && body.name !== w.name) await logEvent(db, { worldId: w.id, kind: 'world.renamed', summary: `World renamed from "${w.name}" to "${body.name}"` });
+    changed(req, { patches: [{ op: 'world', world: row }] });
     return row;
   });
 
@@ -180,7 +186,7 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
   app.post('/api/worlds/:w/day', async (req) => {
     const w = await getWorld(db, (req.params as { w: string }).w);
     const body = Day.parse(req.body);
-    return db.transaction(async (tx) => {
+    const res = await db.transaction(async (tx) => {
       // Locked, so two tabs passing midnight together roll the day (and its weather) over once.
       const cur = await lockClock(tx, w.id);
       const now = new Date();
@@ -189,6 +195,9 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
       if (body.rollover) return body.rollover.from === cur.currentDay && midnightDue(cur.daylight, now) ? rollOver(tx, w.id, cur, cur.daylight, now) : cur;
       return moveDay(tx, w.id, cur, Math.max(1, body.day ?? cur.currentDay + (body.advance ?? 1)), cur.daylight, now);
     });
+    // A day moved by hand sweeps across every open map, as it does on the screen that moved it.
+    changed(req, { patches: [{ op: 'world', world: res, sweep: !body.rollover }] });
+    return res;
   });
 
   app.post('/api/worlds/reorder', async (req) => {

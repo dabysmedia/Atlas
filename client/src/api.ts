@@ -4,14 +4,34 @@ export class ApiError extends Error {
   constructor(public status: number, message: string, public body?: unknown) { super(message); }
 }
 
+const uuid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
+/** This tab. Sent with every request, so live sync (live.ts) can tell this tab's own changes when they come back. */
+export const CLIENT_ID = uuid();
+export const clientHeaders = { 'x-atlas-client': CLIENT_ID };
+
+/** Writes this tab has in flight; live sync holds back refetches until they land, so none brings back an older value. */
+export const pendingWrites = {
+  count: 0,
+  waiting: new Set<() => void>(),
+  whenSettled(fn: () => void) { if (this.count === 0) fn(); else this.waiting.add(fn); },
+  async track<T>(p: Promise<T>): Promise<T> {
+    this.count++;
+    try { return await p; } finally {
+      if (--this.count === 0) { const fns = [...this.waiting]; this.waiting.clear(); fns.forEach((f) => f()); }
+    }
+  },
+};
+
 export async function api<T = unknown>(path: string, init?: { method?: string; body?: unknown; signal?: AbortSignal }): Promise<T> {
-  const res = await fetch(path, {
-    method: init?.method ?? (init?.body !== undefined ? 'POST' : 'GET'),
-    headers: init?.body !== undefined ? { 'content-type': 'application/json' } : undefined,
+  const method = init?.method ?? (init?.body !== undefined ? 'POST' : 'GET');
+  const req = fetch(path, {
+    method,
+    headers: { ...clientHeaders, ...(init?.body !== undefined ? { 'content-type': 'application/json' } : {}) },
     body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
     credentials: 'same-origin',
     signal: init?.signal,
   });
+  const res = await (method === 'GET' ? req : pendingWrites.track(req));
   const text = await res.text();
   const data = text ? JSON.parse(text) : undefined;
   if (!res.ok) {

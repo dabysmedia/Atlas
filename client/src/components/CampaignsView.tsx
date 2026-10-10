@@ -5,6 +5,7 @@ import { api, qk } from '../api';
 import type { Campaign } from '../types';
 import { useWorld } from '../world';
 import { toastError } from './toast';
+import { useDraft } from '../live';
 
 export function CampaignsView() {
   const world = useWorld();
@@ -34,8 +35,8 @@ export function CampaignsView() {
           <tbody>
             {(list.data ?? []).map((c) => (
               <tr key={c.id}>
-                <td><input className="input bare" defaultValue={c.name} onBlur={(e) => e.target.value.trim() && e.target.value !== c.name && patch(c, { name: e.target.value.trim() })} /></td>
-                <td><input className="input bare" defaultValue={c.system} placeholder="System" onBlur={(e) => e.target.value !== c.system && patch(c, { system: e.target.value })} /></td>
+                <td><DraftInput value={c.name} keyed={c.id} onSave={(v) => v.trim() && v !== c.name && patch(c, { name: v.trim() })} /></td>
+                <td><DraftInput value={c.system} keyed={c.id} placeholder="System" onSave={(v) => v !== c.system && patch(c, { system: v })} /></td>
                 <td>
                   <select className="select" value={c.status} onChange={(e) => patch(c, { status: e.target.value })}>
                     <option value="active">Active</option><option value="paused">Paused</option><option value="finished">Finished</option>
@@ -54,4 +55,10 @@ export function CampaignsView() {
       </div>
     </div>
   );
+}
+
+/** A cell that saves on blur, and shows other screens' edits until this one starts typing. */
+function DraftInput({ value, keyed, placeholder, onSave }: { value: string; keyed: string; placeholder?: string; onSave: (v: string) => void }) {
+  const [v, setV] = useDraft(value, keyed);
+  return <input className="input bare" value={v} placeholder={placeholder} onChange={(e) => setV(e.target.value)} onBlur={() => onSave(v)} />;
 }

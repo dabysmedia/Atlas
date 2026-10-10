@@ -154,7 +154,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.glCanvas = glCanvas;
     this.hud = hud;
     this.hudCtx = hud.getContext('2d')!;
-    this.gl = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, stencil: true, powerPreference: 'high-performance' });
+    this.gl = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, powerPreference: 'high-performance' });
     this.gl.outputColorSpace = THREE.SRGBColorSpace;
     this.gl.toneMapping = THREE.ACESFilmicToneMapping;
     this.gl.shadowMap.enabled = true;

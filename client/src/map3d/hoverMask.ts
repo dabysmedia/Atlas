@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { corner, type Orientation } from '../../../shared/hex';
 
-/** A surface mask, never a projected copy of the map inside a cloud. */
+/** A terrain-following outline drawn over atmosphere, without revealing a hex interior. */
 export class HoverMask {
   readonly mesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, side: THREE.DoubleSide,
@@ -18,18 +18,15 @@ export class HoverMask {
         float edge=1.0-smoothstep(0.0,mix(1.6,2.4,uSelected)*fwidth(d),-d);
         float pulse=0.5+0.5*sin(uTime/420.0);
         vec3 color=mix(vec3(0.94,0.98,0.97),vec3(0.56,0.91,0.89),uSelected);
-        float alpha=mix(mix(0.06,0.6,edge),mix(0.08+pulse*0.06,0.75+pulse*0.25,edge),uSelected);
+        float alpha=edge*mix(0.8,0.75+pulse*0.25,uSelected);
         gl_FragColor=vec4(color,alpha*uHighlight);
       }`,
-    stencilWrite: true, stencilRef: 1, stencilFunc: THREE.AlwaysStencilFunc,
-    stencilZPass: THREE.ReplaceStencilOp,
   }));
   private signature = '';
 
   constructor(selection = false) {
     this.mesh.material.uniforms.uSelected.value = selection ? 1 : 0;
-    this.mesh.material.stencilWrite = !selection;
-    this.mesh.renderOrder = 3;
+    this.mesh.renderOrder = 8;
     this.mesh.frustumCulled = false;
     this.mesh.visible = false;
   }

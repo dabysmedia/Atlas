@@ -170,14 +170,11 @@ export class Atmosphere {
     const shared = {
       uLit: { value: new THREE.Color() }, uShade: { value: new THREE.Color() },
     };
-    // Only the terrain-following hovered hex writes 1 into the stencil. Clouds cover every
-    // other map pixel; they never sample, reproject or bend the map texture.
-    const hoverMask = { stencilWrite: true, stencilWriteMask: 0, stencilRef: 1, stencilFunc: THREE.NotEqualStencilFunc };
     this.cloudMat = new THREE.ShaderMaterial({
       uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
         uPuffs: { value: this.puffTex }, uOpacity: { value: 1 }, uThinOut: { value: 0 }, uRim: { value: new THREE.Color() }, uKeyDir: { value: new THREE.Vector3(0, 1, 0) }, uStretch: { value: 1 },
       }]),
-      transparent: true, depthWrite: false, fog: true, ...hoverMask,
+      transparent: true, depthWrite: false, fog: true,
       vertexShader: /* glsl */`
         #include <fog_pars_vertex>
         ${ATMOS_GLSL}
@@ -229,8 +226,8 @@ export class Atmosphere {
           float a = t.a * vAlpha * uOpacity;
           // A gale shreds the puffs into streaks along the wind.
           if (uCloudCov.z > 0.0) a *= mix(1.0, smoothstep(0.4, 0.56, texture2D(uCloudMap, vTornUv).b), uCloudCov.z * 0.9);
-          // Coverage determines the silhouette, never transparency through a cloud body.
-          if (a < 0.04) discard;
+          // Soft density falloff, without sampling or reprojecting the map overlay.
+          if (a < 0.004) discard;
           // t.r: how much of the puff faces up into the light; vShade: how high in its cloud it sits.
           float lit = clamp(t.r * 0.75 + vShade * 0.45, 0.0, 1.0);
           vec3 V = normalize(cameraPosition - vWp);
@@ -238,7 +235,7 @@ export class Atmosphere {
           vec3 col = mix(uShade, uLit, lit) + uRim * rim;
           // Lightning lights the cloud from inside, most where it is thick.
           col += uFlashCol * flashAt(vWp) * (0.5 + 0.9 * t.a);
-          gl_FragColor = vec4(col, 1.0);
+          gl_FragColor = vec4(col, a);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
           #include <fog_fragment>
@@ -246,7 +243,7 @@ export class Atmosphere {
     });
     this.deckMat = new THREE.ShaderMaterial({
       uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { uOpacity: { value: 0 }, uSolid: { value: 0 }, uDeckRim: { value: new THREE.Vector4(0, 0, 1, 2) } }]),
-      transparent: true, depthWrite: false, fog: true, ...hoverMask,
+      transparent: true, depthWrite: false, fog: true,
       vertexShader: /* glsl */`
         #include <fog_pars_vertex>
         varying vec3 vWp; varying float vDepth;
@@ -284,10 +281,9 @@ export class Atmosphere {
             : clamp(0.36 + 0.3 * f.g - 0.32 * thick, 0.0, 1.0);
           vec3 col = mix(uShade, uLit, lit);
           col += uFlashCol * flashAt(vWp) * (0.45 + 0.6 * thick);
-          // Thin places are gaps; occupied cloud pixels fully obscure the map.
+          // Thin places let the island show naturally through the softly translucent deck.
           float a = cov * uOpacity * vFade * mix(0.25, 1.0, thick * thick) * mix(0.5, 1.2, f.g);
-          if (a < 0.04) discard;
-          gl_FragColor = vec4(col, 1.0);
+          gl_FragColor = vec4(col, a);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
           #include <fog_fragment>
@@ -527,10 +523,11 @@ export class Atmosphere {
     // Seen from far above, a heavy sky veils the island without hiding the map drawn on it; by
     // night, when the map has least light to show by, storm cloud veils it less.
     const thin = (1 - smooth(2.4, 4.2, zoom) * 0.6) * veil * (1 - 0.5 * L.night * dark);
-    // Cumulus for fair skies; under a full deck they sink into it, though a storm keeps its towers.
-    cu.uOpacity.value = this.on ? 0.9 * thin * (1 - 0.35 * smooth(0.4, 0.8, c) - 0.4 * smooth(0.85, 1, c) + 0.25 * w.lightning) : 0;
+    // Each cluster contains 14–27 overlapping puffs. Keep each layer light so their accumulated
+    // opacity stays a veil over the terrain, rather than an opaque cloud bank.
+    cu.uOpacity.value = this.on ? 0.2 * thin * (1 - 0.35 * smooth(0.4, 0.8, c) - 0.4 * smooth(0.85, 1, c) + 0.25 * w.lightning) : 0;
     // The flat deck only fills in once the sky is closing; clear and fair skies are cumulus alone.
-    this.deckMat.uniforms.uOpacity.value = this.on ? thin * (0.3 + 0.32 * smooth(0.3, 0.9, c)) * smooth(0.32, 0.5, c) : 0;
+    this.deckMat.uniforms.uOpacity.value = this.on ? thin * (0.18 + 0.18 * smooth(0.3, 0.9, c)) * smooth(0.32, 0.5, c) : 0;
     this.deckMat.uniforms.uSolid.value = smooth(0.7, 1, c);
     // Under a closing deck fewer cumulus stand out of it (a storm keeps more of its towers).
     cu.uThinOut.value = 0.7 * smooth(0.75, 1, c) * (1 - 0.5 * w.lightning);

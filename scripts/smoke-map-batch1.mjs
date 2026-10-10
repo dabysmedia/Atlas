@@ -77,62 +77,75 @@ try {
         r.yaw = r.yawT = hour * Math.PI / 12;
         r.setCamera({x:h.x,y:h.y,zoom:1.3});
         r.frame(performance.now(),false);
-        checks.push(r.hoverMask.mesh.visible && r.gl.getContext().getContextAttributes().stencil
-          && r.atmos.cloudMat.stencilRef === 1 && r.atmos.deckMat.stencilRef === 1
+        checks.push(r.hoverMask.mesh.visible && !r.hoverMask.mesh.material.stencilWrite
+          && !r.atmos.cloudMat.stencilWrite && !r.atmos.deckMat.stencilWrite
+          && r.atmos.cloudMat.fragmentShader.includes('vec4(col, a)')
+          && r.atmos.deckMat.fragmentShader.includes('vec4(col, a)')
+          && r.atmos.cloudMat.uniforms.uOpacity.value <= .2
+          && r.atmos.deckMat.uniforms.uOpacity.value <= .36
           && !r.atmos.cloudMat.fragmentShader.includes('mapShowAt')
           && !r.atmos.deckMat.fragmentShader.includes('groundUv'));
       }
     }
-    return { combinations:checks.length, maskAndIndependentClouds:checks.every(Boolean), hover:h.id };
+    return { combinations:checks.length, softIndependentClouds:checks.every(Boolean), hover:h.id };
   });
-  assert(results.clouds.maskAndIndependentClouds);
+  assert(results.clouds.softIndependentClouds);
   console.log('cloud states', results.clouds.combinations);
   await page.screenshot({ path: `${shots}/clouds-hover.png` });
 
-  // Pixel check with a closed deck: compare the real shaders with the grid on/off, then clear
-  // exactly one terrain-following hex through the same stencil used by the live pointer.
-  results.occlusion = await page.evaluate(() => {
+  for (const kind of ['clear','fair','overcast','fog','drizzle','rain','downpour','thunderstorm','gale']) {
+    await page.evaluate(kind => {
+      const r=window.__atlasMap;
+      r.hoverId=null;r.pointer=null;r.faceNorth();r.advance(3);r.setCamera(r.fitCamera());
+      r.setDaylight({hour:10,speed:'paused',at:new Date().toISOString()});
+      r.wx.set(kind,true,performance.now());r.frame(performance.now(),false);
+    },kind);
+    await page.screenshot({path:`${shots}/overview-${kind}.png`});
+  }
+
+  // A translucent closed deck must retain underlying map detail. Hover may add an outline,
+  // but must leave every pixel in the hex's interior unchanged (no fill or cloud cutout).
+  results.transparency = await page.evaluate(() => {
     const r=window.__atlasMap, h=r.hexIds().filter(h=>h.ground>r.seaLevel+10)[100];
     r.pointer=null;r.hoverId=null;r.selectedId=null;r.setOverhead(true);
     r.setCamera({x:h.x,y:h.y,zoom:1.3});r.setDaylight({hour:10,speed:'paused',at:new Date().toISOString()});
     r.wx.set('overcast',true,performance.now());r.frame(performance.now(),false);
     const u=r.atmos.uniforms;
     u.uCloudNear.value.set(-100,-99);u.uCloudCov.value.set(-1,-.9,0,1);
-    r.atmos.deckMat.uniforms.uOpacity.value=1;r.atmos.deck.visible=true;
+    r.atmos.deckMat.uniforms.uOpacity.value=.55;r.atmos.deck.visible=true;
+    const puffsVisible=r.atmos.puffs.visible;r.atmos.puffs.visible=false;
     const gl=r.gl.getContext(), width=r.glCanvas.width,height=r.glCanvas.height;
     const read=()=>{r.gl.render(r.scene,r.camera);const pixels=new Uint8Array(width*height*4);gl.readPixels(0,0,width,height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);return pixels};
     const grid=r.layers.grid;
     r.layers.grid=true;r.updateOverlay(performance.now(),true);const on=read();
     r.layers.grid=false;r.updateOverlay(performance.now(),true);const off=read();
-    let obscuredDifferences=0;
-    for(let i=0;i<on.length;i+=4)if(on[i]!==off[i]||on[i+1]!==off[i+1]||on[i+2]!==off[i+2])obscuredDifferences++;
+    let retainedMapDetailPixels=0;
+    for(let i=0;i<on.length;i+=4)if(on[i]!==off[i]||on[i+1]!==off[i+1]||on[i+2]!==off[i+2])retainedMapDetailPixels++;
     r.layers.grid=true;r.updateOverlay(performance.now(),true);
     r.hoverMask.update(r.hexById(h.id),40,r.o,r.groundFn,r.ground.id);
-    const hover=read();let revealedPixels=0,leakedPixels=0;
+    const hover=read();let outlinePixels=0,interiorChangedPixels=0;
+    const center=r.hexScreen(h.id);
     const shot=document.createElement('canvas');shot.width=width;shot.height=height;
     shot.getContext('2d').drawImage(r.glCanvas,0,0);
     const screenshot=shot.toDataURL('image/png');
     for(let y=0;y<height;y++)for(let x=0;x<width;x++) {
       const i=(y*width+x)*4;
       if(hover[i]===on[i]&&hover[i+1]===on[i+1]&&hover[i+2]===on[i+2])continue;
-      revealedPixels++;
-      const at=r.hexAt((x+.5)/width*r.viewport.w,(height-y-.5)/height*r.viewport.h);
-      // Allow one pixel of silhouette rasterization at the edge of the lifted surface mask.
-      if(at?.id!==h.id) {
-        const near=[[-1,0],[1,0],[0,-1],[0,1]].some(([dx,dy])=>r.hexAt((x+.5+dx)/width*r.viewport.w,(height-y-.5+dy)/height*r.viewport.h)?.id===h.id);
-        if(!near)leakedPixels++;
-      }
+      outlinePixels++;
+      const sx=(x+.5)/width*r.viewport.w, sy=(height-y-.5)/height*r.viewport.h;
+      if(Math.hypot(sx-center.x,sy-center.y)<12)interiorChangedPixels++;
     }
     r.layers.grid=grid;r.hoverMask.update(undefined,40,r.o,r.groundFn,r.ground.id);
+    r.atmos.puffs.visible=puffsVisible;
     r.setOverhead(false);r.frame(performance.now(),false);
-    return {obscuredDifferences,revealedPixels,leakedPixels,screenshot};
+    return {retainedMapDetailPixels,outlinePixels,interiorChangedPixels,screenshot};
   });
-  writeFileSync(`${shots}/cloud-occlusion-hover.png`,Buffer.from(results.occlusion.screenshot.split(',')[1],'base64'));
-  delete results.occlusion.screenshot;
-  assert.equal(results.occlusion.obscuredDifferences,0,'grid must not be visible through closed clouds');
-  assert(results.occlusion.revealedPixels>100,'hovered hex must reveal the terrain beneath clouds');
-  assert.equal(results.occlusion.leakedPixels,0,'hover must not reveal neighboring hexes');
-  console.log('pixel occlusion',JSON.stringify(results.occlusion));
+  writeFileSync(`${shots}/clouds-soft-outline.png`,Buffer.from(results.transparency.screenshot.split(',')[1],'base64'));
+  delete results.transparency.screenshot;
+  assert(results.transparency.retainedMapDetailPixels>100,'map detail must remain visible beneath translucent clouds');
+  assert(results.transparency.outlinePixels>100,'hover outline must remain visible over clouds');
+  assert.equal(results.transparency.interiorChangedPixels,0,'hover must not change the cloud-covered hex interior');
+  console.log('pixel transparency',JSON.stringify(results.transparency));
   }
 
   results.beacon = await page.evaluate(() => {

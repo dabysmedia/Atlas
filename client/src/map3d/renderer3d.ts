@@ -33,6 +33,7 @@ import { corner } from '../../../shared/hex';
 import { NeonBorders, type NeonLine } from './neon';
 import { Beacon } from './beacon';
 import { HoverMask } from './hoverMask';
+import { GridProjection, GRID_GLSL } from './gridProjection';
 import { FactionLabels, type LabelPlace, type LabelSpot } from './labels3d';
 import type { CardAnchor, FactionArea } from '../map/FactionCard';
 
@@ -96,6 +97,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected ovRect = { x: 0, y: 0, w: 1, h: 1, zoom: 0 };
   protected ovUniforms = { uOverlay: { value: null as THREE.Texture | null }, uOverlayRect: { value: new THREE.Vector4(0, 0, 1, 1) }, uOverlayGlow: { value: 0.1 } };
   protected ovLast = 0;
+  protected gridProjection = new GridProjection();
 
   // Camera beyond { x, y, zoom }.
   yaw = 0;
@@ -162,6 +164,8 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.gl.shadowMap.autoUpdate = false; // re-rendered only when the light or the view moves
 
     this.ovTex = this.makeOverlayTexture();
+    this.gridProjection.texture.anisotropy = Math.min(8, this.gl.capabilities.getMaxAnisotropy());
+    Object.assign(this.water.uniforms, this.gridProjection.uniforms);
     this.scene.fog = this.fog3;
     this.scene.add(this.sky.mesh, this.water.mesh, this.atmos.clouds, this.wx.rain, this.wx.bolt, this.glows, this.hemi, this.key, this.key.target);
     const wind = this.atmos.uniforms.uWind.value;
@@ -200,7 +204,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
       const mats = Array.isArray(m.material) ? m.material : m.material ? [m.material] : [];
       for (const mat of mats) { for (const v of Object.values(mat)) if (v instanceof THREE.Texture) v.dispose(); mat.dispose(); }
     });
-    this.ovTex.dispose(); this.depthTex?.dispose(); this.glowTex.dispose();
+    this.ovTex.dispose(); this.gridProjection.texture.dispose(); this.depthTex?.dispose(); this.glowTex.dispose();
     this.labels.destroy();
     this.water.dispose();
     this.gl.dispose();
@@ -348,13 +352,15 @@ export class HexMapRenderer3D extends HexMapRenderer {
     const A = this.atmos.uniforms;
     const W = this.wxUniforms;
     mat.onBeforeCompile = (sh) => {
-      Object.assign(sh.uniforms, U, A, W);
+      Object.assign(sh.uniforms, U, A, W, this.gridProjection.uniforms);
       sh.vertexShader = 'varying vec3 vWp;\n' + sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  vWp = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-      sh.fragmentShader = 'varying vec3 vWp;\nuniform sampler2D uOverlay;\nuniform vec4 uOverlayRect;\nuniform float uOverlayGlow, uWet, uWetRough, uSunSpec;\nuniform vec3 uWetSky;\n' + sh.fragmentShader
+      sh.fragmentShader = 'varying vec3 vWp;\nuniform sampler2D uOverlay;\nuniform vec4 uOverlayRect;\nuniform float uOverlayGlow, uWet, uWetRough, uSunSpec;\nuniform vec3 uWetSky;\n' + GRID_GLSL + sh.fragmentShader
         .replace('#include <common>', '#include <common>\n' + ATMOS_GLSL)
         .replace('#include <map_fragment>', `#include <map_fragment>
   vec2 ouv = (vWp.xz - uOverlayRect.xy) / uOverlayRect.zw;
   vec4 ov = (ouv.x < 0.0 || ouv.y < 0.0 || ouv.x > 1.0 || ouv.y > 1.0) ? vec4(0.0) : texture2D(uOverlay, ouv);
+  vec4 grid = atlasGrid(vWp.xz, ouv);
+  ov = vec4(ov.rgb * (1.0 - grid.a) + grid.rgb, ov.a + grid.a * (1.0 - ov.a));
   // Sand and rock darken where the sea wets them.
   float wet = 1.0 - smoothstep(uSeaY, uSeaY + uMistHeight * 0.18, vWp.y);
   diffuseColor.rgb *= 1.0 - 0.32 * wet;
@@ -857,6 +863,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.hoverMask.update(this.stills ? undefined : this.byId.get(this.hoverId ?? ''), HEX_SIZE, this.o, this.groundFn, this.ground?.id ?? 0, this.hoverId === this.selectedId);
     this.selectionMask.update(this.stills ? undefined : this.byId.get(this.selectedId ?? ''), HEX_SIZE, this.o, this.groundFn, this.ground?.id ?? 0);
     this.selectionMask.mesh.material.uniforms.uTime.value = now;
+    this.updateGrid();
     this.applyLight(now);
     this.updateOverlay(now, false);
     this.updateNeon(now);
@@ -872,6 +879,15 @@ export class HexMapRenderer3D extends HexMapRenderer {
   }
 
   // ---------------------------------------------------------------- borders, names, beacon
+  protected updateGrid() {
+    const grid = this.gridProjection.uniforms, selected = this.stills ? undefined : this.byId.get(this.selectedId ?? '');
+    grid.uGridEnabled.value = this.layers.grid ? 1 : 0;
+    grid.uGridOverview.value = this.overviewAlpha();
+    grid.uGridSelected.value = selected ? 1 : 0;
+    grid.uGridPointy.value = this.o === 'pointy' ? 1 : 0;
+    if (selected) grid.uGridCenter.value.set(selected.q, selected.r);
+  }
+
   /**
    * Border lines: territory loops (the same smoothed loops the wash is filled from), and a ring
    * round each contested or influenced hex. Rebuilt when claims, factions or the ground change, at
@@ -1156,18 +1172,20 @@ export class HexMapRenderer3D extends HexMapRenderer {
     // Draw the 2D map's overlay for this rectangle: its pixels are this many per world unit, and
     // its "screen" units match the 3D screen at the point looked at, so line weights and labels
     // come out at their usual on-screen size there.
-    const save = { cam: this.cam, w: this.w, h: this.h, dpr: this.dpr };
+    const save = { cam: this.cam, w: this.w, h: this.h, dpr: this.dpr, layers: this.layers };
     const z = this.cam.zoom;
     const dprO = ppw / z;
     this.cam = { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2, zoom: z };
     this.w = W / dprO; this.h = H / dprO; this.dpr = dprO;
-    // Map modes: the hexcrawl detail (grid, coordinates, names) arrives a little later than in 2D,
-    // so the zoomed-out island reads as regions, borders and faction names.
+    // Coordinates and names arrive later than in 2D. Grid ink is cached separately so its
+    // overview and selection visibility can change without repainting these overlays.
     this.lodZoom = z * 0.62;
+    this.layers = { ...save.layers, grid: false };
     // Hover is a small terrain mesh; moving across hexes must not upload the whole map texture.
     const hover = this.hoverId, selected = this.selectedId;
     this.hoverId = null; this.selectedId = null;
-    try { this.draw(now); } finally { this.hoverId = hover; this.selectedId = selected; this.cam = save.cam; this.w = save.w; this.h = save.h; this.dpr = save.dpr; this.lodZoom = null; }
+    try { this.draw(now); } finally { this.hoverId = hover; this.selectedId = selected; this.cam = save.cam; this.w = save.w; this.h = save.h; this.dpr = save.dpr; this.layers = save.layers; this.lodZoom = null; }
+    this.gridProjection.draw(this.hexes, this.o, rect, W, H, z);
     this.ovUniforms.uOverlayRect.value.set(rect.x, rect.y, rect.w, rect.h);
     this.ovTex.needsUpdate = true;
   }
@@ -1239,6 +1257,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
       this.selectionMask.mesh.visible = false;
       this.updateCamera();
       this.applyLight(performance.now());
+      this.updateGrid();
       this.updateOverlay(performance.now(), true);
       this.fitShadow();
       this.water.update(this.gl, performance.now() / 1000, this.camera, this.light, false);
@@ -1256,6 +1275,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
       this.hoverMask.mesh.visible = saved.hoverMask;
       this.selectionMask.mesh.visible = !!saved.sel;
       this.updateCamera();
+      this.updateGrid();
       this.updateOverlay(performance.now(), true);
       this.fitShadow();
       this.water.update(this.gl, performance.now() / 1000, this.camera, this.light, false);

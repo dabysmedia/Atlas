@@ -21,6 +21,7 @@
  * lies on it, and rain rings it.
  */
 import * as THREE from 'three';
+import { GRID_GLSL, gridUniforms } from './gridProjection';
 import type { HeightField } from './heightfield';
 import type { Lighting } from './sky';
 import { ATMOS_GLSL } from './atmosphere';
@@ -108,6 +109,7 @@ vec4 triLod(sampler2D t, vec2 uv, Tri r, float lod) {
 export function makeWater(atmos: Record<string, THREE.IUniform>) {
   const wind = new THREE.Vector2(Math.cos(WIND_ANGLE), Math.sin(WIND_ANGLE));
   const uniforms = {
+    ...gridUniforms(),
     ...THREE.UniformsUtils.merge([THREE.UniformsLib.fog]),
     uTime: { value: 0 },
     uKeyDir: { value: new THREE.Vector3(0, 1, 0) }, uKeyColor: { value: new THREE.Color() }, uSunDir: { value: new THREE.Vector3(0, 1, 0) },
@@ -170,6 +172,7 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
     uniform float uOverlayGlow, uNight, uPixAngle, uFoamAmt, uRain, uHs, uSeaLevel, uHoleE;
     uniform vec3 uKeyDir, uKeyColor, uSunDir, uHemiSky, uHemiGround, uZenith, uHorizon;
     uniform vec4 uOverlayRect, uHole, uViewport;
+    ${GRID_GLSL}
     uniform vec2 uCapVar;
     #ifndef NEAR
       uniform mat4 projectionMatrix;
@@ -328,6 +331,8 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
       // Draped overlays (territory, grid, borders) on the water as on the land.
       vec2 ouv = (p - uOverlayRect.xy) / uOverlayRect.zw;
       vec4 ov = outside(ouv) ? vec4(0.0) : texture2D(uOverlay, ouv);
+      vec4 grid = atlasGrid(p, ouv);
+      ov = vec4(ov.rgb * (1.0 - grid.a) + grid.rgb, ov.a + grid.a * (1.0 - ov.a));
       col = col * (1.0 - ov.a) + ov.rgb * (amb * 0.8 + uKeyColor * 0.25 * cs + uOverlayGlow);
 
       // Sky and clouds in the surface, by a Fresnel term that knows how rough the sea is.

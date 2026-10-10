@@ -117,11 +117,12 @@ try {
     const gl=r.gl.getContext(), width=r.glCanvas.width,height=r.glCanvas.height;
     const read=()=>{r.gl.render(r.scene,r.camera);const pixels=new Uint8Array(width*height*4);gl.readPixels(0,0,width,height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);return pixels};
     const grid=r.layers.grid;
-    r.layers.grid=true;r.updateOverlay(performance.now(),true);const on=read();
-    r.layers.grid=false;r.updateOverlay(performance.now(),true);const off=read();
+    // Isolate cloud transparency with full grid visibility, independent of exploration's reveal.
+    r.layers.grid=true;r.updateOverlay(performance.now(),true);r.updateGrid();r.gridProjection.uniforms.uGridOverview.value=1;const on=read();
+    r.layers.grid=false;r.updateOverlay(performance.now(),true);r.updateGrid();const off=read();
     let retainedMapDetailPixels=0;
     for(let i=0;i<on.length;i+=4)if(on[i]!==off[i]||on[i+1]!==off[i+1]||on[i+2]!==off[i+2])retainedMapDetailPixels++;
-    r.layers.grid=true;r.updateOverlay(performance.now(),true);
+    r.layers.grid=true;r.updateOverlay(performance.now(),true);r.updateGrid();r.gridProjection.uniforms.uGridOverview.value=1;
     r.hoverMask.update(r.hexById(h.id),40,r.o,r.groundFn,r.ground.id);
     const hover=read();let outlinePixels=0,interiorChangedPixels=0;
     const center=r.hexScreen(h.id);

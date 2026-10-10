@@ -1039,13 +1039,15 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 .flabel.hot::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 34px; }
 .fcard {
   position: absolute; z-index: 7; width: 264px; padding: 12px 14px 10px; pointer-events: none; transform-origin: 50% 100%;
-  translate: -50% calc(-100% - 10px); border-radius: 14px; color: var(--text);
+  translate: -50% 0; border-radius: 14px; color: var(--text);
   background: linear-gradient(160deg, rgba(255, 244, 222, 0.1), rgba(14, 22, 28, 0.8) 34%, rgba(8, 13, 17, 0.86));
   border: 1px solid color-mix(in srgb, var(--fc) 40%, rgba(255, 236, 200, 0.16));
   box-shadow: var(--shadow), 0 0 40px color-mix(in srgb, var(--fc) 22%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(16px) saturate(1.4); animation: fcard-in 0.24s cubic-bezier(0.2, 0.9, 0.3, 1.15) both;
 }
-.fcard.below { transform-origin: 50% 0; translate: -50% 10px; }
+.fcard.below { transform-origin: 50% 0; }
+.fcard.right { transform-origin: 0 50%; }
+.fcard.left { transform-origin: 100% 50%; }
 @keyframes fcard-in { from { opacity: 0; transform: translateY(6px) scale(0.94); } }
 .fcard.below { animation-name: fcard-in-below; }
 @keyframes fcard-in-below { from { opacity: 0; transform: translateY(-6px) scale(0.94); } }

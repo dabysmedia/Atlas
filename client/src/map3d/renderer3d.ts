@@ -934,12 +934,12 @@ export class HexMapRenderer3D extends HexMapRenderer {
     const id = L.hovered;
     const r = id ? L.rect(id) : null;
     if (id && r && this.onFactionHover) {
-      const at = { x: r.x + r.w / 2, top: r.y, bottom: r.y + r.h };
+      const at = { x: r.x + r.w / 2, top: r.y, bottom: r.y + r.h, left: r.x, right: r.x + r.w };
       const ha = this.hoverArea;
       if (!ha || ha.id !== id || ha.rev !== this.territoryRev) {
         const area = this.factionArea(id);
         if (area) { this.hoverArea = { id, rev: this.territoryRev, area, at }; this.onFactionHover(area, at); }
-      } else if (Math.abs(ha.at.x - at.x) + Math.abs(ha.at.top - at.top) > 1.5) { ha.at = at; this.onFactionHover(ha.area, at); }
+      } else if (Math.abs(ha.at.x - at.x) + Math.abs(ha.at.top - at.top) + Math.abs(ha.at.right - at.right) > 1.5) { ha.at = at; this.onFactionHover(ha.area, at); }
     }
   }
   protected labelLast = 0;

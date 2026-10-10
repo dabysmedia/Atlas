@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, qk } from '../api';
 import type { Faction, MeterDef, TokenKind } from '../types';
@@ -13,13 +14,19 @@ export type FactionArea = {
   places: { id: string; name: string; kind: TokenKind }[];
 };
 /** The hovered label's box on screen (CSS pixels within the map). */
-export type CardAnchor = { x: number; top: number; bottom: number };
+export type CardAnchor = { x: number; top: number; bottom: number; left: number; right: number };
+
+/** Card width (matches .fcard), the gap to the label, and the room the map's floating chrome takes. */
+const CARD_W = 264, GAP = 12, EDGE_TOP = 68, EDGE_BOTTOM = 84, EDGE_SIDE = 76;
 
 const KIND = Object.fromEntries(TOKEN_KINDS.map((k) => [k.kind, k.label])) as Record<TokenKind, string>;
 
 /** A glass card over a hovered faction name: what it holds, how it stands, what its land is. */
-export function FactionCard({ area, at, mapH }: { area: FactionArea; at: CardAnchor; mapH: number }) {
+export function FactionCard({ area, at, mapW, mapH }: { area: FactionArea; at: CardAnchor; mapW: number; mapH: number }) {
   const world = useWorld();
+  const ref = useRef<HTMLDivElement>(null);
+  const [h, setH] = useState(340);
+  useLayoutEffect(() => { const n = ref.current?.offsetHeight; if (n && Math.abs(n - h) > 1) setH(n); });
   const factions = useQuery({ queryKey: qk.factions(world.id), queryFn: () => api<Faction[]>(`/api/worlds/${world.id}/factions`) });
   const meters = useQuery({ queryKey: qk.meters(world.id), queryFn: () => api<MeterDef[]>(`/api/worlds/${world.id}/meters`) });
   const f = factions.data?.find((x) => x.id === area.id);
@@ -31,10 +38,18 @@ export function FactionCard({ area, at, mapH }: { area: FactionArea; at: CardAnc
     .slice(0, 3);
   const land = area.terrain.reduce((s, t) => s + t.n, 0) || 1;
   const terrain = area.terrain.slice(0, 5).map((t) => ({ ...t, type: world.terrainTypes.find((x) => x.key === t.key) }));
-  // Above the label when there is room, else below it.
-  const below = at.top < 300 && mapH - at.bottom > at.top;
+  // Above the label when it fits under the top bar, else below it, else beside it; never over the
+  // name itself, and always clear of the floating chrome along the map's edges.
+  const fitsAbove = at.top - GAP - h >= EDGE_TOP, fitsBelow = at.bottom + GAP + h <= mapH - EDGE_BOTTOM;
+  const fitsRight = at.right + GAP + CARD_W <= mapW - EDGE_SIDE, fitsLeft = at.left - GAP - CARD_W >= EDGE_SIDE;
+  const side = fitsAbove || fitsBelow || !(fitsRight || fitsLeft) ? null : fitsRight ? 'right' : 'left';
+  const below = !fitsAbove && (fitsBelow || (!side && mapH - at.bottom > at.top));
+  const clampY = (y: number) => Math.max(EDGE_TOP, Math.min(y, mapH - EDGE_BOTTOM - h));
+  const clampX = (x: number) => (mapW > CARD_W + 2 * EDGE_SIDE ? Math.max(EDGE_SIDE + CARD_W / 2, Math.min(x, mapW - EDGE_SIDE - CARD_W / 2)) : x);
+  const x = side === 'right' ? at.right + GAP + CARD_W / 2 : side === 'left' ? at.left - GAP - CARD_W / 2 : clampX(at.x);
+  const y = clampY(side ? (at.top + at.bottom) / 2 - h / 2 : below ? at.bottom + GAP : at.top - GAP - h);
   return (
-    <div className={`fcard ${below ? 'below' : ''}`} style={{ left: at.x, top: below ? at.bottom : at.top, ['--fc' as string]: area.color }}>
+    <div ref={ref} className={`fcard ${side ?? (below ? 'below' : '')}`} style={{ left: x, top: y, ['--fc' as string]: area.color }}>
       <div className="fcard-head">
         <Diamond color={area.color} size={11} />
         <div className="grow">

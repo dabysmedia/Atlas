@@ -16,6 +16,8 @@ const b = await chromium.launch({
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
 });
 const p = await b.newPage({ viewport: { width: 1440, height: 900 } });
+// Software GL can take several seconds a frame; a screenshot waits for one.
+p.setDefaultTimeout(90000);
 const errs = [];
 p.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('401')) errs.push(m.text()); });
 p.on('pageerror', (e) => errs.push('pageerror: ' + e.message));
@@ -207,11 +209,13 @@ await step('paint-claim-live', async () => {
   const at = await page(t.s);
   await p.mouse.click(at.x, at.y);
   await p.waitForFunction((id) => window.__atlasMap.control.has(id) || window.__atlasMap.contested.has(id), t.id, { timeout: 15000 });
-  await p.waitForTimeout(2500);
-  const after = await px();
+  // The overlay repaints on the next frame that gets to it; on software GL that can be seconds.
+  const differs = (a) => before.some((v, i) => Math.abs(v - a[i]) > 12);
+  let after = await px();
+  for (let i = 0; i < 30 && !differs(after); i++) { await p.waitForTimeout(500); after = await px(); }
   await p.screenshot({ path: S('05-claim-painted') });
   await p.keyboard.press('1');
-  const changed = before.some((v, i) => Math.abs(v - after[i]) > 12);
+  const changed = differs(after);
   expect(changed, `overlay pixel unchanged ${before} → ${after}`);
   return { hex: t.id, overlayBefore: before, overlayAfter: after };
 });

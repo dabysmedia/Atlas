@@ -659,19 +659,19 @@ export function MapView() {
                 <div className="brush-list">
                   {tool === 'terrain' && world.terrainTypes.map((t) => (
                     <button key={t.key} className={`brush ${brush.terrain === t.key ? 'on' : ''}`} onClick={() => setBrush({ ...brush, terrain: t.key })}>
-                      <span className="swatch" style={{ background: t.color }} />{t.name}
+                      <span className="swatch" style={{ background: t.color }} /><span className="brush-name">{t.name}</span>
                     </button>
                   ))}
                   {tool === 'state' && world.hexStates.map((s) => (
                     <button key={s.key} className={`brush ${brush.state === s.key ? 'on' : ''}`} onClick={() => setBrush({ ...brush, state: s.key })}>
-                      {s.color ? <Diamond color={s.color} size={8} /> : <span className="swatch" style={{ background: 'transparent' }} />}{s.name}
+                      {s.color ? <Diamond color={s.color} size={8} /> : <span className="swatch" style={{ background: 'transparent' }} />}<span className="brush-name">{s.name}</span>
                     </button>
                   ))}
                   {tool === 'claim' && (
                     <>
                       {data.factions.map((f) => (
-                        <button key={f.id} className={`brush ${brush.claim === f.id ? 'on' : ''}`} onClick={() => setBrush({ ...brush, claim: f.id })}>
-                          <Diamond color={f.color} size={9} />{f.name}
+                        <button key={f.id} className={`brush ${brush.claim === f.id ? 'on' : ''}`} onClick={() => setBrush({ ...brush, claim: f.id })} title={f.name}>
+                          <Diamond color={f.color} size={9} /><span className="brush-name">{f.name}</span>
                         </button>
                       ))}
                       <button className={`brush ${brush.claim === 'none' ? 'on' : ''}`} onClick={() => setBrush({ ...brush, claim: 'none' })}><X size={12} /> Clear control</button>

@@ -301,11 +301,15 @@ function MeterRow({ faction, def, fm, table }: { faction: Faction; def: MeterDef
       <div className="adj">
         <input className="input" style={{ padding: '3px 8px', fontSize: 12 }} placeholder={`Cause (logged on day ${world.currentDay})`} value={cause}
           onChange={(e) => setCause(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }} />
-        {step.map((d) => (
-          <button key={d} className="btn sm" style={{ minWidth: 38, justifyContent: 'center' }} disabled={set.isPending} onClick={() => set.mutate({ delta: d })}>
-            {d > 0 ? `+${d}` : d}
-          </button>
-        ))}
+        {/* One quiet stepper pill rather than a row of buttons: down on the left, up on the right. */}
+        <div className="steps" role="group" aria-label={`Adjust ${def.name}`}>
+          {step.map((d, i) => (
+            <button key={d} className={`${d > 0 ? 'up' : 'down'} ${i === step.length / 2 ? 'mid' : ''}`} disabled={set.isPending} onClick={() => set.mutate({ delta: d })}
+              aria-label={`${d > 0 ? 'Raise' : 'Lower'} ${def.name} by ${Math.abs(d)}`}>
+              {d > 0 ? `+${d}` : `−${-d}`}
+            </button>
+          ))}
+        </div>
       </div>
       <AnimatePresence>
         {showHistory && (

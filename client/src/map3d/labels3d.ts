@@ -6,6 +6,9 @@
  * pointer where they stand: hovering one lifts it toward the camera and asks for its info card.
  */
 
+type Box = { x: number; y: number; w: number; h: number };
+const overlaps = (a: Box, b: Box, mx = 0, my = 0) => a.x < b.x + b.w + mx && b.x < a.x + a.w + mx && a.y < b.y + b.h + my && b.y < a.y + a.h + my;
+
 export type LabelSpot = { id: string; name: string; color: string; n: number; width: number };
 /** Where a label goes this frame, in CSS pixels; `ppw` = screen pixels per world unit at its anchor. */
 export type LabelPlace = { x: number; y: number; ppw: number; alpha: number };
@@ -93,10 +96,11 @@ export class FactionLabels {
 
   /**
    * Place every label for this frame. `place` returns its screen point (the bottom centre of the
-   * label) or null when off screen; `blocked` boxes (markers) keep labels from taking the pointer
-   * there. Labels that would overlap a bigger territory's label are hidden.
+   * label) or null when off screen; a label rises clear of the `blocked` boxes (markers and their
+   * name plates), and never takes the pointer over one. Labels that would overlap a bigger
+   * territory's label are hidden.
    */
-  layout(place: (s: LabelSpot, hot: number) => LabelPlace | null, w: number, h: number, blocked: { x: number; y: number; r: number }[]) {
+  layout(place: (s: LabelSpot, hot: number) => LabelPlace | null, w: number, h: number, blocked: Box[]) {
     const order = [...this.items.values()].sort((a, b) => (b.spot.id === this.hovered ? 1 : 0) - (a.spot.id === this.hovered ? 1 : 0) || b.spot.n - a.spot.n);
     const taken: { x: number; y: number; w: number; h: number }[] = [];
     for (const it of order) {
@@ -111,13 +115,20 @@ export class FactionLabels {
         const s = 1 + 0.2 * it.hot;
         const tw = ((it.w100 * px) / 100 + px * 1.6) * s, th = px * 2.1 * s;
         const r = { x: p.x - tw / 2, y: p.y - th, w: tw, h: th };
+        // Float clear of a marker standing under the name (a capital often sits at the territory's heart).
+        for (let k = 0; k < 3; k++) {
+          const b = blocked.find((o) => overlaps(o, r));
+          if (!b) break;
+          r.y = b.y - th - 4;
+        }
+        p.y = r.y + th;
         const clear = r.x + r.w > 0 && r.x < w && r.y + r.h > 0 && r.y < h
-          && !taken.some((o) => r.x < o.x + o.w + 6 && o.x < r.x + r.w + 6 && r.y < o.y + o.h + 2 && o.y < r.y + r.h + 2);
+          && !taken.some((o) => overlaps(o, r, 6, 2));
         if (clear) {
           show = true;
           taken.push(r);
           it.rect = r;
-          live = p.alpha > 0.4 && (it.spot.id === this.hovered || !blocked.some((b) => b.x + b.r > r.x && b.x - b.r < r.x + r.w && b.y + b.r > r.y && b.y - b.r < r.y + r.h));
+          live = p.alpha > 0.6 && (it.spot.id === this.hovered || !blocked.some((b) => overlaps(b, r)));
           const tf = `translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0) translate(-50%, -100%) scale(${s.toFixed(3)})`;
           if (tf !== it.tf) { it.tf = tf; it.el.style.transform = tf; }
         }

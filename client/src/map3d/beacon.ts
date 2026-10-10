@@ -10,7 +10,7 @@
  */
 import * as THREE from 'three';
 
-const GILT = new THREE.Color('#f0d496');
+const GILT = new THREE.Color('#e3b55f');
 
 const COLUMN_VERT = /* glsl */`
 uniform vec3 uBase;
@@ -32,15 +32,15 @@ uniform float uTime, uAlpha, uGrow;
 varying vec2 vUv;
 void main() {
   float x = abs(vUv.x - 0.5) * 2.0, y = vUv.y;
-  float core = exp(-x * x * 140.0);
-  float halo = exp(-x * x * 9.0) * 0.32 + exp(-x * 3.0) * 0.12;
+  float core = exp(-x * x * 160.0);
+  float halo = exp(-x * x * 7.0) * 0.55 + exp(-x * 3.2) * 0.22;
   // Brightest at the foot, fading to nothing at the top; light rising up the shaft.
   float fall = pow(1.0 - y, 1.6) * smoothstep(0.0, 0.015, y);
   float rise = 0.75 + 0.25 * sin(y * 46.0 - uTime * 7.0) + 0.35 * pow(fract(y * 2.2 - uTime * 0.55), 14.0);
   float pulse = 0.85 + 0.15 * sin(uTime * 2.6);
   // The head of the shaft as it shoots up.
   float head = uGrow < 0.999 ? exp(-pow((1.0 - y) * 30.0, 2.0)) * 1.4 : 0.0;
-  vec3 c = mix(uColor, vec3(1.0), core * 0.75) * (core * 1.7 + halo) * (fall * rise * pulse + head);
+  vec3 c = (mix(uColor, vec3(1.0), core * 0.6) * core * 1.6 + uColor * halo) * (fall * rise * pulse + head);
   gl_FragColor = vec4(c * uAlpha, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -83,7 +83,7 @@ export class Beacon {
   protected column: THREE.Mesh;
   protected ripple: THREE.Mesh;
   protected cu = {
-    uBase: { value: new THREE.Vector3() }, uHeight: { value: 400 }, uWidth: { value: 10 }, uMinPx: { value: 18 }, uPixAngle: { value: 0.001 },
+    uBase: { value: new THREE.Vector3() }, uHeight: { value: 400 }, uWidth: { value: 10 }, uMinPx: { value: 30 }, uPixAngle: { value: 0.001 },
     uGrow: { value: 0 }, uColor: { value: GILT.clone() }, uTime: { value: 0 }, uAlpha: { value: 0 },
   };
   protected ru = { uBias: { value: 0.004 }, uColor: { value: GILT.clone() }, uTime: { value: 0 }, uAlpha: { value: 0 } };

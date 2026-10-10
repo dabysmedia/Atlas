@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { motion } from 'motion/react';
 import { api, qk } from '../api';
 import type { Faction, MeterDef, TokenKind } from '../types';
 import { useWorld } from '../world';
@@ -35,9 +34,7 @@ export function FactionCard({ area, at, mapH }: { area: FactionArea; at: CardAnc
   // Above the label when there is room, else below it.
   const below = at.top < 300 && mapH - at.bottom > at.top;
   return (
-    <motion.div className={`fcard ${below ? 'below' : ''}`} style={{ left: at.x, top: below ? at.bottom : at.top, ['--fc' as string]: area.color }}
-      initial={{ opacity: 0, scale: 0.94, y: below ? -8 : 8 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96 }}
-      transition={{ type: 'spring', stiffness: 420, damping: 32 }}>
+    <div className={`fcard ${below ? 'below' : ''}`} style={{ left: at.x, top: below ? at.bottom : at.top, ['--fc' as string]: area.color }}>
       <div className="fcard-head">
         <Diamond color={area.color} size={11} />
         <div className="grow">
@@ -79,6 +76,6 @@ export function FactionCard({ area, at, mapH }: { area: FactionArea; at: CardAnc
         </div>
       )}
       <div className="fcard-hint">Click the name to open</div>
-    </motion.div>
+    </div>
   );
 }

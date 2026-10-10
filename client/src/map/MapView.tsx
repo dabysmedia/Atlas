@@ -879,9 +879,7 @@ export function MapView() {
         </div>
       )}
 
-      <AnimatePresence>
-        {factionHover && !align && <FactionCard key={factionHover.area.id} area={factionHover.area} at={factionHover.at} mapH={r?.viewport.h ?? 0} />}
-      </AnimatePresence>
+      {factionHover && !align && <FactionCard key={factionHover.area.id} area={factionHover.area} at={factionHover.at} mapH={r?.viewport.h ?? 0} />}
 
       <AnimatePresence>
         {dropping && (

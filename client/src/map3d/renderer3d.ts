@@ -127,7 +127,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected tetherN = 0;
   protected tmpV = new THREE.Vector3();
   protected tmpV2 = new THREE.Vector2();
-  protected blocked: { x: number; y: number; r: number }[] = [];
+  protected blocked: { x: number; y: number; w: number; h: number }[] = [];
   protected hoverArea: { id: string; rev: number; area: FactionArea; at: CardAnchor } | null = null;
   protected stills = false;
   /** A faction name was hovered (with its territory and where its label is), or left (null). */
@@ -911,15 +911,21 @@ export class HexMapRenderer3D extends HexMapRenderer {
     const relief = Math.max(0, this.hf.maxH - this.sea);
     const cam = this.camera, V = this.tmpV;
     const k = this.h / (2 * Math.tan(THREE.MathUtils.degToRad(FOV / 2)));
-    // Markers keep the pointer where a label overlaps them.
+    // Markers and their name plates (as drawTokens lays them out) push labels up and keep the pointer.
     let nb = 0;
+    const z = this.cam.zoom;
     for (const tok of this.tokens) {
       const p = this.tokenPos(tok);
       if (!p) continue;
       const s = this.worldToScreen(p.x, p.y);
-      const r = this.markerRadius(tok.kind);
-      const b = (this.blocked[nb++] ??= { x: 0, y: 0, r: 0 });
-      b.x = s.x; b.y = s.y - this.tokenLift(tok.kind, r); b.r = r + 4;
+      const r = this.markerRadius(tok.kind), lift = this.tokenLift(tok.kind, r);
+      if (s.x < -200 || s.y < -200 || s.x > this.w + 200 || s.y > this.h + 200) continue;
+      const settle = tok.kind === 'city' || tok.kind === 'outpost';
+      const named = tok.kind === 'city' ? z > 0.18 : tok.kind === 'outpost' ? z > 0.45 : tok.kind === 'party' ? z > 0.3 : z > 0.8;
+      const pw = named && settle ? tok.name.length * 8.6 + 14 : 0;
+      const top = s.y - lift - r, bottom = s.y - lift + r + (pw ? lift * 0.55 + 20 : 0);
+      const b = (this.blocked[nb++] ??= { x: 0, y: 0, w: 0, h: 0 });
+      b.x = s.x - Math.max(r, pw / 2); b.w = Math.max(r, pw / 2) * 2; b.y = top; b.h = bottom - top;
     }
     this.blocked.length = nb;
     this.tetherN = 0;
@@ -928,15 +934,16 @@ export class HexMapRenderer3D extends HexMapRenderer {
       if (!t || !on) return null;
       const gx = t.label.x, gy = t.label.y;
       const ground = this.groundAt(gx, gy);
-      const lift = Math.max(HEX_SIZE * 2.4, relief * 0.36) * (1 + 0.55 * hot);
+      const lift = Math.max(HEX_SIZE * 2.4, relief * 0.36) * (1 + 0.25 * hot);
       V.set(gx, ground + lift, gy).applyMatrix4(cam.matrixWorldInverse);
       const depth = -V.z;
       if (depth <= cam.near) return null;
       const ppw = k / depth;
       V.set(gx, ground + lift, gy).project(cam);
-      const x = ((V.x + 1) / 2) * this.w, y = ((1 - V.y) / 2) * this.h;
+      // A little screen lift too, so the tether shows even looking straight down.
+      const x = ((V.x + 1) / 2) * this.w, y = ((1 - V.y) / 2) * this.h - 16 - 8 * hot;
       // Gone at hexcrawl detail, where hexes, names and markers take over; dimmed beside a focus.
-      let alpha = 1 - smooth(1.15, 1.75, ppw);
+      let alpha = (1 - smooth(1.15, 1.75, ppw)) * (1 - smooth(1.25, 1.8, this.cam.zoom));
       if (this.focusFactionId && this.focusFactionId !== s.id) alpha *= 0.5;
       if (alpha <= 0.02) return null;
       const g = this.worldToScreen(gx, gy);
@@ -965,7 +972,11 @@ export class HexMapRenderer3D extends HexMapRenderer {
     const ctx = this.hudCtx;
     for (let i = 0; i < this.tetherN; i++) {
       const t = this.tethers[i];
-      if (!this.labels.rect(t.id) || t.a < 0.02 || Math.hypot(t.lx - t.gx, t.ly - t.gy) < 6) continue;
+      const r = this.labels.rect(t.id);
+      if (!r || t.a < 0.02) continue;
+      // Up to the bottom of the label where it finally stood.
+      t.lx = r.x + r.w / 2; t.ly = r.y + r.h - 3;
+      if (Math.hypot(t.lx - t.gx, t.ly - t.gy) < 6) continue;
       const g = ctx.createLinearGradient(t.gx, t.gy, t.lx, t.ly);
       g.addColorStop(0, t.color); g.addColorStop(1, 'rgba(255, 244, 220, 0.85)');
       ctx.globalAlpha = t.a * (0.55 + 0.45 * t.hot);

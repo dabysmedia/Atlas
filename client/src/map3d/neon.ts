@@ -71,7 +71,7 @@ void main() {
 `;
 
 const FRAG = /* glsl */`
-uniform float uTime, uCore, uFlowLen, uDashLen, uInfl, uOpacity, uGlow;
+uniform float uTime, uCore, uFlowLen, uDashLen, uInfl, uCont, uOpacity, uGlow;
 varying vec3 vColor;
 varying vec3 vStyle;
 varying float vAcross, vDist, vHalf;
@@ -88,7 +88,7 @@ void main() {
     float k = mod(floor(vDist / uDashLen), vStyle.z);
     float f = fract(vDist / uDashLen);
     on = (abs(k - vStyle.y) < 0.5 ? 1.0 : 0.0) * smoothstep(0.0, 0.06, f) * (1.0 - smoothstep(0.94, 1.0, f));
-    inten = 0.85 + 0.3 * sin(uTime * 3.4);
+    inten = (0.85 + 0.3 * sin(uTime * 3.4)) * uCont;
   } else {
     // Energy running along the border: a bright pulse with a fading tail.
     float f = fract(vDist / uFlowLen - uTime * 0.11);
@@ -97,10 +97,12 @@ void main() {
   float core = 1.0 - smoothstep(uCore - 0.55, uCore + 0.55, px);
   float edge = 1.0 - smoothstep(vHalf * 0.7, vHalf, px);
   float g = px / vHalf;
-  float glow = (exp(-g * g * 9.0) * 0.55 + exp(-g * 4.0) * 0.3) * edge;
-  vec3 hot = mix(vColor, vec3(1.0), 0.55);
+  float glow = (exp(-g * g * 10.0) * 0.75 + exp(-g * 4.0) * 0.35) * edge;
+  // A white-hot thread down the middle of a saturated tube.
+  float thread = 1.0 - smoothstep(0.0, uCore, px);
+  vec3 tube = mix(vColor, vec3(1.0), 0.08 + 0.4 * thread * thread);
   float k = on * inten;
-  vec3 rgb = (hot * core * 1.5 * flow + vColor * glow * uGlow * flow) * k;
+  vec3 rgb = (tube * core * 1.25 * flow + vColor * glow * uGlow * flow) * k;
   // A whisper of dark just outside the core keeps the line crisp on bright ground.
   float rim = (1.0 - smoothstep(uCore + 0.5, uCore + 2.6, px)) * 0.28;
   float a = max(core * 0.9, rim) * k;
@@ -115,7 +117,7 @@ const ATTRS: [string, number][] = [['position', 3], ['aPrev', 3], ['aNext', 3], 
 export class NeonBorders {
   readonly uniforms = {
     uRes: { value: new THREE.Vector2(1, 1) }, uHalf: { value: 8 }, uShift: { value: 1.6 }, uBias: { value: 0.006 },
-    uTime: { value: 0 }, uCore: { value: 1.1 }, uFlowLen: { value: 400 }, uDashLen: { value: 10 }, uInfl: { value: 1 },
+    uTime: { value: 0 }, uCore: { value: 1.1 }, uFlowLen: { value: 400 }, uDashLen: { value: 10 }, uInfl: { value: 1 }, uCont: { value: 1 },
     uOpacity: { value: 1 }, uGlow: { value: 1 },
   };
   readonly mesh: THREE.Mesh;
@@ -196,8 +198,9 @@ export class NeonBorders {
       }
       for (let i = 0; i < n - 1; i++) {
         const a = base + i * 2;
-        index[ii++] = a; index[ii++] = a + 1; index[ii++] = a + 2;
-        index[ii++] = a + 1; index[ii++] = a + 3; index[ii++] = a + 2;
+        // Counter-clockwise on screen (side -1 is right of travel); folds at sharp turns face away and drop out.
+        index[ii++] = a; index[ii++] = a + 2; index[ii++] = a + 1;
+        index[ii++] = a + 1; index[ii++] = a + 2; index[ii++] = a + 3;
       }
     }
     const geo = new THREE.BufferGeometry();
@@ -223,6 +226,8 @@ export class NeonBorders {
     u.uTime.value = (now / 1000) % 3600;
     // Pulse spacing in powers of two of world distance, so zooming doesn't make the pattern crawl.
     u.uFlowLen.value = 2 ** Math.round(Math.log2(260 * worldPerPx));
+    // Hex rings only once hexes are big enough on screen to ring: contested first, influence later.
+    u.uCont.value = smooth(2.6, 1.5, worldPerPx);
     u.uInfl.value = smooth(1.6, 0.9, worldPerPx);
   }
 

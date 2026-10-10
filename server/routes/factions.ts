@@ -9,6 +9,7 @@ import { badRequest, logEvent, notFound, setMeter } from '../history.js';
 import { bandFor } from '../../shared/meters.js';
 import { getWorld, Uuid } from './worlds.js';
 import { changed } from '../live.js';
+import { membersOf } from '../access.js';
 
 type P = { w: string; id: string; m: string };
 
@@ -38,6 +39,19 @@ export function factionRoutes(app: FastifyInstance, db: Db) {
         .from(claims).innerJoin(factions, eq(factions.id, claims.factionId)).where(eq(factions.worldId, w.id))
         .groupBy(claims.factionId, claims.kind),
     ]);
+    // Players see who the factions are: names, colors, sigils, descriptions and how much of the explored map they
+    // hold. Their meters (the simulation's numbers) stay the GM's.
+    if (req.view) {
+      const [revealed, hidden] = await Promise.all([req.view.revealed(), req.view.hiddenPages()]);
+      const seen = revealed.size ? await db.select({ factionId: claims.factionId, kind: claims.kind, hexId: claims.hexId })
+        .from(claims).innerJoin(factions, eq(factions.id, claims.factionId)).where(eq(factions.worldId, w.id)) : [];
+      return fs.map((f) => {
+        const mine = seen.filter((c) => c.factionId === f.id && revealed.has(c.hexId));
+        const counts: Record<string, number> = {};
+        for (const c of mine) counts[c.kind] = (counts[c.kind] ?? 0) + 1;
+        return { ...f, signatureMeterId: null, wikiPageId: f.wikiPageId && hidden.has(f.wikiPageId) ? null : f.wikiPageId, claims: counts, meters: [] };
+      });
+    }
     return fs.map((f) => ({
       ...f,
       claims: Object.fromEntries(claimCounts.filter((c) => c.factionId === f.id).map((c) => [c.kind, c.n])),
@@ -105,6 +119,7 @@ export function factionRoutes(app: FastifyInstance, db: Db) {
   // ---------------------------------------------------------------- meter definitions
   app.get('/api/worlds/:w/meters', async (req) => {
     const w = await getWorld(db, (req.params as P).w);
+    if (req.view) return [];
     return db.select().from(meterDefinitions).where(eq(meterDefinitions.worldId, w.id)).orderBy(asc(meterDefinitions.sortOrder));
   });
 
@@ -291,7 +306,10 @@ export function factionRoutes(app: FastifyInstance, db: Db) {
   });
   app.get('/api/worlds/:w/campaigns', async (req) => {
     const w = await getWorld(db, (req.params as P).w);
-    return db.select().from(campaigns).where(eq(campaigns.worldId, w.id)).orderBy(asc(campaigns.createdAt));
+    const rows = await db.select().from(campaigns).where(eq(campaigns.worldId, w.id)).orderBy(asc(campaigns.createdAt));
+    // A player's own campaigns, without the GM's notes on them.
+    const v = req.view;
+    return v ? rows.filter((c) => v.campaigns.some((x) => x.id === c.id)).map((c) => ({ ...c, notes: '' })) : rows;
   });
   app.post('/api/worlds/:w/campaigns', async (req) => {
     const w = await getWorld(db, (req.params as P).w);
@@ -311,8 +329,11 @@ export function factionRoutes(app: FastifyInstance, db: Db) {
   app.delete('/api/worlds/:w/campaigns/:id', async (req) => {
     const { w: wid, id } = req.params as P;
     const w = await getWorld(db, wid);
+    const members = await membersOf(db, [Uuid.parse(id)]);
     const [row] = await db.delete(campaigns).where(and(eq(campaigns.id, Uuid.parse(id)), eq(campaigns.worldId, w.id))).returning();
     if (!row) throw notFound('Campaign');
+    // Its players may have lost the world: their screens start over and find out.
+    changed(req, { restart: members });
     return { ok: true };
   });
 

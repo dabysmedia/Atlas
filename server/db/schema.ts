@@ -26,12 +26,19 @@ const updated = () => timestamp('updated_at', { withTimezone: true }).notNull().
 const worldRef = () => uuid('world_id').notNull().references(() => worlds.id, { onDelete: 'cascade' });
 
 // ---------------------------------------------------------------- auth
+/**
+ * Accounts. The owner (ADMIN_USERNAME) is the GM, always; everyone else is a player the GM added, who sees the
+ * worlds of the campaigns they belong to through their party's fog (see server/access.ts).
+ */
 export const users = pgTable('users', {
   id: id(),
   username: text('username').notNull().unique(),
   passwordHash: text('password_hash').notNull(),
+  role: text('role').notNull().default('player'), // gm | player
+  /** What presence and the GM's player list show; the username when empty. */
+  displayName: text('display_name').notNull().default(''),
   createdAt: created(),
-});
+}, (t) => [check('users_role_ck', sql`${t.role} in ('gm','player')`)]);
 
 export const sessions = pgTable('sessions', {
   // sha256 of the cookie token; the raw token never touches the database
@@ -76,6 +83,12 @@ export const campaigns = pgTable('campaigns', {
   createdAt: created(),
 }, (t) => [index('campaigns_world_idx').on(t.worldId)]);
 
+/** Which players belong to which campaigns: a player sees a campaign's world through that campaign's party fog. */
+export const campaignMembers = pgTable('campaign_members', {
+  campaignId: uuid('campaign_id').notNull().references(() => campaigns.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+}, (t) => [primaryKey({ columns: [t.campaignId, t.userId] }), index('campaign_members_user_idx').on(t.userId)]);
+
 // ---------------------------------------------------------------- wiki
 export const wikiPages = pgTable('wiki_pages', {
   id: id(),
@@ -86,6 +99,8 @@ export const wikiPages = pgTable('wiki_pages', {
   content: jsonb('content').notNull().default({ type: 'doc', content: [] }),
   /** Plain text extracted from content, for search and previews. */
   contentText: text('content_text').notNull().default(''),
+  /** Hidden from players: they never see the page, its title or its text (search, backlinks and links included). */
+  gmOnly: boolean('gm_only').notNull().default(false),
   search: tsvector('search').generatedAlwaysAs(
     sql`setweight(to_tsvector('english', coalesce(title, '')), 'A') || setweight(to_tsvector('english', coalesce(content_text, '')), 'B')`,
   ),
@@ -177,7 +192,10 @@ export const hexes = pgTable('hexes', {
   terrain: text('terrain').notNull().default('unknown'),
   state: text('state').notNull().default('wild'),
   name: text('name').notNull().default(''),
+  /** GM notes: never sent to players. */
   notes: text('notes').notNull().default(''),
+  /** The party's own notes on a hex they have explored, written by the players (and the GM); everyone sees them. */
+  partyNotes: text('party_notes').notNull().default(''),
   wikiPageId: uuid('wiki_page_id').references(() => wikiPages.id, { onDelete: 'set null' }),
   /** Free-form bag for values the simulation will want (resources, danger, weather). */
   data: jsonb('data').notNull().default({}),

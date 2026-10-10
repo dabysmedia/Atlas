@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import { BookOpen, Check, ChevronDown, Dices, History, Plus, Trash2, X } from 'lucide-react';
 import { api, qk } from '../api';
+import { useIsGM } from '../me';
 import { useDraft } from '../live';
 import type { Faction, FactionMeter, MapData, MeterBand, MeterChange, MeterDef, RollEntry, RollTable } from '../types';
 import { useWorld } from '../world';
@@ -17,6 +18,7 @@ const PALETTE = ['#c0392b', '#3b6fd4', '#2e9e6a', '#8e44ad', '#d68910', '#16a3b8
 
 export function FactionsView() {
   const [tab, setTab] = useState<'factions' | 'meters' | 'tables'>('factions');
+  if (!useIsGM()) return <PlayerFactions />;
   return (
     <div className="pagewrap scroll">
       <div className="pagebody">
@@ -40,6 +42,50 @@ export function useFactionData() {
   const meters = useQuery({ queryKey: qk.meters(world.id), queryFn: () => api<MeterDef[]>(`/api/worlds/${world.id}/meters`) });
   const tables = useQuery({ queryKey: qk.rollTables(world.id), queryFn: () => api<RollTable[]>(`/api/worlds/${world.id}/roll-tables`) });
   return { factions: factions.data, meters: meters.data, tables: tables.data, loading: factions.isLoading || meters.isLoading };
+}
+
+// ---------------------------------------------------------------- what players see
+/**
+ * The factions as the players know them: name, colors, sigil, description, the hexes they hold that the party has
+ * seen, and their wiki page. Standing (the meters), their history and the roll tables stay with the GM.
+ */
+function PlayerFactions() {
+  const world = useWorld();
+  const navigate = useNavigate();
+  const factions = useQuery({ queryKey: qk.factions(world.id), queryFn: () => api<Faction[]>(`/api/worlds/${world.id}/factions`) });
+  const [params] = useSearchParams();
+  const openId = params.get('f');
+  useEffect(() => {
+    if (!openId || !factions.data) return;
+    const t = setTimeout(() => document.getElementById(`faction-${openId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    return () => clearTimeout(t);
+  }, [openId, !!factions.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="pagewrap scroll">
+      <div className="pagebody">
+        <div className="pagehead"><h1>Factions</h1></div>
+        <p className="muted" style={{ marginTop: -6 }}>The powers your party knows of, and the land they hold where you have been.</p>
+        <div className="faction-list">
+          {(factions.data ?? []).map((f, i) => (
+            <motion.div key={f.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0, transition: { delay: i * 0.03 } }}>
+              <div className={`faction-row ${openId === f.id ? 'open' : ''}`} id={`faction-${f.id}`}>
+                <div className="fr-head static">
+                  <span className="fr-crest"><FactionSigil sigil={f.sigil} color={f.color} /></span>
+                  <div className="grow">
+                    <div className="fr-name">{f.name}</div>
+                    <div className="fr-sub">{f.claims.control ?? 0} hexes held{f.claims.contested ? ` · ${f.claims.contested} contested` : ''} <span className="faint">where your party has been</span></div>
+                  </div>
+                  {f.wikiPageId && <button className="btn ghost sm" onClick={() => navigate(`/w/${world.id}/wiki/${f.wikiPageId}`)}><BookOpen size={14} /> Wiki</button>}
+                </div>
+                {f.description && <p className="faction-desc fr-desc">{f.description}</p>}
+              </div>
+            </motion.div>
+          ))}
+          {factions.data && !factions.data.length && <div className="empty">No factions known yet.</div>}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------- factions

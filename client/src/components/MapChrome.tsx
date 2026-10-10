@@ -205,9 +205,9 @@ function CompassGlyph({ size }: { size: number }) {
   );
 }
 
-const SHORTCUTS: { keys: string[]; label: string; only3d?: boolean }[] = [
-  { keys: ['1', '–', '5'], label: 'Inspect, terrain, state, control, fog' },
-  { keys: ['[', ']'], label: 'Brush size' },
+const SHORTCUTS: { keys: string[]; label: string; only3d?: boolean; gm?: boolean }[] = [
+  { keys: ['1', '–', '5'], label: 'Inspect, terrain, state, control, fog', gm: true },
+  { keys: ['[', ']'], label: 'Brush size', gm: true },
   { keys: ['L'], label: 'Layers' },
   { keys: ['F'], label: 'Fit the whole map' },
   { keys: ['+', '−'], label: 'Zoom (or scroll, or pinch)' },
@@ -220,12 +220,13 @@ const SHORTCUTS: { keys: string[]; label: string; only3d?: boolean }[] = [
   { keys: ['?'], label: 'This list' },
 ];
 
-export function ShortcutsCard({ mode, onClose }: { mode: '3d' | '2d'; onClose: () => void }) {
+/** The map's keys; a player's map has no brushes, so theirs leaves those out. */
+export function ShortcutsCard({ mode, onClose, player }: { mode: '3d' | '2d'; onClose: () => void; player?: boolean }) {
   return (
     <>
       <header><h4>Keyboard</h4><button className="iconbtn sm" onClick={onClose} aria-label="Close keyboard shortcuts"><X size={14} /></button></header>
       <dl className="keys-list">
-        {SHORTCUTS.filter((s) => !s.only3d || mode === '3d').map((s) => (
+        {SHORTCUTS.filter((s) => (!s.only3d || mode === '3d') && !(player && s.gm)).map((s) => (
           <div key={s.label}>
             <dt>{s.keys.map((k) => (k === '–' ? <span key={k} className="faint">–</span> : <kbd key={k} className="kbd">{k}</kbd>))}</dt>
             <dd>{s.label}</dd>

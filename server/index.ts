@@ -11,12 +11,14 @@ import { eq } from 'drizzle-orm';
 import { createDb, runMigrations } from './db/index.js';
 import { registerAuth, ensureOwner, sessionUser, COOKIE } from './auth.js';
 import { LiveHub, LocalBus, liveRoutes } from './live.js';
+import { accessGate, playerLive } from './access.js';
 import { HttpError } from './history.js';
 import { worldRoutes } from './routes/worlds.js';
 import { wikiRoutes } from './routes/wiki.js';
 import { mapRoutes, modelRoutes } from './routes/map.js';
 import { factionRoutes } from './routes/factions.js';
 import { chronicleRoutes } from './routes/chronicle.js';
+import { playerRoutes } from './routes/players.js';
 import { seedDemoWorld, upgradeDemo } from './worlds.js';
 import { recoverRemovedIsland, seedNewWorldOnce, upgradeNewWorldIsland } from './lore/newworld.js';
 import { worlds } from './db/schema.js';
@@ -32,6 +34,7 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
   const live = new LiveHub(new LocalBus(), {
     stillSignedIn: async (token) => !!(await sessionUser(db, token)),
     canView: async (_who, world) => !!(await db.query.worlds.findFirst({ where: eq(worlds.id, world), columns: { id: true } })),
+    playerLive: (userId, world, campaign) => playerLive(db, userId, world, campaign),
   });
   app.addHook('onClose', async () => { live.close(); await pool.end(); });
   await app.register(cookie);
@@ -50,15 +53,17 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
   app.get('/healthz', async () => ({ ok: true }));
   registerAuth(app, db, { secureCookies: opts.secureCookies ?? false, onSignOut: (token) => live.closeSession(token) });
 
-  // Everything else under /api requires the owner's session.
+  // Everything else under /api requires a session: the GM's, or a player's (who is held to server/access.ts).
   await app.register(async (api) => {
     api.addHook('preHandler', app.requireUser);
-    // First, so every mutating route below is held to broadcasting its changes.
+    // First, so every route below says who may use it, and players are turned away before anything else.
+    accessGate(api, db);
+    // Then, so every mutating route below is held to broadcasting its changes.
     liveRoutes(api, live, {
       user: async (req) => {
         const token = req.cookies[COOKIE];
         const u = await sessionUser(db, token);
-        return u && token ? { name: u.username, token } : null;
+        return u && token ? { id: u.id, name: u.name, role: u.role, token } : null;
       },
       token: (req) => req.cookies[COOKIE],
     });
@@ -68,6 +73,7 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
     modelRoutes(api, db);
     factionRoutes(api, db);
     chronicleRoutes(api, db);
+    playerRoutes(api, db, live);
   });
 
   const clientDir = path.resolve(here, '../client');

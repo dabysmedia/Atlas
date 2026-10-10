@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Db } from '../db/index.js';
 import { events } from '../db/schema.js';
 import { logEvent } from '../history.js';
+import { eventContext, eventSeen } from '../access.js';
 import { getWorld, Uuid } from './worlds.js';
 
 export function chronicleRoutes(app: FastifyInstance, db: Db) {
@@ -19,7 +20,19 @@ export function chronicleRoutes(app: FastifyInstance, db: Db) {
     if (q.before) where.push(lt(events.id, q.before));
     if (q.kind) where.push(or(eq(events.kind, q.kind), like(events.kind, `${q.kind.replace(/[%_]/g, '')}.%`))!);
     if (q.campaignId) where.push(eq(events.campaignId, q.campaignId));
-    return db.select().from(events).where(and(...where)).orderBy(desc(events.id)).limit(q.limit);
+    if (!req.view) return db.select().from(events).where(and(...where)).orderBy(desc(events.id)).limit(q.limit);
+    // A player reads the entries about what they can see (see eventSeen), a page at a time all the same.
+    const ctx = await eventContext(db, req.view);
+    const out: (typeof events.$inferSelect)[] = [];
+    let before = q.before;
+    for (let round = 0; round < 20 && out.length < q.limit; round++) {
+      const batch = await db.select().from(events).where(and(...where, ...(before ? [lt(events.id, before)] : [])))
+        .orderBy(desc(events.id)).limit(500);
+      out.push(...batch.filter((e) => eventSeen(e, ctx)));
+      if (batch.length < 500) break;
+      before = batch[batch.length - 1].id;
+    }
+    return out.slice(0, q.limit);
   });
 
   /** A GM's own chronicle line. History is append-only; corrections are new entries. */

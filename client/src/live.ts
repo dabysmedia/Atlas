@@ -12,7 +12,7 @@ import { daySweep } from './daylight';
 
 /** Who is looking at a world: one entry per open screen. */
 export type Viewer = { conn: string; name: string; role: 'gm' | 'player'; since: number };
-type Scope = 'worlds' | 'world' | 'map' | 'pages' | 'page' | 'search' | 'factions' | 'meters' | 'mh' | 'rolls' | 'campaigns' | 'events' | 'fog' | 'modelArchive';
+type Scope = 'worlds' | 'world' | 'map' | 'pages' | 'page' | 'search' | 'factions' | 'meters' | 'mh' | 'rolls' | 'campaigns' | 'events' | 'fog' | 'modelArchive' | 'players';
 type Patch =
   | { op: 'hexes'; ids: string[]; set: Partial<Pick<Hex, 'terrain' | 'state'>> }
   | { op: 'hex'; hex: Hex }
@@ -41,6 +41,7 @@ type Snapshot = { status: LiveStatus; viewers: Viewer[]; me: string | null };
 /** The cache a scope stands for, on one world. */
 function filterFor(world: string | null, s: Scope): QueryFilters | null {
   if (s === 'worlds') return { queryKey: qk.worlds };
+  if (s === 'players') return { queryKey: qk.players };
   if (!world) return null;
   if (s === 'world') return { queryKey: qk.world(world), exact: true };
   if (s === 'modelArchive') return { queryKey: ['modelArchive', world] };
@@ -59,6 +60,8 @@ class Live {
   private retry = 0;
   private watchdog = 0;
   private world: string | null = null;
+  /** A player's party to view the world as (the server filters what this socket hears through its fog). */
+  private campaign: string | null = null;
   private snap: Snapshot = { status: 'connecting', viewers: [], me: null };
   private subs = new Set<() => void>();
   private drags = new Set<(m: DragMsg) => void>();
@@ -113,18 +116,19 @@ class Live {
     this.connect();
   };
 
-  /** The world this screen is showing; its changes and its viewers are what the socket carries. */
-  view(world: string | null) {
-    if (world === this.world) return;
+  /** The world this screen is showing (as which party, for a player); its changes and its viewers are what the socket carries. */
+  view(world: string | null, campaign: string | null = null) {
+    if (world === this.world && campaign === this.campaign) return;
+    this.campaign = campaign;
     // Nothing from the world being left arrives from now on: its cache must be read fresh next visit.
-    if (this.world) {
+    if (this.world && world !== this.world) {
       void this.qc?.invalidateQueries({ queryKey: ['w', this.world], refetchType: 'none' });
       void this.qc?.invalidateQueries({ queryKey: ['modelArchive', this.world], refetchType: 'none' });
     }
     this.world = world;
     this.set({ viewers: [] });
     this.unsubscribed();
-    this.sendRaw({ t: 'sub', world });
+    this.sendRaw({ t: 'sub', world, campaign });
   }
 
   onDrag(fn: (m: DragMsg) => void) { this.drags.add(fn); return () => { this.drags.delete(fn); }; }
@@ -142,7 +146,7 @@ class Live {
       if (this.ws !== ws) return;
       this.tries = 0;
       this.unsubscribed();
-      this.sendRaw({ t: 'sub', world: this.world });
+      this.sendRaw({ t: 'sub', world: this.world, campaign: this.campaign });
       // Back after a gap (or connected at last, after failing at first): whatever changed meanwhile was missed, so
       // read it all again.
       if (this.opened++ > 0 || this.snap.status === 'reconnecting') this.resync();
@@ -157,8 +161,10 @@ class Live {
       this.receive(m);
     };
     ws.onclose = (e) => {
-      // The session ended (signed out elsewhere, or expired): the app goes back to its sign-in screen.
+      // The session ended (signed out elsewhere, removed, or expired): the app goes back to its sign-in screen.
       if (e.code === 4401 && this.ws === ws) window.dispatchEvent(new Event('atlas:unauthenticated'));
+      // What this account may see changed (the GM changed its campaigns): back at once, reading everything afresh.
+      if (e.code === 4409 && this.ws === ws) { this.tries = 0; window.dispatchEvent(new Event('atlas:access-changed')); }
       this.lost(ws);
     };
   }
@@ -208,7 +214,7 @@ class Live {
       if (m.world !== this.world) {
         // Refused (the server couldn't check, or the world is gone, in which case the app leaves it anyway) or an
         // answer to an older sub: ask again in a while if nothing newer has taken.
-        window.setTimeout(() => { if (this.since === null && this.world) this.sendRaw({ t: 'sub', world: this.world }); }, 5000);
+        window.setTimeout(() => { if (this.since === null && this.world) this.sendRaw({ t: 'sub', world: this.world, campaign: this.campaign }); }, 5000);
         return;
       }
       // Reads that began before the subscription took effect may have missed what was saved in between.

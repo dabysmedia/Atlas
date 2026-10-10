@@ -4,18 +4,19 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import {
   BookOpen, ChevronLeft, ChevronRight, ChevronsUpDown, Cloud, CloudDrizzle, CloudFog, CloudLightning, CloudMoon, CloudRain, CloudRainWind, CloudSun,
-  Dices, Flag, Hexagon, LogOut, Moon, Pause, Play, ScrollText, Search, Settings, Sunrise, Sunset, Swords, Sun, Wind, type LucideIcon,
+  Dices, Flag, Hexagon, LogOut, Moon, Pause, Play, ScrollText, Search, Settings, Sunrise, Sunset, Swords, Sun, UserRound, Users, Wind, type LucideIcon,
 } from 'lucide-react';
-import { api, ApiError, qk } from '../api';
+import { api, ApiError, qk, viewAs } from '../api';
+import { useMe } from '../me';
 import { live, useLive } from '../live';
 import { Presence } from './Presence';
-import type { World } from '../types';
+import type { Campaign, World } from '../types';
 import { WorldCtx } from '../world';
-import { lastWorld } from '../prefs';
+import { lastWorld, partyPref } from '../prefs';
 import { Sigil } from './Sigil';
 import { WorldSwitcher } from './WorldSwitcher';
 import { CommandPalette } from './CommandPalette';
-import { toastError } from './toast';
+import { toast, toastError } from './toast';
 import { TooltipHost } from './Tooltip';
 import { MapView } from '../map/MapView';
 import { FactionsView } from '../factions/FactionsView';
@@ -39,6 +40,11 @@ const NAV = [
   { to: 'campaigns', label: 'Campaigns', icon: Flag },
   { to: 'settings', label: 'World settings', icon: Settings },
 ];
+/** Players read the map, wiki, factions and chronicle; their settings are their own account. */
+const PLAYER_NAV = [
+  ...NAV.filter((n) => ['map', 'wiki', 'factions', 'chronicle'].includes(n.to)),
+  { to: 'settings', label: 'Your account', icon: UserRound },
+];
 
 export function Shell({ noWorld }: { noWorld?: boolean }) {
   const { worldId } = useParams();
@@ -47,9 +53,36 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
   const [switcher, setSwitcher] = useState(!!noWorld);
   const [palette, setPalette] = useState(false);
   const wxKey = ['weather', worldId];
+  const me = useMe();
+  const player = me?.role === 'player';
+  // A player sees the world as one of their parties: the one chosen here before, else their first.
+  const camps = useQuery({
+    queryKey: qk.campaigns(worldId ?? ''), enabled: !!worldId && player,
+    queryFn: () => api<Campaign[]>(`/api/worlds/${worldId}/campaigns`),
+  });
+  // The party chosen on this screen, per world; else the one this browser chose before.
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  const saved = worldId ? picked[worldId] ?? partyPref(worldId).get() : undefined;
+  const party = player ? (camps.data?.find((c) => c.id === saved) ?? camps.data?.[0])?.id ?? null : null;
+  // Set while rendering, so the reads this render starts already ask as this party (the server checks it is theirs).
+  viewAs.campaign = party;
+  const chooseParty = (id: string) => {
+    if (!worldId || id === party) return;
+    partyPref(worldId).set(id);
+    viewAs.campaign = id;
+    setPicked((p) => ({ ...p, [worldId]: id }));
+    // Everything on the world is seen through the party's fog: read it again as the new party.
+    void qc.invalidateQueries({ queryKey: ['w', worldId], predicate: (q) => q.queryKey[2] !== 'campaigns' && q.queryKey.length > 2 });
+  };
   // Live sync: one socket for as long as someone is signed in here, carrying the world on screen.
   useEffect(() => live.start(qc), [qc]);
-  useEffect(() => { live.view(worldId ?? null); }, [worldId]);
+  useEffect(() => { live.view(worldId ?? null, party); }, [worldId, party]);
+  // The GM changed this player's campaigns: the screen has just reconnected and is reading everything again.
+  useEffect(() => {
+    const on = () => { toast('Your campaigns changed.'); void qc.invalidateQueries({ predicate: (q) => q.queryKey[0] !== 'me' }); };
+    window.addEventListener('atlas:access-changed', on);
+    return () => window.removeEventListener('atlas:access-changed', on);
+  }, [qc]);
   const linked = useLive().status === 'live';
   // Changes from other screens arrive over the socket. While it is down, a gentle poll still brings the weather, the
   // day and the clock; not while a weather change is saving, whose answer could land before the poll's and be undone by it.
@@ -63,8 +96,12 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
   // Warm the wiki chunk in the background so the first visit is instant.
   useEffect(() => { const t = window.setTimeout(() => { void import('../wiki/WikiView'); }, 1500); return () => window.clearTimeout(t); }, []);
   useEffect(() => {
-    if (world.error instanceof ApiError && (world.error.status === 404 || world.error.status === 400)) navigate('/', { replace: true });
-  }, [world.error, navigate]);
+    if (!(world.error instanceof ApiError && (world.error.status === 404 || world.error.status === 400))) return;
+    // A world that's gone, or (for a player) not one of theirs: say so politely, and go somewhere that is.
+    toast(player ? 'That world isn’t open to you.' : 'That world no longer exists.');
+    if (worldId && lastWorld.get() === worldId) lastWorld.set('');
+    navigate('/', { replace: true });
+  }, [world.error, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     document.documentElement.style.setProperty('--accent', world.data?.accent ?? '#d4a64a');
     document.title = world.data ? `${world.data.name} · Campaign Atlas` : 'Campaign Atlas';
@@ -171,7 +208,9 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
     navigate('/');
   };
 
-  const w = world.data;
+  // A player's screens wait for their parties, so nothing is read as the wrong one.
+  const w = player && !camps.data ? undefined : world.data;
+  const nav = player ? PLAYER_NAV : NAV;
   const loc = useLocation();
   const section = loc.pathname.split('/')[3] ?? 'map';
   const ambient = useAmbientPref() && section !== 'map';
@@ -203,22 +242,23 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
         <div className="spacer" />
         {w && (
           <motion.div className="clock glass" role="group" aria-label="World clock" {...rise(2)}>
-            <button onClick={() => day.mutate(-1)} aria-label="Previous day" data-tip="Previous day"><ChevronLeft size={14} /></button>
-            <span className="day"><small>Day</small> {w.currentDay}</span>
-            <TimeOfDay daylight={w.daylight} onChange={(b) => daylight.mutate(b)} />
-            <WeatherControl weather={w.weather} daylight={w.daylight} onChange={(b) => weather.mutate(b)} onRoll={() => rollWeather.mutate()} rolling={rollWeather.isPending} />
-            <button onClick={() => day.mutate(1)} aria-label="Next day" data-tip="Next day"><ChevronRight size={14} /></button>
+            {!player && <button onClick={() => day.mutate(-1)} aria-label="Previous day" data-tip="Previous day"><ChevronLeft size={14} /></button>}
+            <span className={`day ${player ? 'ro' : ''}`}><small>Day</small> {w.currentDay}</span>
+            <TimeOfDay daylight={w.daylight} onChange={(b) => daylight.mutate(b)} readOnly={player} />
+            <WeatherControl weather={w.weather} daylight={w.daylight} onChange={(b) => weather.mutate(b)} onRoll={() => rollWeather.mutate()} rolling={rollWeather.isPending} readOnly={player} />
+            {!player && <button onClick={() => day.mutate(1)} aria-label="Next day" data-tip="Next day"><ChevronRight size={14} /></button>}
           </motion.div>
         )}
+        {w && player && camps.data && <PartyPicker parties={camps.data} party={party} onChoose={chooseParty} {...rise(3)} />}
         {w && <Presence {...rise(3)} />}
         <motion.button className="glass signout" onClick={logout} data-tip="Sign out" aria-label="Sign out" {...rise(4)}><LogOut size={15} /></motion.button>
       </header>
       {w && (
         <motion.nav className="rail glass" aria-label="Sections" data-tip-side="right" {...rise(1, { x: -12 })}>
-          {NAV.map((n, i) => (
+          {nav.map((n, i) => (
             <span key={n.to} className="rail-slot">
-              {i === NAV.length - 1 && <span className="rail-sep" aria-hidden />}
-              <NavLink to={`/w/${w.id}/${n.to}`} className={({ isActive }) => `${isActive ? 'active' : ''} ${i === NAV.length - 1 ? 'end' : ''}`} data-tip={n.label} aria-label={n.label}>
+              {i === nav.length - 1 && <span className="rail-sep" aria-hidden />}
+              <NavLink to={`/w/${w.id}/${n.to}`} className={({ isActive }) => `${isActive ? 'active' : ''} ${i === nav.length - 1 ? 'end' : ''}`} data-tip={n.label} aria-label={n.label}>
                 {({ isActive }) => (
                   <>
                     {isActive && <motion.span layoutId="rail-mark" className="rail-mark" transition={{ type: 'spring', stiffness: 500, damping: 38 }} />}
@@ -236,7 +276,7 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
             <WorldCtx.Provider value={w}>
               <AmbientMap key={w.id} section={section} />
               {/* Keyed by world: switching worlds remounts instead of cross-animating two worlds' routes. */}
-              <WorldRoutes key={w.id} />
+              <WorldRoutes key={`${w.id}:${party ?? ''}`} player={player} />
               <CommandPalette open={palette} onClose={() => setPalette(false)} />
             </WorldCtx.Provider>
           )}
@@ -249,7 +289,7 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
   );
 }
 
-function WorldRoutes() {
+function WorldRoutes({ player }: { player: boolean }) {
   const loc = useLocation();
   // World id + section: switching either cross-fades; moving between wiki pages doesn't.
   const section = loc.pathname.split('/').slice(0, 4).join('/');
@@ -264,7 +304,7 @@ function WorldRoutes() {
           <Route path="wiki/:pageId" element={<WikiView />} />
           <Route path="factions" element={<FactionsView />} />
           <Route path="chronicle" element={<ChronicleView />} />
-          <Route path="campaigns" element={<CampaignsView />} />
+          <Route path="campaigns" element={player ? <Navigate to="../map" replace /> : <CampaignsView />} />
           <Route path="settings" element={<SettingsView />} />
           <Route path="*" element={<Navigate to="map" replace />} />
         </Routes>
@@ -298,14 +338,36 @@ function usePopover() {
   return { open, setOpen, btn, rootProps: { ref: root, onKeyDown: onKey, onKeyUp: onKey } };
 }
 
-/** The hour on the world clock, with the day cycle's speed (a per-world DM setting) and a dial. */
-function TimeOfDay({ daylight, onChange }: { daylight: Daylight; onChange: (b: { hour?: number; speed?: DaySpeed }) => void }) {
+/** Which of their parties a player sees the world as: a picker when they have several, else just the party's name. */
+function PartyPicker({ parties, party, onChoose, ...motionProps }: { parties: Campaign[]; party: string | null; onChoose: (id: string) => void } & React.ComponentProps<typeof motion.label>) {
+  const name = parties.find((c) => c.id === party)?.name ?? '';
+  return (
+    <motion.label className="party glass" data-tip={parties.length > 1 ? 'The party you see the world as' : `You see the world as ${name}`} {...motionProps}>
+      <Users size={14} className="clock-icon" />
+      {parties.length > 1 ? (
+        <select value={party ?? ''} onChange={(e) => onChoose(e.target.value)} aria-label="View the world as">
+          {parties.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      ) : <span className="party-name">{name}</span>}
+    </motion.label>
+  );
+}
+
+/** The hour on the world clock, with the day cycle's speed (a per-world DM setting) and a dial. Players see it, not change it. */
+function TimeOfDay({ daylight, onChange, readOnly }: { daylight: Daylight; onChange: (b: { hour?: number; speed?: DaySpeed }) => void; readOnly?: boolean }) {
   const { open, setOpen, btn, rootProps } = usePopover();
   const hour = useHour(daylight);
   const [drag, setDrag] = useState<number | null>(null);
   const shown = drag ?? hour % 24;
   const part = partOfDay(shown);
   const Icon = part === 'Night' ? Moon : part === 'Dawn' ? Sunrise : part === 'Dusk' || part === 'Golden hour' ? Sunset : Sun;
+  if (readOnly) {
+    return (
+      <span className="tod"><span className="tod-btn ro" role="img" aria-label={`Time of day: ${part}, ${formatHour(shown)}`} data-tip={part}>
+        <Icon size={13} className="clock-icon" /><span className="hour">{formatHour(shown)}</span>
+      </span></span>
+    );
+  }
   return (
     <span className="tod" {...rootProps}>
       <button ref={btn} className="tod-btn" onClick={() => setOpen((o) => !o)} aria-label="Time of day" aria-expanded={open} data-tip={`${part} · day cycle ${DAY_SPEEDS[daylight.speed].label.toLowerCase()}`}>
@@ -344,8 +406,8 @@ const WEATHER_ICON: Record<WeatherKind, LucideIcon> = {
 };
 
 /** Today's weather on the world clock (a per-world DM setting): pick a kind, roll one, or let each new day roll its own. */
-function WeatherControl({ weather, daylight, onChange, onRoll, rolling }: {
-  weather: Weather; daylight: Daylight; onChange: (b: { kind?: WeatherKind; auto?: boolean }) => void; onRoll: () => void; rolling: boolean;
+function WeatherControl({ weather, daylight, onChange, onRoll, rolling, readOnly }: {
+  weather: Weather; daylight: Daylight; onChange: (b: { kind?: WeatherKind; auto?: boolean }) => void; onRoll: () => void; rolling: boolean; readOnly?: boolean;
 }) {
   const { open, setOpen, btn, rootProps } = usePopover();
   const grid = useRef<HTMLDivElement>(null);
@@ -355,6 +417,13 @@ function WeatherControl({ weather, daylight, onChange, onRoll, rolling }: {
   const Icon = icon(weather.kind);
   const info = WEATHER[weather.kind];
   useEffect(() => { if (open) grid.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus({ preventScroll: true }); }, [open]);
+  if (readOnly) {
+    return (
+      <span className="wx"><span className="wx-btn ro" role="img" aria-label={`Weather: ${info.label}`} data-tip={`${info.label} · ${info.note}`}>
+        <Icon size={14} className="clock-icon" /><span className="wx-label">{info.label}</span>
+      </span></span>
+    );
+  }
   // Arrows move through the grid and Enter or Space picks, so looking around doesn't change the sky (and the chronicle) at every step.
   const onKey = (e: React.KeyboardEvent) => {
     const step = ({ ArrowRight: 1, ArrowLeft: -1, ArrowDown: 3, ArrowUp: -3 } as Record<string, number>)[e.key];

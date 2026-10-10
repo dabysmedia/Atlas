@@ -101,6 +101,8 @@ export class HexMapRenderer {
   /** True while a terrain or state brush is active: terrain colors surface over the art so edits are visible. */
   painting = false;
   showFog = false;
+  /** A player's map: unexplored hexes come blank from the server, and are drawn as unknown land, not seen through. */
+  fogOpaque = false;
 
   hoverId: string | null = null;
   selectedId: string | null = null;
@@ -728,14 +730,14 @@ export class HexMapRenderer {
       ctx.globalAlpha = 1;
     }
 
-    // 4. Fog of war (the GM sees through it, darkened and hatched).
+    // 4. Fog of war (the GM sees through it, darkened and hatched; a player sees only that it is unexplored).
     if (this.fog && this.fogPath && this.showFog) {
-      ctx.fillStyle = 'rgba(5, 9, 13, 0.55)';
+      ctx.fillStyle = this.fogOpaque ? 'rgba(13, 21, 27, 0.97)' : 'rgba(5, 9, 13, 0.55)';
       ctx.fill(this.fogPath);
-      if (detail > 0.2) {
+      if (detail > 0.2 || this.fogOpaque) {
         ctx.save();
         ctx.clip(this.fogPath);
-        ctx.strokeStyle = 'rgba(200,220,230,0.06)';
+        ctx.strokeStyle = this.fogOpaque ? 'rgba(214, 190, 140, 0.05)' : 'rgba(200,220,230,0.06)';
         ctx.lineWidth = 2 / z;
         const step = 12 / z;
         ctx.beginPath();

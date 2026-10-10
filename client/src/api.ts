@@ -9,6 +9,12 @@ const uuid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(
 export const CLIENT_ID = uuid();
 export const clientHeaders = { 'x-atlas-client': CLIENT_ID };
 
+/**
+ * A player's choice of party to view the open world as (sent as x-atlas-campaign; the server checks it is theirs).
+ * Null for the GM, or before a player's world has said which parties they have.
+ */
+export const viewAs = { campaign: null as string | null };
+
 /** Writes this tab has in flight; live sync holds back refetches until they land, so none brings back an older value. */
 export const pendingWrites = {
   count: 0,
@@ -32,7 +38,10 @@ export async function api<T = unknown>(path: string, init?: { method?: string; b
   const method = init?.method ?? (init?.body !== undefined ? 'POST' : 'GET');
   const req = fetch(path, {
     method,
-    headers: { ...clientHeaders, ...(init?.body !== undefined ? { 'content-type': 'application/json' } : {}) },
+    headers: {
+      ...clientHeaders, ...(viewAs.campaign ? { 'x-atlas-campaign': viewAs.campaign } : {}),
+      ...(init?.body !== undefined ? { 'content-type': 'application/json' } : {}),
+    },
     body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
     credentials: 'same-origin',
     signal: init?.signal,
@@ -58,6 +67,7 @@ export const queryClient = new QueryClient({
 /** Query keys, all scoped by world so two worlds never share cache entries. */
 export const qk = {
   me: ['me'] as const,
+  players: ['players'] as const,
   worlds: ['worlds'] as const,
   world: (w: string) => ['w', w] as const,
   pages: (w: string) => ['w', w, 'pages'] as const,

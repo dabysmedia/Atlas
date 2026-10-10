@@ -6,9 +6,10 @@ import StarterKit from '@tiptap/starter-kit';
 import { Placeholder } from '@tiptap/extensions';
 import { motion } from 'motion/react';
 import {
-  Bold, Heading2, Heading3, Italic, Link2, List, ListOrdered, Plus, Quote, Search, Strikethrough, Trash2,
+  Bold, EyeOff, Heading2, Heading3, Italic, Link2, List, ListOrdered, Plus, Quote, Search, Strikethrough, Trash2,
 } from 'lucide-react';
-import { api, qk } from '../api';
+import { api, ApiError, qk } from '../api';
+import { useIsGM } from '../me';
 import { canonical } from '../live';
 import type { Page, PageIndex } from '../types';
 import { useWorld } from '../world';
@@ -29,14 +30,16 @@ export function WikiView() {
   const [filter, setFilter] = useState('');
   const results = useCombinedSearch(world.id, filter);
   const qc = useQueryClient();
+  const gm = useIsGM();
 
   // Keep the editor's link machinery pointed at this world's pages.
   useEffect(() => {
+    wikiHost.player = !gm;
     wikiHost.pages = index.data ?? [];
     wikiHost.createPage = (title) => create.mutateAsync({ title });
     wikiHost.openPage = (id) => navigate(`/w/${world.id}/wiki/${id}`);
     window.dispatchEvent(new Event('atlas:pages-changed'));
-  }, [index.data, create, navigate, world.id]);
+  }, [index.data, create, navigate, world.id, gm]);
 
   // Reopen the last page when arriving at the bare wiki route.
   useEffect(() => {
@@ -99,6 +102,7 @@ export function WikiView() {
               {pages.map((p) => (
                 <div key={p.id} className={`wiki-item ${p.id === pageId ? 'on' : ''}`} onClick={() => navigate(`/w/${world.id}/wiki/${p.id}`)}>
                   <span className="t">{p.title}</span>
+                  {p.gmOnly && <EyeOff size={12} className="gm-only-mark" aria-label="GM only" data-tip="GM only: players don’t see this page" />}
                 </div>
               ))}
             </div>
@@ -143,6 +147,8 @@ function PageEditor({ pageId }: { pageId: string }) {
   const world = useWorld();
   const qc = useQueryClient();
   const navigate = useNavigate();
+  // Players write and edit the pages they can see; deleting pages and hiding them from players is the GM's.
+  const gm = useIsGM();
   const page = useQuery({ queryKey: qk.page(world.id, pageId), queryFn: () => api<Page>(`/api/worlds/${world.id}/pages/${pageId}`) });
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('Lore');
@@ -257,7 +263,25 @@ function PageEditor({ pageId }: { pageId: string }) {
     onError: toastError,
   });
 
-  if (page.isError) return <div className="empty">This page doesn&rsquo;t exist (it may have been deleted).</div>;
+  // Hides a page from players, or shows it to them again (the server tells their screens either way).
+  const gmOnly = useMutation({
+    mutationFn: (v: boolean) => api<PageIndex>(`/api/worlds/${world.id}/pages/${pageId}`, { method: 'PATCH', body: { gmOnly: v } }),
+    onSuccess: (row) => {
+      qc.setQueryData<PageIndex[]>(qk.pages(world.id), (xs) => (xs ?? []).map((x) => (x.id === row.id ? { ...x, gmOnly: row.gmOnly } : x)));
+      qc.setQueryData<Page>(qk.page(world.id, pageId), (p) => (p ? { ...p, gmOnly: row.gmOnly } : p));
+    },
+    onError: toastError,
+  });
+
+  if (page.isError) {
+    const gone = page.error instanceof ApiError && page.error.status === 404;
+    return (
+      <div className="empty">
+        {gone ? (gm ? 'This page doesn’t exist (it may have been deleted).' : 'This page isn’t in your wiki: it may have been deleted, or kept for the GM.')
+          : 'This page couldn’t be loaded.'}
+      </div>
+    );
+  }
   return (
     <motion.div className="wiki-doc" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18 }}>
       <textarea ref={titleRef} className="wiki-title" rows={1} value={title} placeholder="Page title" aria-label="Page title"
@@ -279,7 +303,13 @@ function PageEditor({ pageId }: { pageId: string }) {
           value={category} onChange={(e) => { setCategory(e.target.value); queue({ category: e.target.value }); }} aria-label="Category" />
         <datalist id="wiki-cats">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
         <div className="spacer" />
-        <button className="btn ghost sm danger" onClick={() => setConfirmDelete(true)}><Trash2 size={13} /> Delete</button>
+        {gm && (
+          <button className={`btn ghost sm gm-only-toggle ${page.data?.gmOnly ? 'on' : ''}`} aria-pressed={!!page.data?.gmOnly} disabled={!page.data || gmOnly.isPending}
+            onClick={() => gmOnly.mutate(!page.data?.gmOnly)} data-tip={page.data?.gmOnly ? 'Players don’t see this page. Click to show it to them.' : 'Hide this page from players'}>
+            <EyeOff size={13} /> GM only
+          </button>
+        )}
+        {gm && <button className="btn ghost sm danger" onClick={() => setConfirmDelete(true)}><Trash2 size={13} /> Delete</button>}
       </div>
       {editor && <FormatBar editor={editor} />}
       <EditorContent editor={editor} />

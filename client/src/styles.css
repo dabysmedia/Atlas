@@ -270,6 +270,22 @@ button.chip:hover { border-color: var(--glass-edge-hi); color: var(--text); }
 .presence .avatar:first-child { margin-left: 0; }
 .presence .avatar.me { border-color: var(--gold-hi); box-shadow: 0 0 0 2px rgba(10, 17, 21, 0.85), 0 0 10px -1px rgba(214, 176, 106, 0.65); }
 .presence .avatar.more { background: rgba(255, 255, 255, 0.08); color: var(--text-dim); font-size: 10px; text-shadow: none; }
+/* A player's avatar wears a small gilt "P", so the table can tell players from the GM at a glance. */
+.presence .avatar { position: relative; }
+.presence .avatar .role-badge {
+  position: absolute; right: -4px; bottom: -3px; width: 12px; height: 12px; border-radius: 50%; display: grid; place-items: center;
+  font: 700 7.5px/1 var(--font-ui); color: var(--ink-1); text-shadow: none; background: var(--gold-hi); box-shadow: 0 0 0 1.5px rgba(10, 17, 21, 0.9);
+}
+/* Which party a player sees the world as: a small island beside the clock. */
+.party { display: flex; align-items: center; gap: 7px; padding: 0 12px 0 10px; max-width: 220px; color: var(--text); font-size: 12.5px; }
+.party .clock-icon { margin-left: 0; flex: none; }
+.party-name, .party select { font-family: var(--font-display); letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.party select {
+  min-width: 0; max-width: 170px; height: 30px; padding: 0 4px; border: 0; background: transparent; color: var(--text); font-size: 12.5px; cursor: pointer;
+  border-radius: 8px; outline-offset: 2px;
+}
+.party select:hover { color: var(--gold-hi); }
+.party select option { background: var(--ink-2); color: var(--text); }
 .presence .pres-n { display: none; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); }
 .clock { display: flex; align-items: center; gap: 2px; padding: 0 6px; position: relative; }
 .clock > button, .clock .tod-btn, .clock .wx-btn {
@@ -299,6 +315,11 @@ button.chip:hover { border-color: var(--glass-edge-hi); color: var(--text); }
 .clock .tod-pop .brush:not(.on):hover, .clock .wx-pop .wx-kind:not(.on):hover { background: rgba(255,255,255,0.05); color: var(--text); border-color: rgba(240, 226, 196, 0.22); }
 .clock .tod-pop .brush:focus-visible, .clock .wx-pop .wx-kind:focus-visible { outline: 1px dashed var(--text-dim); outline-offset: 2px; }
 .tod-note { margin: 0; font-size: 11.5px; }
+/* Players read the clock without changing it: no hover, no pointer. */
+.clock .tod-btn.ro, .clock .wx-btn.ro { cursor: default; }
+.clock .tod-btn.ro:hover, .clock .wx-btn.ro:hover { background: transparent; color: var(--text); }
+.clock .tod-btn.ro:active, .clock .wx-btn.ro:active { transform: none; }
+.clock .day.ro { padding-left: 10px; }
 .clock .day small { color: var(--text-faint); font-weight: 500; margin-right: 4px; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; }
 /* Today's weather, beside the hour: the kind, and a popover of all nine to pick from or roll. */
 .clock .wx-btn { width: auto; padding: 0 10px 0 2px; gap: 6px; display: inline-flex; align-items: center; color: var(--text); }
@@ -352,6 +373,8 @@ button.chip:hover { border-color: var(--glass-edge-hi); color: var(--text); }
   .clock .wx-btn { padding: 0 8px 0 2px; }
 }
 @media (max-width: 760px) {
+  .party { max-width: 150px; }
+  .party select { max-width: 110px; }
   .searchbox { width: 46px; min-width: 0; flex: none !important; padding: 0; justify-content: center; }
   .searchbox .grow, .searchbox .kbd { display: none; }
 }
@@ -479,6 +502,9 @@ mark { background: rgba(214,176,106,0.3); color: var(--text); border-radius: 2px
 .wiki-group { font-family: var(--font-display); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.16em; color: var(--gold); padding: 14px 10px 5px; font-weight: 600; }
 .wiki-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 10px; color: var(--text-dim); cursor: pointer; transition: background 0.15s, color 0.15s; }
 .wiki-item:hover { background: rgba(255,255,255,0.05); color: var(--text); }
+.wiki-item .gm-only-mark { margin-left: auto; flex: none; color: var(--text-faint); opacity: 0.8; }
+.gm-only-toggle { color: var(--text-dim); }
+.gm-only-toggle.on { color: var(--gold-hi); background: var(--gold-soft); box-shadow: var(--gilt-glow); }
 .wiki-item.on { background: var(--gold-soft); color: var(--gold-hi); box-shadow: var(--gilt-glow); }
 .wiki-item .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wiki-item .snip { font-size: 12px; color: var(--text-faint); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -521,6 +547,9 @@ mark { background: rgba(214,176,106,0.3); color: var(--text); border-radius: 2px
 .wikilink { color: var(--gold); border-bottom: 1px dashed rgba(214,176,106,0.5); cursor: pointer; padding: 0 1px; border-radius: 2px; transition: background 0.12s; }
 .wikilink:hover { background: var(--gold-soft); }
 .wikilink.missing { color: #ec97a1; border-bottom-color: rgba(232,138,149,0.5); }
+/* On a player's screen, a link to a page kept for the GM is just its words. */
+.wikilink.unseen { color: inherit; border-bottom: 0; cursor: text; padding: 0; }
+.wikilink.unseen:hover { background: none; }
 .ProseMirror-selectednode.wikilink { background: var(--gold-soft); }
 
 .suggest {
@@ -929,6 +958,8 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 .faction-row:hover { border-color: rgba(240, 226, 196, 0.22); transform: translateY(-1px); }
 .faction-row.open { border-color: var(--glass-edge-hi); box-shadow: var(--glass-shadow), var(--glass-highlight); transform: none; }
 .faction-row > .fr-head { display: flex; align-items: center; gap: 14px; padding: 13px 18px; cursor: pointer; width: 100%; border: 0; background: transparent; text-align: left; }
+.faction-row > .fr-head.static { cursor: default; }
+.faction-row > .fr-desc { margin: -4px 18px 14px 66px; }
 .fr-crest { width: 36px; height: 36px; flex: none; display: grid; place-items: center; filter: drop-shadow(0 0 8px rgba(0,0,0,0.5)); }
 .fr-crest .diamond { width: 20px; height: 20px; }
 .fr-name { font-family: var(--font-display); font-size: 17px; font-weight: 600; letter-spacing: 0.05em; }
@@ -1102,4 +1133,38 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
   .ambient canvas { transition: none; }
+}
+
+/* ---- Players (the GM's settings) and one's own account. */
+.players-card .card-body { display: flex; flex-direction: column; gap: 4px; padding: 8px 18px; }
+.player-row { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
+.player-row:last-child { border-bottom: 0; }
+.player-id { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.player-avatar {
+  position: relative; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  font: 600 13px/1 var(--font-ui); text-transform: uppercase; color: #f6efdf;
+  background: radial-gradient(circle at 35% 28%, rgba(214, 176, 106, 0.55), rgba(60, 50, 32, 0.9)); border: 1px solid rgba(255, 248, 230, 0.2);
+}
+.player-avatar::after {
+  content: ''; position: absolute; right: -1px; bottom: -1px; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--ink-4); box-shadow: 0 0 0 2px var(--ink-1);
+}
+.player-avatar.online::after { background: var(--good); box-shadow: 0 0 0 2px var(--ink-1), 0 0 8px rgba(121, 192, 138, 0.7); }
+.player-name { font-family: var(--font-display); font-size: 15px; letter-spacing: 0.03em; color: var(--text); padding: 2px 0; min-width: 120px; }
+.player-name:hover { border-color: transparent; background: rgba(255, 255, 255, 0.03); }
+.player-user { font-size: 12px; }
+.camp-chips { display: flex; flex-direction: column; gap: 6px; padding-left: 46px; }
+.dialog .camp-chips { padding-left: 0; }
+.camp-world { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.camp-world-name { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-faint); font-weight: 600; margin-right: 4px; }
+.chip.camp-chip { cursor: pointer; padding: 3px 11px; }
+.chip.camp-chip.on { color: var(--gold-hi); background: var(--gold-soft); border-color: transparent; box-shadow: var(--gilt-glow); }
+.pw-seg { margin-top: 2px; }
+.pw-reveal {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 12px; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--glass-edge);
+}
+.pw-reveal code { flex: 1; font: 600 18px/1.2 ui-monospace, 'SFMono-Regular', Menlo, monospace; letter-spacing: 0.06em; color: var(--gold-hi); user-select: all; }
+@media (max-width: 600px) {
+  .camp-chips { padding-left: 0; }
+  .player-id .btn { padding-left: 8px; padding-right: 8px; }
 }

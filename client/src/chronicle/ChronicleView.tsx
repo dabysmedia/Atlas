@@ -3,6 +3,7 @@ import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'motion/react';
 import { Send } from 'lucide-react';
 import { api, qk } from '../api';
+import { useIsGM } from '../me';
 import type { WorldEvent } from '../types';
 import { useWorld } from '../world';
 import { toastError } from '../components/toast';
@@ -17,6 +18,9 @@ export function ChronicleView() {
   const qc = useQueryClient();
   const [kind, setKind] = useState('');
   const [note, setNote] = useState('');
+  // Players read the entries about what they can see (the server picks them); recording is the GM's.
+  const gm = useIsGM();
+  const filters = gm ? FILTERS : FILTERS.filter((f) => f.id !== 'meter' && f.id !== 'roll').map((f) => (f.id === 'note' ? { ...f, label: 'Notes' } : f));
   const q = useInfiniteQuery({
     queryKey: [...qk.events(world.id), kind],
     queryFn: ({ pageParam }) => api<WorldEvent[]>(`/api/worlds/${world.id}/events?limit=150${pageParam ? `&before=${pageParam}` : ''}${kind ? `&kind=${kind}` : ''}`),
@@ -43,12 +47,14 @@ export function ChronicleView() {
     <div className="pagewrap scroll">
       <div className="pagebody" style={{ maxWidth: 900 }}>
         <div className="pagehead"><h1>Chronicle</h1><span className="muted" style={{ marginBottom: 6 }}>Append-only history of {world.name}</span></div>
-        <form className="row" onSubmit={add} style={{ marginBottom: 18 }}>
-          <input className="input" placeholder={`Record something that happened on day ${world.currentDay}…`} value={note} onChange={(e) => setNote(e.target.value)} />
-          <button className="btn primary" disabled={!note.trim()}><Send size={14} /> Record</button>
-        </form>
+        {gm && (
+          <form className="row" onSubmit={add} style={{ marginBottom: 18 }}>
+            <input className="input" placeholder={`Record something that happened on day ${world.currentDay}…`} value={note} onChange={(e) => setNote(e.target.value)} />
+            <button className="btn primary" disabled={!note.trim()}><Send size={14} /> Record</button>
+          </form>
+        )}
         <div className="row" style={{ flexWrap: 'wrap', gap: 4, marginBottom: 18 }}>
-          {FILTERS.map((f) => <button key={f.id} className={`brush ${kind === f.id ? 'on' : ''}`} onClick={() => setKind(f.id)}>{f.label}</button>)}
+          {filters.map((f) => <button key={f.id} className={`brush ${kind === f.id ? 'on' : ''}`} onClick={() => setKind(f.id)}>{f.label}</button>)}
         </div>
         {byDay.map(([day, evs]) => (
           <motion.div key={day} className="chron-day" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}>

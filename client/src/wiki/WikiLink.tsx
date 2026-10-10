@@ -15,7 +15,9 @@ export const wikiHost: {
   pages: PageIndex[];
   createPage: (title: string) => Promise<PageIndex>;
   openPage: (id: string) => void;
-} = { pages: [], createPage: async () => { throw new Error('not ready'); }, openPage: () => {} };
+  /** On a player's screen, a link to a page they can't see (a GM-only one) reads as plain words. */
+  player: boolean;
+} = { pages: [], createPage: async () => { throw new Error('not ready'); }, openPage: () => {}, player: false };
 
 const findByTitle = (title: string) => wikiHost.pages.find((p) => p.title.toLowerCase() === title.trim().toLowerCase());
 
@@ -157,6 +159,10 @@ function WikiLinkView({ node }: NodeViewProps) {
     window.addEventListener('atlas:pages-changed', h);
     return () => window.removeEventListener('atlas:pages-changed', h);
   }, []);
+  // A link to a page this player can't see: its words stay, with nothing to open (or recreate).
+  if (!page && pageId && wikiHost.player) {
+    return <NodeViewWrapper as="span" className="wikilink unseen" data-wikilink="">{text || label}</NodeViewWrapper>;
+  }
   const open = async (e: React.MouseEvent) => {
     e.preventDefault();
     if (page) return wikiHost.openPage(page.id);

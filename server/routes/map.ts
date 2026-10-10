@@ -2,8 +2,9 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Db } from '../db/index.js';
-import { campaignFog, campaigns, claims, factions, hexes, mapArt, mapModel, maps, settlements, tokens, type ArtPlacement } from '../db/schema.js';
-import { badRequest, logEvent, notFound, worldDay } from '../history.js';
+import { campaignFog, campaigns, claims, factions, hexes, mapArt, mapModel, maps, settlements, tokens, wikiPages, type ArtPlacement } from '../db/schema.js';
+import { badRequest, forbidden, logEvent, notFound, worldDay } from '../history.js';
+import { mayMoveToken, seenClaim, seenHex, seenSettlement, seenToken, tokenSeen } from '../access.js';
 import { getWorld, Uuid } from './worlds.js';
 import { gridBounds, hexLabel, type Orientation } from '../../shared/hex.js';
 import { imageSize } from '../imagesize.js';
@@ -32,7 +33,9 @@ async function worldHexes(db: Db, worldId: string, ids: string[]) {
 const HexIds = z.array(Uuid).min(1).max(20_000);
 
 /** The fields a screen's map cache keeps, for live patches. */
-const hexRow = (h: typeof hexes.$inferSelect) => ({ id: h.id, q: h.q, r: h.r, terrain: h.terrain, state: h.state, name: h.name, notes: h.notes, wikiPageId: h.wikiPageId, data: h.data });
+const hexRow = (h: typeof hexes.$inferSelect) => ({
+  id: h.id, q: h.q, r: h.r, terrain: h.terrain, state: h.state, name: h.name, notes: h.notes, partyNotes: h.partyNotes, wikiPageId: h.wikiPageId, data: h.data,
+});
 const claimRow = (c: typeof claims.$inferSelect) => ({ id: c.id, hexId: c.hexId, factionId: c.factionId, kind: c.kind, sinceDay: c.sinceDay, note: c.note });
 
 const artMeta = { version: mapArt.version, width: mapArt.width, height: mapArt.height, mime: mapArt.mime, placement: mapArt.placement, updatedAt: mapArt.updatedAt };
@@ -52,14 +55,17 @@ export const MAX_MODEL_BYTES = 40 * 1024 * 1024;
 const modelMeta = { version: mapModel.version, name: mapModel.name, placement: mapModel.placement, size: sql<number>`octet_length(${mapModel.bytes})`.as('size'), updatedAt: mapModel.updatedAt };
 
 export function mapRoutes(app: FastifyInstance, db: Db) {
-  /** Everything the map view needs in one round trip. Fog comes separately per campaign. */
+  /**
+   * Everything the map view needs in one round trip. Fog comes separately per campaign (for the GM; a player's
+   * map comes through their party's fog already, see server/access.ts).
+   */
   app.get('/api/worlds/:w/map', async (req) => {
     const w = await getWorld(db, (req.params as P).w);
     const map = await rootMap(db, w.id);
     const [hexRows, claimRows, tokenRows, settlementRows, factionRows, campaignRows, artRows, modelRows] = await Promise.all([
       db.select({
         id: hexes.id, q: hexes.q, r: hexes.r, terrain: hexes.terrain, state: hexes.state, name: hexes.name,
-        notes: hexes.notes, wikiPageId: hexes.wikiPageId, data: hexes.data,
+        notes: hexes.notes, partyNotes: hexes.partyNotes, wikiPageId: hexes.wikiPageId, data: hexes.data,
       }).from(hexes).where(eq(hexes.mapId, map.id)),
       db.select({ id: claims.id, hexId: claims.hexId, factionId: claims.factionId, kind: claims.kind, sinceDay: claims.sinceDay, note: claims.note })
         .from(claims).innerJoin(hexes, eq(hexes.id, claims.hexId)).where(eq(hexes.mapId, map.id)),
@@ -70,14 +76,36 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
       db.select(artMeta).from(mapArt).where(eq(mapArt.mapId, map.id)),
       db.select(modelMeta).from(mapModel).where(eq(mapModel.mapId, map.id)),
     ]);
+    const v = req.view;
+    if (v) {
+      // A player's map: explored hexes (without GM notes), fogged ones blank; only what stands on explored hexes
+      // and is shown to players; their own campaigns; no art or model, which picture the whole map.
+      const [revealed, hidden] = await Promise.all([v.revealed(), v.hiddenPages()]);
+      const seenTokens = tokenRows.filter((t) => tokenSeen(t, revealed));
+      const places = new Set(seenTokens.map((t) => t.settlementId));
+      return {
+        map: { ...map, art: null, model: null },
+        hexes: hexRows.map((h) => seenHex(h, revealed, hidden)),
+        claims: claimRows.filter((c) => revealed.has(c.hexId)).map(seenClaim),
+        tokens: seenTokens.map(seenToken),
+        settlements: settlementRows.filter((s) => places.has(s.id)).map((s) => seenSettlement(s, hidden)),
+        factions: factionRows,
+        campaigns: v.campaigns,
+      };
+    }
     return { map: { ...map, art: artRows[0] ?? null, model: modelRows[0] ?? null }, hexes: hexRows, claims: claimRows, tokens: tokenRows, settlements: settlementRows, factions: factionRows, campaigns: campaignRows };
   });
+
+  /** Whether a hex's wiki link is to a GM-only page (players' copies of the row leave it out). */
+  const gmPage = async (pageId: string | null) =>
+    !!pageId && !!(await db.query.wikiPages.findFirst({ where: and(eq(wikiPages.id, pageId), eq(wikiPages.gmOnly, true)), columns: { id: true } }));
 
   const HexPatch = z.object({
     terrain: z.string().min(1).max(40).optional(),
     state: z.string().min(1).max(40).optional(),
     name: z.string().max(200).optional(),
     notes: z.string().max(100_000).optional(),
+    partyNotes: z.string().max(100_000).optional(),
     wikiPageId: Uuid.nullable().optional(),
     data: z.record(z.string(), z.unknown()).optional(),
   });
@@ -86,9 +114,14 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const w = await getWorld(db, wid);
     const [hex] = await worldHexes(db, w.id, [Uuid.parse(id)]);
     const body = HexPatch.parse(req.body);
+    // Players keep the party's notes on hexes they have explored; everything else on a hex is the GM's.
+    if (req.view) {
+      if (Object.keys(body).some((k) => k !== 'partyNotes')) throw forbidden();
+      if (!(await req.view.revealed()).has(hex.id)) throw forbidden('Your party hasn’t explored that hex.');
+    }
     const before = await db.query.hexes.findFirst({ where: eq(hexes.id, hex.id) });
     const [row] = await db.update(hexes).set({ ...body, updatedAt: new Date() }).where(eq(hexes.id, hex.id)).returning();
-    changed(req, { patches: [{ op: 'hex', hex: hexRow(row) }] });
+    changed(req, { patches: [{ op: 'hex', hex: hexRow(row), gmPage: await gmPage(row.wikiPageId) }] });
     // Note edits are frequent autosaves; log the structural changes only.
     const edited = (['terrain', 'state', 'name'] as const).filter((k) => body[k] !== undefined && body[k] !== before?.[k]);
     if (edited.length) {
@@ -97,6 +130,10 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
         summary: `Hex ${hex.label}: ${edited.map((k) => `${k} ${before?.[k] || '–'} → ${body[k] || '–'}`).join(', ')}`,
         payload: { hexId: hex.id, from: Object.fromEntries(edited.map((k) => [k, before?.[k]])), to: Object.fromEntries(edited.map((k) => [k, body[k]])) },
       });
+    }
+    if (req.view) {
+      const hidden = await req.view.hiddenPages();
+      return seenHex(hexRow(row), await req.view.revealed(), hidden);
     }
     return row;
   });
@@ -200,7 +237,8 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const { w: wid, id } = req.params as P;
     const w = await getWorld(db, wid);
     const camp = await db.query.campaigns.findFirst({ where: and(eq(campaigns.id, Uuid.parse(id)), eq(campaigns.worldId, w.id)) });
-    if (!camp) throw notFound('Campaign');
+    // Players see their own parties' fog only.
+    if (!camp || (req.view && !req.view.campaigns.some((c) => c.id === camp.id))) throw notFound('Campaign');
     const rows = await db.select({ hexId: campaignFog.hexId }).from(campaignFog).where(eq(campaignFog.campaignId, camp.id));
     return rows.map((r) => r.hexId);
   });
@@ -250,7 +288,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     }
     const [row] = await db.insert(tokens).values({ ...body, worldId: w.id, mapId: map.id, settlementId }).returning();
     // A city or outpost brings a settlement row with it, so screens refetch the map for both.
-    changed(req, settlementId ? { scopes: ['map'] } : { patches: [{ op: 'token', token: row }] });
+    changed(req, { patches: [{ op: 'token', token: row }], scopes: settlementId ? ['map'] : [] });
     await logEvent(db, { worldId: w.id, kind: 'token.created', summary: `${cap(body.kind)} "${body.name}" placed`, payload: { tokenId: row.id, hexId: body.hexId } });
     return row;
   });
@@ -262,6 +300,14 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const tok = await db.query.tokens.findFirst({ where: and(eq(tokens.id, Uuid.parse(id)), eq(tokens.worldId, w.id)) });
     if (!tok) throw notFound('Token');
     const body = TokenPatch.parse(req.body);
+    // A player moves their party's marker, from and to hexes their party has explored; nothing else.
+    const v = req.view;
+    if (v) {
+      const revealed = await v.revealed();
+      if (!tokenSeen(tok, revealed)) throw notFound('Token');
+      if (!mayMoveToken(tok, v.campaignId) || Object.keys(body).some((k) => k !== 'hexId') || !body.hexId) throw forbidden('Players can only move their party’s marker.');
+      if (!revealed.has(body.hexId)) throw forbidden('Your party hasn’t explored that hex.');
+    }
     if (body.hexId) await worldHexes(db, w.id, [body.hexId]);
     const [row] = await db.update(tokens).set({ ...body, updatedAt: new Date() }).where(eq(tokens.id, tok.id)).returning();
     if (body.hexId !== undefined && body.hexId !== tok.hexId) {
@@ -274,7 +320,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     }
     if (body.name && tok.settlementId) await db.update(settlements).set({ name: body.name }).where(eq(settlements.id, tok.settlementId));
     changed(req, { patches: [{ op: 'token', token: row }], scopes: body.name && tok.settlementId ? ['map'] : [] });
-    return row;
+    return v ? seenToken(row) : row;
   });
 
   app.delete('/api/worlds/:w/tokens/:id', async (req) => {
@@ -285,7 +331,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     // Removing a settlement token removes the settlement (it cascades to the token).
     if (tok.settlementId) await db.delete(settlements).where(eq(settlements.id, tok.settlementId));
     else await db.delete(tokens).where(eq(tokens.id, tok.id));
-    changed(req, tok.settlementId ? { scopes: ['map'] } : { patches: [{ op: 'tokenGone', id: tok.id }] });
+    changed(req, { patches: [{ op: 'tokenGone', id: tok.id }], scopes: tok.settlementId ? ['map'] : [] });
     await logEvent(db, { worldId: w.id, kind: 'token.removed', summary: `${cap(tok.kind)} "${tok.name}" removed`, payload: { token: tok } });
     return { ok: true };
   });

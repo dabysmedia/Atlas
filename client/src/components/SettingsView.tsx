@@ -9,11 +9,49 @@ import { ambientPref, glassPref } from '../prefs';
 import { glassLite } from './MapChrome';
 import { useAmbientPref } from './AmbientMap';
 import { useDraft } from '../live';
+import { useIsGM } from '../me';
+import { AccountCard, PlayersCard } from './PlayersSettings';
 
 const GLYPHS = ['none', 'grass', 'trees', 'hills', 'peaks', 'reeds', 'dunes', 'waves'];
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `t${Date.now()}`;
 
 export function SettingsView() {
+  // A player's settings are their own account and this browser's display.
+  if (!useIsGM()) {
+    return (
+      <div className="pagewrap scroll">
+        <div className="pagebody" style={{ maxWidth: 760 }}>
+          <div className="pagehead"><h1>Your account</h1></div>
+          <AccountCard heading={false} />
+          <DisplayCard />
+        </div>
+      </div>
+    );
+  }
+  return <WorldSettings />;
+}
+
+/** This browser's display preferences, for everyone. */
+function DisplayCard() {
+  const ambient = useAmbientPref();
+  const [glass, setGlass] = useState(() => !glassLite.get());
+  return (
+    <>
+      <h3 className="display" style={{ margin: '28px 0 6px' }}>Display</h3>
+      <p className="muted" style={{ marginTop: 0 }}>Saved in this browser only.</p>
+      <div className="card"><div className="card-body">
+        <label className="toggle"><input type="checkbox" checked={ambient} onChange={(e) => ambientPref.set(e.target.checked)} /> Show the world map behind pages</label>
+        <label className="toggle" style={{ marginTop: 10 }}>
+          <input type="checkbox" checked={glass} onChange={(e) => { const on = e.target.checked; glassPref.set(on ? 'full' : 'lite'); glassLite.set(!on); setGlass(on); }} />
+          Frosted glass behind panels
+        </label>
+        <p className="faint" style={{ margin: '6px 0 0 36px', fontSize: 12 }}>The blur costs a little every frame. Unless you choose here, a map that can't keep pace turns it off for the visit.</p>
+      </div></div>
+    </>
+  );
+}
+
+function WorldSettings() {
   const world = useWorld();
   const qc = useQueryClient();
   // Unsaved edits stay put; fields not touched here follow changes saved from other screens.
@@ -22,8 +60,6 @@ export function SettingsView() {
   const [accent, setAccent] = useDraft(world.accent);
   const [terrain, setTerrain] = useDraft<TerrainType[]>(world.terrainTypes);
   const [states, setStates] = useDraft<HexStateType[]>(world.hexStates);
-  const ambient = useAmbientPref();
-  const [glass, setGlass] = useState(() => !glassLite.get());
   const dirty = name !== world.name || description !== world.description || accent !== world.accent
     || JSON.stringify(terrain) !== JSON.stringify(world.terrainTypes) || JSON.stringify(states) !== JSON.stringify(world.hexStates);
 
@@ -89,16 +125,9 @@ export function SettingsView() {
           <button className="btn ghost sm" onClick={() => { const n = `State ${states.length + 1}`; setStates([...states, { key: slug(n), name: n }]); }}><Plus size={13} /> Hex state</button>
         </div></div>
 
-        <h3 className="display" style={{ margin: '28px 0 6px' }}>Display</h3>
-        <p className="muted" style={{ marginTop: 0 }}>Saved in this browser only.</p>
-        <div className="card"><div className="card-body">
-          <label className="toggle"><input type="checkbox" checked={ambient} onChange={(e) => ambientPref.set(e.target.checked)} /> Show the world map behind pages</label>
-          <label className="toggle" style={{ marginTop: 10 }}>
-            <input type="checkbox" checked={glass} onChange={(e) => { const on = e.target.checked; glassPref.set(on ? 'full' : 'lite'); glassLite.set(!on); setGlass(on); }} />
-            Frosted glass behind panels
-          </label>
-          <p className="faint" style={{ margin: '6px 0 0 36px', fontSize: 12 }}>The blur costs a little every frame. Unless you choose here, a map that can't keep pace turns it off for the visit.</p>
-        </div></div>
+        <PlayersCard />
+        <AccountCard />
+        <DisplayCard />
       </div>
     </div>
   );

@@ -5,6 +5,9 @@
  * and otherwise the parts of the cache to refetch ("scopes", which the client maps onto its query keys).
  * Marker drags stream as ephemeral `drag` messages, and each world keeps a list of who is looking at it.
  *
+ * Player sockets hear the same world through their party's fog: `deliver` filters every message for them by the
+ * rules in server/access.ts (the ones the HTTP routes apply), with what the socket knows of the fog and the markers.
+ *
  * Changes travel over a LiveBus. LocalBus delivers in-process, which is all one replica needs; a Postgres
  * LISTEN/NOTIFY or Redis bus can take its place for several (NOTIFY caps payloads near 8 kB, so a big patch would
  * travel as its scopes instead). Presence is per process until then.
@@ -13,10 +16,12 @@ import crypto from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { WebSocket } from 'ws';
 import { z } from 'zod';
+import { GM_SCOPES, mayMoveToken, routeKey, seenClaim, seenToken, tokenSeen, type PlayerLive } from './access.js';
 
 /** Parts of a screen's cache a change can make stale. The client maps each onto its query keys (client/src/live.ts). */
 export const SCOPES = [
   'worlds', 'world', 'map', 'pages', 'page', 'search', 'factions', 'meters', 'mh', 'rolls', 'campaigns', 'events', 'fog', 'modelArchive',
+  'players',
 ] as const;
 export type Scope = (typeof SCOPES)[number];
 
@@ -24,7 +29,8 @@ type Row = Record<string, unknown>;
 /** Changed rows, applied straight to the cache by the screens that hear them. */
 export type Patch =
   | { op: 'hexes'; ids: string[]; set: { terrain?: string; state?: string } }
-  | { op: 'hex'; hex: Row }
+  /** `gmPage`: the hex links a GM-only page, which players' copies leave out (not sent on). */
+  | { op: 'hex'; hex: Row; gmPage?: boolean }
   /** Every claim now on these hexes (control and the rest), replacing what was there. */
   | { op: 'claims'; hexIds: string[]; claims: Row[] }
   | { op: 'claim'; claim: Row }
@@ -41,6 +47,7 @@ export type Patch =
 
 export type Viewer = { conn: string; name: string; role: Role; since: number };
 type Role = 'gm' | 'player';
+type TokenRow = { id: string; hexId: string | null; visibleToPlayers: boolean; kind: string; campaignId: string | null };
 
 export type ServerMsg =
   | { t: 'hello'; conn: string; you: Viewer }
@@ -59,7 +66,11 @@ export type ServerMsg =
  * One message on the bus: for a world's viewers, or (world null) for every screen. `from` is a connection that
  * doesn't get it back; `origin`, the tab (and session, hashed) whose request made a change, which skips its own echo.
  */
-export type LiveEvent = { world: string | null; from?: string; origin?: { client: string; session: string }; msg: ServerMsg };
+export type LiveEvent = {
+  world: string | null; from?: string; origin?: { client: string; session: string }; msg: ServerMsg;
+  /** 'gm': about something players never see (a GM-only page), so their screens don't hear of it at all. */
+  audience?: 'gm';
+};
 
 export interface LiveBus {
   publish(ev: LiveEvent): void;
@@ -75,6 +86,9 @@ export class LocalBus implements LiveBus {
 type Conn = {
   id: string; ws: WebSocket; client: string | null; userId: string; name: string; role: Role;
   world: string | null; since: number; alive: boolean; token: string;
+  /** Players: the campaign this screen asked to view the world as, and what it knows of that party's view. */
+  want: string | null;
+  view: PlayerLive | null;
   /** The session as it travels on the bus: hashed, so a shared bus never carries a usable cookie. */
   session: string;
   /** Messages this second, to keep one screen from flooding the rest. */
@@ -141,16 +155,33 @@ export const ROUTE_SCOPES: Record<string, Scope[]> = {
   'PATCH /api/worlds/:w/settlements/:id': ['map'],
   // chronicle
   'POST /api/worlds/:w/events': ['events'],
+  // accounts (the GM's other screens keep the player list fresh)
+  'POST /api/players': ['players'],
+  'PATCH /api/players/:id': ['players'],
+  'POST /api/players/:id/password': ['players'],
+  'PUT /api/players/:id/campaigns': ['players'],
+  'DELETE /api/players/:id': ['players'],
+  'PATCH /api/account': ['players'],
+  'POST /api/account/password': [],
 };
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const ClientId = z.string().regex(/^[\w-]{1,64}$/);
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 
+/** What a request changed, as its route tells it (`changed`). */
+type LiveChange = {
+  patches: Patch[]; scopes: Scope[];
+  /** About something only the GM sees: players' screens don't hear of it. */
+  gmOnly?: boolean;
+  /** Users whose screens must start over (what they may see changed), or who are signed out now. */
+  restart?: string[]; signOut?: string[];
+};
+
 declare module 'fastify' {
   interface FastifyRequest {
-    liveChange?: { patches: Patch[]; scopes: Scope[] };
-    liveUser?: { name: string; token: string };
+    liveChange?: LiveChange;
+    liveUser?: { id: string; name: string; role: Role; token: string };
     /** The hub's seq when a read began (sent back as x-atlas-seq). */
     liveSeq?: number;
     /** Lets the next write on this world go ahead, once this one's change is out. */
@@ -159,13 +190,18 @@ declare module 'fastify' {
 }
 
 /** A route's own account of what changed: rows for screens to patch, and scopes beyond its ROUTE_SCOPES entry. */
-export function changed(req: FastifyRequest, c: { patches?: Patch[]; scopes?: Scope[] }) {
+export function changed(req: FastifyRequest, c: { patches?: Patch[]; scopes?: Scope[]; gmOnly?: boolean; restart?: string[]; signOut?: string[] }) {
   const cur = req.liveChange ?? { patches: [], scopes: [] };
-  req.liveChange = { patches: [...cur.patches, ...(c.patches ?? [])], scopes: [...cur.scopes, ...(c.scopes ?? [])] };
+  req.liveChange = {
+    patches: [...cur.patches, ...(c.patches ?? [])], scopes: [...cur.scopes, ...(c.scopes ?? [])],
+    gmOnly: cur.gmOnly || c.gmOnly,
+    restart: [...(cur.restart ?? []), ...(c.restart ?? [])], signOut: [...(cur.signOut ?? []), ...(c.signOut ?? [])],
+  };
 }
 
 const Incoming = z.discriminatedUnion('t', [
-  z.object({ t: z.literal('sub'), world: z.uuid().nullable() }),
+  /** `campaign`: a player's choice of party to view the world as (their first, without one). */
+  z.object({ t: z.literal('sub'), world: z.uuid().nullable(), campaign: z.uuid().nullable().optional() }),
   z.object({
     t: z.literal('drag'), token: z.uuid(), x: z.number().finite(), y: z.number().finite(),
     end: z.boolean().optional(), to: z.uuid().nullable().optional(),
@@ -218,11 +254,13 @@ class TurnLock {
 export type LiveHubOptions = {
   /** Whether a connection's session still holds (checked on each heartbeat). */
   stillSignedIn?: (token: string) => Promise<boolean>;
-  /**
-   * Whether a connection may watch a world. Today that is anyone signed in, for a world that exists; player
-   * accounts will check membership here.
-   */
+  /** Whether the GM's connection may watch a world (one that exists). */
   canView?: (c: { userId: string; role: Role }, world: string) => Promise<boolean>;
+  /**
+   * A player's view of a world (as the campaign asked for, or their first): what the socket needs to filter what
+   * it hears. Null when the world isn't theirs.
+   */
+  playerLive?: (userId: string, world: string, campaign: string | null) => Promise<PlayerLive | null>;
 };
 
 export class LiveHub {
@@ -232,6 +270,7 @@ export class LiveHub {
   private pending = new Map<string, NodeJS.Timeout>();
   private stillSignedIn: (token: string) => Promise<boolean>;
   private canView: (c: { userId: string; role: Role }, world: string) => Promise<boolean>;
+  private playerLive: (userId: string, world: string, campaign: string | null) => Promise<PlayerLive | null>;
   /** Write turns per world (see TurnLock). Per process: several replicas would number changes on the shared bus. */
   readonly turns = new TurnLock();
   /** Changes broadcast so far: every change carries the next number, and every read reports where it began. */
@@ -240,24 +279,58 @@ export class LiveHub {
   constructor(private bus: LiveBus, opts: LiveHubOptions = {}) {
     this.stillSignedIn = opts.stillSignedIn ?? (async () => true);
     this.canView = opts.canView ?? (async () => true);
+    this.playerLive = opts.playerLive ?? (async () => null);
     this.off = bus.subscribe((ev) => { for (const c of this.conns.values()) this.deliver(c, ev); });
     this.beat = setInterval(() => void this.heartbeat(), HEARTBEAT_MS);
     this.beat.unref();
   }
 
   /**
-   * What one connection receives of an event. Today everyone signed in is the GM and sees everything on the world
-   * they view; player accounts will filter here by `c.role` (hidden tokens, other campaigns' fog).
+   * What one connection receives of an event. The GM sees everything on the world they view; a player hears it
+   * through their party's fog (forPlayer), by the same rules as the HTTP routes.
    */
   private deliver(c: Conn, ev: LiveEvent) {
     if (ev.from === c.id) return;
+    const here = ev.world === null || ev.world === c.world;
+    let m: ServerMsg | null = ev.msg;
+    if (c.role === 'player') {
+      if (ev.audience === 'gm') return;
+      // Filtered before the echo check: a player's own change still moves what their socket knows (their marker's hex).
+      if (here) m = this.forPlayer(c, m);
+      if (!m) return;
+    }
     // The tab that made the change has it already. Matched on its session too, so naming another tab's id in a
     // request can't keep that tab from hearing about it.
     if (ev.origin && ev.origin.client === c.client && ev.origin.session === c.session) return;
-    const m = ev.msg;
-    if (ev.world === null || ev.world === c.world) return this.send(c, m);
+    if (here) return this.send(c, m);
     // Screens on other worlds still keep the world list fresh.
     if (m.t === 'change' && m.scopes.includes('worlds')) this.send(c, { ...m, scopes: ['worlds'], patches: undefined });
+  }
+
+  /**
+   * A message as a player's socket may hear it: changed rows on hexes their party hasn't explored are dropped, GM
+   * notes stripped, hidden markers (and their drags) left out, and a marker that walks into the fog or is hidden
+   * goes away. When the party's fog changes, the screen is told to read the map again, which brings what is now
+   * explored (or leaves out what no longer is). Keeps the socket's own account of the fog and markers up to date.
+   */
+  private forPlayer(c: Conn, m: ServerMsg): ServerMsg | null {
+    const v = c.view;
+    if (m.t === 'drag') {
+      const t = v?.tokens.get(m.token);
+      return v && t && tokenSeen(t, v.revealed) ? m : null;
+    }
+    if (m.t !== 'change') return m;
+    const scopes = new Set(m.scopes.filter((s) => !GM_SCOPES.has(s)));
+    const patches: Patch[] = [];
+    for (const p of m.patches ?? []) {
+      const out = v ? playerPatch(v, p, scopes) : null;
+      if (out) patches.push(out);
+    }
+    // A change whose rows are all out of the player's sight goes unheard: what else it names (its chronicle line,
+    // the world list's counts) is about those same rows.
+    if (m.patches?.length && !patches.length) return null;
+    if (!patches.length && !scopes.size) return null;
+    return { ...m, scopes: [...scopes], patches: patches.length ? patches : undefined };
   }
 
   private send(c: Conn, m: ServerMsg) {
@@ -269,10 +342,11 @@ export class LiveHub {
   publish(ev: LiveEvent) { this.bus.publish(ev); }
 
   /** Tell the screens on a world (or all, for the world list) what a request changed. */
-  broadcast(world: string | null, origin: { client: string; token: string } | null, scopes: Scope[], patches: Patch[] = []) {
+  broadcast(world: string | null, origin: { client: string; token: string } | null, scopes: Scope[], patches: Patch[] = [], audience?: 'gm') {
     this.publish({
       world,
       ...(origin ? { origin: { client: origin.client, session: sha256(origin.token) } } : {}),
+      ...(audience ? { audience } : {}),
       msg: { t: 'change', world, seq: ++this.seq, scopes: [...new Set(scopes)], ...(patches.length ? { patches } : {}) },
     });
   }
@@ -295,12 +369,33 @@ export class LiveHub {
 
   get size() { return this.conns.size; }
 
+  /** Users with a screen open now. */
+  online() { return new Set([...this.conns.values()].map((c) => c.userId)); }
+
   /** Sockets a session holds now. */
   sockets(token: string) { return [...this.conns.values()].filter((c) => c.token === token); }
 
   /** A session ended (signed out): its screens go back to the sign-in page now, not at the next heartbeat. */
   closeSession(token: string) {
     for (const c of this.sockets(token)) c.ws.close(4401, 'signed out');
+  }
+
+  /** A user was signed out everywhere (removed, or their password changed), but for the session `keep`. */
+  signOutUser(userId: string, keep?: string) {
+    for (const c of this.conns.values()) if (c.userId === userId && c.token !== keep) c.ws.close(4401, 'signed out');
+  }
+
+  /**
+   * What a user may see changed (campaigns joined or left): their screens reconnect at once and read everything
+   * again, checked afresh.
+   */
+  restartUser(userId: string) {
+    for (const c of this.conns.values()) if (c.userId === userId) c.ws.close(4409, 'access changed');
+  }
+
+  /** A user's display name changed: their avatars say so. */
+  rename(userId: string, name: string) {
+    for (const c of this.conns.values()) if (c.userId === userId) { c.name = name; this.presence(c.world); }
   }
 
   /** A new socket from a signed-in user. */
@@ -311,7 +406,7 @@ export class LiveHub {
     if (this.conns.size >= MAX_SOCKETS) { ws.close(1013, 'busy'); return null; }
     const c: Conn = {
       id: crypto.randomUUID(), ws, ...who, session: sha256(who.token), world: null, since: Date.now(), alive: true,
-      budget: { at: 0, drags: 0, ends: 0, subs: 0 }, subs: 0, fails: 0,
+      budget: { at: 0, drags: 0, ends: 0, subs: 0 }, subs: 0, fails: 0, want: null, view: null,
     };
     this.conns.set(c.id, c);
     ws.on('pong', () => { c.alive = true; });
@@ -333,25 +428,47 @@ export class LiveHub {
     if (now - c.budget.at > 1000) c.budget = { at: now, drags: 0, ends: 0, subs: 0 };
     if (parsed.t === 'sub') {
       if (++c.budget.subs > SUBS_PER_SECOND) return;
-      void this.join(c, parsed.world);
+      void this.join(c, parsed.world, parsed.campaign ?? null);
       return;
     }
     // A marker being dragged: relayed to the others on the world, never stored. The drop commits through PATCH.
     if (!c.world) return;
     if (parsed.end ? ++c.budget.ends > ENDS_PER_SECOND : ++c.budget.drags > DRAGS_PER_SECOND) return;
+    // Players drag only their party's marker, as the PATCH that drops it allows.
+    if (c.role === 'player') {
+      const t = c.view?.tokens.get(parsed.token);
+      if (!c.view || !t || !tokenSeen(t, c.view.revealed) || !mayMoveToken(t, c.view.campaign)) return;
+    }
     const { t: _t, ...drag } = parsed;
     this.publish({ world: c.world, from: c.id, msg: { t: 'drag', world: c.world, conn: c.id, ...drag } });
   }
 
-  /** Move a connection to the world it now shows (null: the world list only), once it may see that world. */
-  private async join(c: Conn, world: string | null) {
+  /**
+   * Move a connection to the world it now shows (null: the world list only), once it may see that world. A player
+   * also says which of their parties they view it as; the socket loads that party's view to filter what it hears.
+   */
+  private async join(c: Conn, world: string | null, campaign: string | null) {
     const n = ++c.subs;
-    if (world !== c.world) {
+    if (world !== c.world || (c.role === 'player' && campaign !== c.want)) {
       // Leave at once; arrive once the check passes.
       const was = c.world;
       c.world = null;
+      c.view = null;
+      c.want = campaign;
       this.presence(was);
-      const ok = world === null || (await this.canView(c, world).catch(() => false));
+      let ok = world === null;
+      if (world !== null && c.role === 'player') {
+        // Read again if a change went out while reading, so the socket starts from the state its screen will read.
+        let view: PlayerLive | null = null;
+        for (let i = 0; i < 3; i++) {
+          const seq = this.seq;
+          view = await this.playerLive(c.userId, world, campaign).catch(() => null);
+          if (seq === this.seq || n !== c.subs) break;
+        }
+        if (n !== c.subs || !this.conns.has(c.id)) return;
+        c.view = view;
+        ok = !!view;
+      } else if (world !== null) ok = await this.canView(c, world).catch(() => false);
       if (n !== c.subs || !this.conns.has(c.id)) return;
       c.world = ok ? world : null;
       this.presence(c.world);
@@ -390,7 +507,53 @@ export function sameOrigin(req: FastifyRequest) {
   try { return new URL(origin).host === req.host; } catch { return false; }
 }
 
-const routeKey = (req: FastifyRequest) => `${req.method} ${req.routeOptions.url}`;
+/**
+ * A changed row as a player's socket may see it (null: not at all), by the rules in server/access.ts. `scopes`
+ * gathers what the screen must read again: after a change to the party's fog, the map.
+ */
+function playerPatch(v: PlayerLive, p: Patch, scopes: Set<Scope>): Patch | null {
+  switch (p.op) {
+    case 'hexes': {
+      const ids = p.ids.filter((id) => v.revealed.has(id));
+      return ids.length ? { ...p, ids } : null;
+    }
+    case 'hex': {
+      const hex = p.hex as { id: string; wikiPageId?: string | null };
+      if (!v.revealed.has(hex.id)) return null;
+      return { op: 'hex', hex: { ...hex, notes: '', data: {}, wikiPageId: p.gmPage ? null : hex.wikiPageId ?? null } };
+    }
+    case 'claims': {
+      const hexIds = p.hexIds.filter((id) => v.revealed.has(id));
+      if (!hexIds.length) return null;
+      return { op: 'claims', hexIds, claims: p.claims.filter((c) => v.revealed.has(c.hexId as string)).map(seenClaim) };
+    }
+    case 'claim': return v.revealed.has(p.claim.hexId as string) ? { op: 'claim', claim: seenClaim(p.claim) } : null;
+    case 'token': {
+      const row = p.token as TokenRow;
+      const was = v.tokens.get(row.id);
+      const now = { hexId: row.hexId, visibleToPlayers: row.visibleToPlayers, kind: row.kind, campaignId: row.campaignId };
+      v.tokens.set(row.id, now);
+      if (tokenSeen(now, v.revealed)) return { op: 'token', token: seenToken(p.token) };
+      // Hidden now, or gone into the fog: it leaves their map (if it was ever on it).
+      return was && tokenSeen(was, v.revealed) ? { op: 'tokenGone', id: row.id } : null;
+    }
+    case 'tokenGone': {
+      const was = v.tokens.get(p.id);
+      v.tokens.delete(p.id);
+      return was && tokenSeen(was, v.revealed) ? p : null;
+    }
+    case 'fog': {
+      if (p.campaignId !== v.campaign) return null;
+      for (const id of p.hexIds) { if (p.explored) v.revealed.add(id); else v.revealed.delete(id); }
+      // What stands on the hexes now explored (or no longer) comes with a fresh read of the map.
+      scopes.add('map'); scopes.add('events'); scopes.add('factions');
+      return p;
+    }
+    // Map art and the 3D model show the whole map: players' screens never load them.
+    case 'art': case 'model': return null;
+    case 'claimGone': case 'faction': case 'world': return p;
+  }
+}
 
 /**
  * The socket endpoint, and the hooks that tell the hub about every mutation. Register inside the authenticated
@@ -398,7 +561,7 @@ const routeKey = (req: FastifyRequest) => `${req.method} ${req.routeOptions.url}
  */
 export function liveRoutes(app: FastifyInstance, hub: LiveHub, auth: {
   /** Who a request's session belongs to. */
-  user: (req: FastifyRequest) => Promise<{ name: string; token: string } | null>;
+  user: (req: FastifyRequest) => Promise<{ id: string; name: string; role: Role; token: string } | null>;
   /** The request's session token (its cookie), to tie the tab id it sends to the session that sent it. */
   token: (req: FastifyRequest) => string | undefined;
 }) {
@@ -428,8 +591,11 @@ export function liveRoutes(app: FastifyInstance, hub: LiveHub, auth: {
         const world = (req.params as { w?: string }).w ?? null;
         const client = ClientId.safeParse(req.headers['x-atlas-client']);
         const token = auth.token(req);
+        const ch = req.liveChange;
         hub.broadcast(world, client.success && token ? { client: client.data, token } : null,
-          [...scopes, ...(req.liveChange?.scopes ?? [])], req.liveChange?.patches);
+          [...scopes, ...(ch?.scopes ?? [])], ch?.patches, ch?.gmOnly ? 'gm' : undefined);
+        for (const u of ch?.signOut ?? []) hub.signOutUser(u, token);
+        for (const u of ch?.restart ?? []) hub.restartUser(u);
       }
     } finally { req.liveUnlock(); }
     return payload;
@@ -446,6 +612,7 @@ export function liveRoutes(app: FastifyInstance, hub: LiveHub, auth: {
     },
   }, (ws, req) => {
     const client = ClientId.safeParse((req.query as { client?: string }).client);
-    hub.attach(ws, { userId: req.userId!, name: req.liveUser!.name, role: 'gm', token: req.liveUser!.token, client: client.success ? client.data : null });
+    const who = req.liveUser!;
+    hub.attach(ws, { userId: who.id, name: who.name, role: who.role, token: who.token, client: client.success ? client.data : null });
   });
 }

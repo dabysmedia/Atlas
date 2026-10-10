@@ -7,7 +7,8 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'motion/react';
 import { BookOpen, Check, ChevronDown, Crosshair, Eye, EyeOff, Plus, Trash2, X } from 'lucide-react';
-import { api, qk } from '../api';
+import { api, qk, viewAs } from '../api';
+import { useIsGM } from '../me';
 import type { Claim, Faction, Hex, MapData, MeterDef, Settlement, Token, TokenKind } from '../types';
 import { useWorld } from '../world';
 import { usePageIndex } from '../wiki/usePages';
@@ -72,8 +73,8 @@ function Section({ title, children, action }: { title: string; children: ReactNo
   );
 }
 
-/** A labeled value that turns into a picker on click. */
-function Prop({ label, children, value }: { label: string; value: ReactNode; children?: (close: () => void) => ReactNode }) {
+/** A labeled value that turns into a picker on click (or just a value, without one: on a player's screen). */
+function Prop({ label, children, value }: { label: string; value: ReactNode; children?: false | ((close: () => void) => ReactNode) }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -155,6 +156,8 @@ export function HexPanel({ hex, data, fogCampaignId, explored, label, onClose, o
   const { world, qc, patch, touch } = useMapCache();
   const navigate = useNavigate();
   const pages = usePageIndex(world.id);
+  // Players read the hex and keep the party's notes; the rest is the GM's to change.
+  const gm = useIsGM();
   const [name, setName] = useDraft(hex.name, hex.id);
   const nameT = useRef<number | undefined>(undefined);
 
@@ -171,7 +174,7 @@ export function HexPanel({ hex, data, fogCampaignId, explored, label, onClose, o
   const others = claims.filter((c) => c.kind !== 'control');
   const tokens = data.tokens.filter((t) => t.hexId === hex.id);
   const factionById = (id: string | null) => data.factions.find((f) => f.id === id);
-  const camp = data.campaigns.find((c) => c.id === fogCampaignId);
+  const camp = gm ? data.campaigns.find((c) => c.id === fogCampaignId) : undefined;
   const terrain = world.terrainTypes.find((t) => t.key === hex.terrain);
   const state = world.hexStates.find((s) => s.key === hex.state);
   const ctrl = factionById(control?.factionId ?? null);
@@ -210,9 +213,11 @@ export function HexPanel({ hex, data, fogCampaignId, explored, label, onClose, o
         <span className="art-chip">Hex {label}</span>
       </PanelArt>
       <div className="panel-head">
-        <input className="panel-title" value={name} placeholder={terrain?.name ?? 'Unnamed hex'} aria-label="Hex name"
-          onChange={(e) => { const v = e.target.value; setName(v); window.clearTimeout(nameT.current); nameT.current = window.setTimeout(() => patchHex({ name: v }), 600); }}
-          onBlur={() => { window.clearTimeout(nameT.current); if (name !== hex.name) patchHex({ name }); }} />
+        {gm ? (
+          <input className="panel-title" value={name} placeholder={terrain?.name ?? 'Unnamed hex'} aria-label="Hex name"
+            onChange={(e) => { const v = e.target.value; setName(v); window.clearTimeout(nameT.current); nameT.current = window.setTimeout(() => patchHex({ name: v }), 600); }}
+            onBlur={() => { window.clearTimeout(nameT.current); if (name !== hex.name) patchHex({ name }); }} />
+        ) : <div className="panel-title static">{hex.name || terrain?.name || 'Unnamed hex'}</div>}
         <div className="panel-sub">
           <span className="row" style={{ gap: 6 }}><span className="swatch" style={{ background: terrain?.color }} />{terrain?.name ?? hex.terrain}</span>
           {state && state.key !== 'wild' && <><span className="dot" /><span>{state.name}</span></>}
@@ -231,10 +236,10 @@ export function HexPanel({ hex, data, fogCampaignId, explored, label, onClose, o
               <Diamond color={factionById(c.factionId)?.color ?? '#888'} size={8} />
               <span className="grow">{factionById(c.factionId)?.name}</span>
               <span className={`claim-kind ${c.kind}`}>{c.kind}</span>
-              <button className="iconbtn sm" onClick={() => removeClaim(c)} aria-label="Remove claim"><X size={12} /></button>
+              {gm && <button className="iconbtn sm" onClick={() => removeClaim(c)} aria-label="Remove claim"><X size={12} /></button>}
             </div>
           ))}
-          <div style={{ marginTop: 6 }}>
+          {gm && <div style={{ marginTop: 6 }}>
             <Prop label="Set control" value={<span className="faint">{ctrl ? 'Change hands' : 'Choose a faction'}</span>}>
               {(close) => (
                 <>
@@ -252,12 +257,12 @@ export function HexPanel({ hex, data, fogCampaignId, explored, label, onClose, o
                 )))}
               </Prop>
             )}
-          </div>
+          </div>}
         </Section>
 
         <Section title="Details">
           <Prop label="Terrain" value={<span className="row" style={{ gap: 7 }}><span className="swatch" style={{ background: terrain?.color }} />{terrain?.name ?? hex.terrain}</span>}>
-            {(close) => (
+            {gm && ((close) => (
               <div className="terrain-grid">
                 {world.terrainTypes.map((t) => (
                   <button key={t.key} className={`terrain-opt ${hex.terrain === t.key ? 'on' : ''}`} onClick={() => { patchHex({ terrain: t.key }); close(); }} title={t.name}>
@@ -265,14 +270,14 @@ export function HexPanel({ hex, data, fogCampaignId, explored, label, onClose, o
                   </button>
                 ))}
               </div>
-            )}
+            ))}
           </Prop>
           <Prop label="State" value={<span className="row" style={{ gap: 7 }}>{state?.color && <Diamond color={state.color} size={8} />}{state?.name ?? hex.state}</span>}>
-            {(close) => world.hexStates.map((s) => (
+            {gm && ((close) => world.hexStates.map((s) => (
               <button key={s.key} className={`pick ${hex.state === s.key ? 'on' : ''}`} onClick={() => { patchHex({ state: s.key }); close(); }}>
                 {s.color ? <Diamond color={s.color} size={8} /> : <span style={{ width: 8 }} />}{s.name}
               </button>
-            ))}
+            )))}
           </Prop>
           {camp && (
             <div className="prop">
@@ -282,8 +287,8 @@ export function HexPanel({ hex, data, fogCampaignId, explored, label, onClose, o
               </button>
             </div>
           )}
-          <Prop label="Wiki" value={page ? <span className="link-like">{page.title}</span> : <span className="faint">None</span>}>
-            {(close) => (
+          <Prop label="Wiki" value={page ? (gm ? <span className="link-like">{page.title}</span> : <button className="link-like" onClick={() => navigate(`/w/${world.id}/wiki/${page.id}`)}>{page.title}</button>) : <span className="faint">None</span>}>
+            {gm && ((close) => (
               <div className="pick-scroll">
                 {page && <button className="pick" onClick={() => { navigate(`/w/${world.id}/wiki/${page.id}`); close(); }}><BookOpen size={12} /> Open “{page.title}”</button>}
                 <button className="pick" onClick={() => { patchHex({ wikiPageId: null }); close(); }}><X size={12} /> No page</button>
@@ -291,11 +296,11 @@ export function HexPanel({ hex, data, fogCampaignId, explored, label, onClose, o
                   <button key={p.id} className={`pick ${p.id === hex.wikiPageId ? 'on' : ''}`} onClick={() => { patchHex({ wikiPageId: p.id }); close(); }}>{p.title}</button>
                 ))}
               </div>
-            )}
+            ))}
           </Prop>
         </Section>
 
-        <Section title="On this hex" action={<AddToken hexId={hex.id} data={data} onPlaced={(t) => onFocus({ kind: 'token', id: t.id })} />}>
+        <Section title="On this hex" action={gm ? <AddToken hexId={hex.id} data={data} onPlaced={(t) => onFocus({ kind: 'token', id: t.id })} /> : undefined}>
           {tokens.map((t) => {
             const f = factionById(t.factionId);
             const s = data.settlements.find((x) => x.id === t.settlementId);
@@ -310,9 +315,15 @@ export function HexPanel({ hex, data, fogCampaignId, explored, label, onClose, o
           {!tokens.length && <div className="faint" style={{ padding: '2px 0' }}>Nothing placed here.</div>}
         </Section>
 
-        <Section title="GM notes">
-          <Notes value={hex.notes} placeholder="What's here? Encounters, secrets, weather…" onSave={(v) => patchHex({ notes: v })} />
+        {/* Shared by the GM and the players: what the party found, heard or left here. */}
+        <Section title="Party notes">
+          <Notes value={hex.partyNotes} placeholder="What the party found here, who they met, what they left behind…" onSave={(v) => patchHex({ partyNotes: v })} />
         </Section>
+        {gm && (
+          <Section title="GM notes">
+            <Notes value={hex.notes} placeholder="What's here? Encounters, secrets, weather…" onSave={(v) => patchHex({ notes: v })} />
+          </Section>
+        )}
       </div>
     </Panel>
   );
@@ -371,6 +382,8 @@ export function TokenPanel({ token, data, onClose, onFocus, onLocate, snap }: {
   const navigate = useNavigate();
   const pages = usePageIndex(world.id);
   const [confirm, setConfirm] = useState(false);
+  const gm = useIsGM();
+  const ours = token.kind === 'party' && (!token.campaignId || token.campaignId === viewAs.campaign);
   const settlement = data.settlements.find((s) => s.id === token.settlementId);
   const faction = data.factions.find((f) => f.id === token.factionId);
   const color = token.color ?? faction?.color ?? '#b9b2a3';
@@ -406,8 +419,10 @@ export function TokenPanel({ token, data, onClose, onFocus, onLocate, snap }: {
         <div className="art-medallion"><MarkerIcon kind={token.kind} color={color} size={44} /></div>
       </PanelArt>
       <div className="panel-head">
-        <input className="panel-title" value={name} aria-label="Marker name" onChange={(e) => setName(e.target.value)}
-          onBlur={() => rename(name)} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
+        {gm ? (
+          <input className="panel-title" value={name} aria-label="Marker name" onChange={(e) => setName(e.target.value)}
+            onBlur={() => rename(name)} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
+        ) : <div className="panel-title static">{token.name}</div>}
         <div className="panel-sub">
           <span>{settlement ? cap(settlement.size) : KIND_LABEL[token.kind]}</span>
           {hex && <><span className="dot" /><button className="link-like" onClick={() => onFocus({ kind: 'hex', id: hex.id })}>{hex.name || 'Hex'}</button></>}
@@ -416,58 +431,61 @@ export function TokenPanel({ token, data, onClose, onFocus, onLocate, snap }: {
       <div className="panel-body scroll">
         <Section title="Allegiance">
           <Prop label="Faction" value={faction ? <span className="row" style={{ gap: 7 }}><Diamond color={faction.color} size={9} />{faction.name}</span> : <span className="faint">None</span>}>
-            {(close) => (
+            {gm && ((close) => (
               <>
                 {data.factions.map((f) => <button key={f.id} className={`pick ${f.id === token.factionId ? 'on' : ''}`} onClick={() => { setFaction(f.id); close(); }}><Diamond color={f.color} size={9} />{f.name}</button>)}
                 <button className="pick" onClick={() => { setFaction(null); close(); }}><X size={12} /> No faction</button>
               </>
-            )}
+            ))}
           </Prop>
           {token.kind === 'party' && (
-            <Prop label="Campaign" value={data.campaigns.find((c) => c.id === token.campaignId)?.name ?? <span className="faint">None</span>}>
-              {(close) => (
+            <Prop label="Campaign" value={data.campaigns.find((c) => c.id === token.campaignId)?.name ?? <span className="faint">{gm ? 'None' : 'Every party'}</span>}>
+              {gm && ((close) => (
                 <>
                   {data.campaigns.map((c) => <button key={c.id} className={`pick ${c.id === token.campaignId ? 'on' : ''}`} onClick={() => { patchToken({ campaignId: c.id }); close(); }}>{c.name}</button>)}
                   <button className="pick" onClick={() => { patchToken({ campaignId: null }); close(); }}><X size={12} /> No campaign</button>
                 </>
-              )}
+              ))}
             </Prop>
           )}
         </Section>
         {settlement && (
           <Section title="Settlement">
             <Prop label="Size" value={cap(settlement.size)}>
-              {(close) => ['outpost', 'hamlet', 'village', 'town', 'city', 'metropolis'].map((s) => (
+              {gm && ((close) => ['outpost', 'hamlet', 'village', 'town', 'city', 'metropolis'].map((s) => (
                 <button key={s} className={`pick ${settlement.size === s ? 'on' : ''}`} onClick={() => { patchSettlement({ size: s }); close(); }}>{cap(s)}</button>
-              ))}
+              )))}
             </Prop>
-            <div className="prop">
-              <span className="prop-label">Population</span>
-              <input className="prop-input" type="number" value={settlement.population ?? ''} placeholder="Unknown"
-                onChange={(e) => patchSettlement({ population: e.target.value === '' ? null : Number(e.target.value) })} />
-            </div>
-            <Prop label="Wiki" value={page ? <span className="link-like">{page.title}</span> : <span className="faint">None</span>}>
-              {(close) => (
+            {gm ? (
+              <div className="prop">
+                <span className="prop-label">Population</span>
+                <input className="prop-input" type="number" value={settlement.population ?? ''} placeholder="Unknown"
+                  onChange={(e) => patchSettlement({ population: e.target.value === '' ? null : Number(e.target.value) })} />
+              </div>
+            ) : <Prop label="Population" value={settlement.population?.toLocaleString() ?? <span className="faint">Unknown</span>} />}
+            <Prop label="Wiki" value={page ? (gm ? <span className="link-like">{page.title}</span> : <button className="link-like" onClick={() => navigate(`/w/${world.id}/wiki/${page.id}`)}>{page.title}</button>) : <span className="faint">None</span>}>
+              {gm && ((close) => (
                 <div className="pick-scroll">
                   {page && <button className="pick" onClick={() => { navigate(`/w/${world.id}/wiki/${page.id}`); close(); }}><BookOpen size={12} /> Open “{page.title}”</button>}
                   {(pages.data ?? []).slice().sort((a, b) => a.title.localeCompare(b.title)).map((p) => (
                     <button key={p.id} className={`pick ${p.id === settlement.wikiPageId ? 'on' : ''}`} onClick={() => { patchSettlement({ wikiPageId: p.id }); close(); }}>{p.title}</button>
                   ))}
                 </div>
-              )}
+              ))}
             </Prop>
           </Section>
         )}
-        {settlement && (
+        {settlement && gm && (
           <Section title="Notes">
             <Notes value={settlement.notes} placeholder="Who rules here, what they trade, what they fear…" onSave={(v) => patchSettlement({ notes: v })} />
           </Section>
         )}
         <div className="panel-actions">
           <button className="btn" onClick={onLocate}><Crosshair size={14} /> Center on map</button>
-          <button className="btn ghost danger" onClick={() => setConfirm(true)}><Trash2 size={14} /> Remove</button>
+          {gm && <button className="btn ghost danger" onClick={() => setConfirm(true)}><Trash2 size={14} /> Remove</button>}
         </div>
-        <div className="faint hint-line">Drag the marker on the map to move it.</div>
+        {gm ? <div className="faint hint-line">Drag the marker on the map to move it.</div>
+          : ours && <div className="faint hint-line">Drag your party’s marker to an explored hex to move it.</div>}
       </div>
       <Dialog open={confirm} onClose={() => setConfirm(false)} title={`Remove ${token.name}?`}>
         <p className="muted" style={{ marginTop: 0 }}>{settlement ? 'The settlement record goes with it.' : 'This removes the marker from the map.'} The removal is recorded in the chronicle.</p>
@@ -483,8 +501,10 @@ export function FactionPanel({ factionId, data, onClose, onFocus, snap }: {
 }) {
   const world = useWorld();
   const navigate = useNavigate();
+  // Standing (the meters) is the GM's; players see who holds what.
+  const gm = useIsGM();
   const factions = useQuery({ queryKey: qk.factions(world.id), queryFn: () => api<Faction[]>(`/api/worlds/${world.id}/factions`) });
-  const meters = useQuery({ queryKey: qk.meters(world.id), queryFn: () => api<MeterDef[]>(`/api/worlds/${world.id}/meters`) });
+  const meters = useQuery({ queryKey: qk.meters(world.id), queryFn: () => api<MeterDef[]>(`/api/worlds/${world.id}/meters`), enabled: gm });
   const lite = data.factions.find((f) => f.id === factionId);
   const f = factions.data?.find((x) => x.id === factionId);
   if (!lite) return null;
@@ -505,7 +525,7 @@ export function FactionPanel({ factionId, data, onClose, onFocus, snap }: {
       </div>
       <div className="panel-body scroll">
         {f?.description && <p className="faction-desc">{f.description}</p>}
-        <Section title="Standing">
+        {gm && <Section title="Standing">
           {shown.map(({ m, def }) => {
             const band = def!.bands.length ? bandFor(def!.bands, m.value) : null;
             const pct = def!.max != null && def!.min != null ? (m.value - def!.min) / (def!.max - def!.min) : null;
@@ -521,7 +541,7 @@ export function FactionPanel({ factionId, data, onClose, onFocus, snap }: {
             );
           })}
           {!f && <div className="faint">Loading…</div>}
-        </Section>
+        </Section>}
         {!!places.length && (
           <Section title="Holdings">
             {places.map((t) => (

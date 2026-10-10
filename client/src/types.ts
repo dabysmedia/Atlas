@@ -19,15 +19,21 @@ export type World = {
   weather: Weather;
 };
 
-export type PageIndex = { id: string; title: string; category: string; updatedAt: string };
+export type PageIndex = { id: string; title: string; category: string; updatedAt: string; gmOnly?: boolean };
 export type Page = PageIndex & { content: unknown; contentText: string; backlinks: PageIndex[] };
 export type SearchHit = PageIndex & { snippet: string; score: number };
 
 export type Orientation = 'flat' | 'pointy';
 export type MapLayout = { orientation: Orientation; cols: number; rows: number };
 export type Hex = {
-  id: string; q: number; r: number; terrain: string; state: string; name: string; notes: string;
+  id: string; q: number; r: number; terrain: string; state: string; name: string;
+  /** GM notes (always empty on a player's screen). */
+  notes: string;
+  /** The party's notes, shared by the GM and the players. */
+  partyNotes: string;
   wikiPageId: string | null; data: Record<string, unknown>;
+  /** On a player's screen: a hex their party hasn't explored, which comes blank. */
+  fogged?: boolean;
 };
 export type Claim = { id: string; hexId: string; factionId: string; kind: 'control' | 'contested' | 'influence'; sinceDay: number | null; note: string };
 export type TokenKind = 'party' | 'city' | 'outpost' | 'unit' | 'character' | 'marker';
@@ -71,3 +77,6 @@ export type WorldEvent = {
   id: number; worldId: string; campaignId: string | null; gameDay: number; kind: string; summary: string;
   payload: Record<string, unknown>; actor: string; createdAt: string;
 };
+
+export type Player = { id: string; username: string; displayName: string; createdAt: string; online: boolean; campaignIds: string[] };
+export type CampaignChoice = { id: string; name: string; worldId: string; worldName: string };

@@ -6,7 +6,8 @@ import {
   Archive, Box, Brush, CloudFog, Eye, EyeOff, Flag, Grid3x3, Image as ImageIcon, Layers, Map as MapIcon, Mountain, MousePointer2, Move,
   RotateCcw, Shield, Stamp, Trash2, Upload, X,
 } from 'lucide-react';
-import { api, ApiError, clientHeaders, pendingWrites, qk } from '../api';
+import { api, ApiError, clientHeaders, pendingWrites, qk, viewAs } from '../api';
+import { useIsGM } from '../me';
 import type { ArchivedModel, ArtPlacement, Claim, Hex, MapArt, MapData, MapModel, Token } from '../types';
 import { useWorld } from '../world';
 import { cameraPref, fogCampaign, layerPrefs, mapModePref, panelPrefs } from '../prefs';
@@ -39,8 +40,13 @@ const TOOLS: ToolDef<Tool>[] = [
 const sessionCameras = new Map<string, Camera>();
 const DEFAULT_LAYERS: RLayers = { terrainOverlay: 0, grid: true, territory: true };
 
+/** A player may drag their own party's marker (or one shared by every party), and only onto explored hexes. */
+const movable = (t: Token) => t.kind === 'party' && (!t.campaignId || t.campaignId === viewAs.campaign);
+
 export function MapView() {
   const world = useWorld();
+  // Players see the map through their party's fog, read-only but for their party's marker and the party notes.
+  const player = !useIsGM();
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -77,7 +83,7 @@ export function MapView() {
   // Default the fog campaign to the first campaign the first time.
   const fogCamp = campaignId === undefined ? data?.campaigns[0]?.id ?? null : campaignId;
   const fogQ = useQuery({
-    queryKey: qk.fog(world.id, fogCamp ?? ''), enabled: !!fogCamp,
+    queryKey: qk.fog(world.id, fogCamp ?? ''), enabled: !!fogCamp && !player,
     queryFn: () => api<string[]>(`/api/worlds/${world.id}/campaigns/${fogCamp}/fog`),
   });
 
@@ -137,9 +143,10 @@ export function MapView() {
     r.setData({
       orientation: data.map.layout.orientation, hexes: data.hexes, claims: data.claims, tokens: data.tokens,
       factions: data.factions, terrain: world.terrainTypes, states: world.hexStates,
-      fog: fogCamp && fogQ.data ? new Set(fogQ.data) : null,
+      // A player's unexplored hexes arrive blank and flagged: everything else is what their party has seen.
+      fog: player ? new Set(data.hexes.filter((h) => !h.fogged).map((h) => h.id)) : fogCamp && fogQ.data ? new Set(fogQ.data) : null,
     });
-  }, [data, fogQ.data, fogCamp, world.terrainTypes, world.hexStates, world.id, gen, held]);
+  }, [data, fogQ.data, fogCamp, world.terrainTypes, world.hexStates, world.id, gen, held, player]);
   // Markers other screens are dragging glide along with them.
   useEffect(() => live.onDrag((m) => {
     const r = rendererRef.current;
@@ -193,6 +200,21 @@ export function MapView() {
       // A saved view that has drifted off the map (an old bug could do that) opens on the whole map instead.
       const onMap = saved && r.keepOnMap(saved);
       if (saved && onMap && onMap.x === saved.x && onMap.y === saved.y) { r.setCamera(saved); return; }
+      // A player's first look is at what their party has explored, not at a map of fog.
+      const known = player ? data.hexes.filter((h) => !h.fogged).map((h) => r.hexById(h.id)).filter((h) => !!h) : [];
+      if (known.length) {
+        const fit = r.fitCamera();
+        const xs = known.map((h) => h.cx), ys = known.map((h) => h.cy);
+        const all = data.hexes.map((h) => r.hexById(h.id)).filter((h) => !!h);
+        const spanW = Math.max(...all.map((h) => h.cx)) - Math.min(...all.map((h) => h.cx)) + HEX_SIZE * 2;
+        const spanH = Math.max(...all.map((h) => h.cy)) - Math.min(...all.map((h) => h.cy)) + HEX_SIZE * 2;
+        const w = Math.max(...xs) - Math.min(...xs) + HEX_SIZE * 6, h = Math.max(...ys) - Math.min(...ys) + HEX_SIZE * 6;
+        const zoom = fit.zoom * Math.min(4, Math.max(1, Math.min(spanW / w, spanH / h)));
+        const x = (Math.max(...xs) + Math.min(...xs)) / 2, y = (Math.max(...ys) + Math.min(...ys)) / 2;
+        r.setCamera({ ...fit, zoom: fit.zoom * (is3d(r) ? 0.62 : 0.7) });
+        r.flyTo(x, y, zoom);
+        return;
+      }
       if (is3d(r)) { const fit = r.fitCamera(); r.setCamera({ ...fit, zoom: fit.zoom * 0.62 }); r.flyTo(fit.x, fit.y, fit.zoom); return; }
       const fit = r.fitCamera();
       r.setCamera({ ...fit, zoom: fit.zoom * 0.7 });
@@ -220,8 +242,8 @@ export function MapView() {
       if (p) r.focusOn(p.x, p.y, Math.max(r.target.zoom, 2.1), r.viewport.w > 900 ? 185 : 0);
     } else if (!focus) r.restoreView();
   }, [focus?.kind, focus?.id, gen]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { const r = rendererRef.current; if (r) { r.showFog = showFog; r.invalidate(); } }, [showFog, gen]);
-  useEffect(() => { fogCampaign(world.id).set(fogCamp); }, [fogCamp, world.id]);
+  useEffect(() => { const r = rendererRef.current; if (r) { r.showFog = showFog || player; r.fogOpaque = player; r.invalidate(); } }, [showFog, player, gen]);
+  useEffect(() => { if (!player) fogCampaign(world.id).set(fogCamp); }, [fogCamp, world.id, player]);
   useEffect(() => {
     const r = rendererRef.current;
     if (r) { r.layers = align ? { ...layers, territory: false, grid: true, terrainOverlay: Math.max(layers.terrainOverlay, 0.35) } : layers; r.invalidate(); }
@@ -249,7 +271,11 @@ export function MapView() {
     if (!f || !data) return;
     const [kind, id] = f.split(':') as [Focus['kind'], string];
     const r = rendererRef.current;
-    if (kind === 'hex' || kind === 'token' || kind === 'faction') {
+    // A player's link to somewhere their party hasn't been (or a marker they can't see) says so, rather than opening a blank.
+    const unseen = player && (kind === 'hex' ? !data.hexes.some((h) => h.id === id && !h.fogged)
+      : kind === 'token' ? !data.tokens.some((t) => t.id === id) : kind === 'faction' ? !data.factions.some((x) => x.id === id) : false);
+    if (unseen) toast(kind === 'faction' ? 'That faction isn’t on your map.' : 'That place isn’t on your map yet.');
+    else if (kind === 'hex' || kind === 'token' || kind === 'faction') {
       setFocus({ kind, id });
       const hexId = kind === 'hex' ? id : kind === 'token' ? data.tokens.find((t) => t.id === id)?.hexId : null;
       const h = hexId && r?.hexById(hexId);
@@ -360,7 +386,7 @@ export function MapView() {
   const archiveQ = useQuery({
     queryKey: ['modelArchive', world.id],
     queryFn: () => api<ArchivedModel[]>(`/api/worlds/${world.id}/map/model/archive`),
-    enabled: layersOpen,
+    enabled: layersOpen && !player,
   });
   const restoreModel = async (a: ArchivedModel) => {
     try {
@@ -406,8 +432,8 @@ export function MapView() {
   useEffect(() => { const r = rendererRef.current; if (r && align) { r.artPlacement = { ...align }; r.invalidate(); } }, [align]);
 
   // ---- input
-  const toolRef = useRef({ tool, brush, radius, fogCamp, align });
-  toolRef.current = { tool, brush, radius, fogCamp, align };
+  const toolRef = useRef({ tool, brush, radius, fogCamp, align, player, fogged: (_id: string): boolean => false });
+  toolRef.current = { tool, brush, radius, fogCamp, align, player, fogged: (id: string) => !!data?.hexes.find((h) => h.id === id)?.fogged };
   const handlers = useRef({ commitStroke, moveToken, brushArea, setAlign });
   handlers.current = { commitStroke, moveToken, brushArea, setAlign };
 
@@ -485,6 +511,8 @@ export function MapView() {
       const t = toolRef.current.tool;
       if (t === 'select') {
         const tok = r().tokenAt(p.x, p.y);
+        // Players open any marker they see, but drag only their party's.
+        if (tok && toolRef.current.player && !movable(tok)) { dragTok = tok; mode = 'maybe-click'; return; }
         if (tok) { dragTok = tok; mode = 'token'; hold(); return; }
         mode = 'maybe-click';
       } else {
@@ -554,14 +582,19 @@ export function MapView() {
         if (performance.now() - lastMove.t < 80 && Math.hypot(vel.x, vel.y) > 120) r().fling(vel.x, vel.y);
       } else if (mode === 'maybe-click') {
         const h = r().hexAt(p.x, p.y);
-        setFocus(h ? { kind: 'hex', id: h.id } : null);
+        if (dragTok) setFocus({ kind: 'token', id: dragTok.id });
+        // Unexplored hexes hold nothing to show a player.
+        else setFocus(h && !(toolRef.current.player && toolRef.current.fogged(h.id)) ? { kind: 'hex', id: h.id } : null);
+        dragTok = null;
       } else if (mode === 'stroke') {
         saving = handlers.current.commitStroke([...stroke]);
         stroke = new Set();
       } else if (mode === 'token' && dragTok) {
         const dragging = r().dragToken;
         const h = r().hexAt(p.x, p.y);
-        const to = dragging && h && h.id !== dragTok.hexId ? h.id : null;
+        const fogged = !!h && toolRef.current.player && toolRef.current.fogged(h.id);
+        if (dragging && fogged) toast('Your party can only move to explored hexes.');
+        const to = dragging && h && h.id !== dragTok.hexId && !fogged ? h.id : null;
         if (dragging) {
           // Let go where it was dropped: it waits there for the move to land, or eases home if there's none.
           const at = { x: dragging.x, y: dragging.y };
@@ -574,6 +607,7 @@ export function MapView() {
         r().invalidate();
         dragTok = null;
       }
+      dragTok = null;
       if (held) { if (saving) void saving.finally(release); else release(); }
       mode = 'none';
       canvas.style.cursor = '';
@@ -608,7 +642,7 @@ export function MapView() {
       if (e.code === 'Space') { space = e.type === 'keydown'; canvas.style.cursor = space ? 'grab' : ''; if (space) e.preventDefault(); return; }
       if (e.type !== 'keydown' || e.metaKey || e.ctrlKey || e.altKey) return;
       const idx = ['1', '2', '3', '4', '5'].indexOf(e.key);
-      if (idx >= 0) setTool(TOOLS[idx].id);
+      if (idx >= 0) { if (!toolRef.current.player) setTool(TOOLS[idx].id); }
       else if (e.key === 'Escape') { setFocus(null); setLayersOpen(false); setKeysOpen(false); }
       else if (e.key === '?') setKeysOpen((o) => !o);
       else if (e.key === '+' || e.key === '=') r().zoomAt(r().viewport.w / 2, r().viewport.h / 2, 1.5);
@@ -626,12 +660,12 @@ export function MapView() {
       }
     };
     // Drop an image anywhere on the map to use it as map art.
-    const onDragOver = (e: DragEvent) => { if (e.dataTransfer?.types.includes('Files')) { e.preventDefault(); setDropping(true); } };
+    const onDragOver = (e: DragEvent) => { if (!toolRef.current.player && e.dataTransfer?.types.includes('Files')) { e.preventDefault(); setDropping(true); } };
     const onDragLeave = () => setDropping(false);
     const onDrop = (e: DragEvent) => {
       e.preventDefault(); setDropping(false);
       const f = e.dataTransfer?.files?.[0];
-      if (f) void uploadRef.current(f);
+      if (f && !toolRef.current.player) void uploadRef.current(f);
     };
 
     canvas.addEventListener('pointerdown', onDown);
@@ -678,8 +712,9 @@ export function MapView() {
     const f = ctrl ? data.factions.find((x) => x.id === ctrl.factionId) : undefined;
     const t = world.terrainTypes.find((x) => x.key === hoverHex.terrain);
     const toks = data.tokens.filter((x) => x.hexId === hoverHex.id);
+    if (hoverHex.fogged) return { hex: hoverHex, faction: undefined, terrain: undefined, tokens: toks, contested: false, fogged: true };
     const contested = data.claims.some((c) => c.hexId === hoverHex.id && c.kind === 'contested');
-    return { hex: hoverHex, faction: f, terrain: t, tokens: toks, contested };
+    return { hex: hoverHex, faction: f, terrain: t, tokens: toks, contested, fogged: false };
   }, [hoverHex, data, world.terrainTypes]);
 
   const r = rendererRef.current;
@@ -713,8 +748,8 @@ export function MapView() {
       {!data && <div className="map-loading"><span>Unrolling the map…</span></div>}
       {mode === '3d' && modelState === 'loading' && <div className="map-raising"><Mountain size={13} /> Raising the island…</div>}
 
-      {/* Tool dock: the tool in hand, with its brushes tiling up above it. */}
-      {data && !align && (
+      {/* Tool dock: the tool in hand, with its brushes tiling up above it. Players have no brushes. */}
+      {data && !align && !player && (
         <div className="dock-wrap">
           <AnimatePresence>
             {tool !== 'select' && (
@@ -769,7 +804,7 @@ export function MapView() {
             {layersOpen && (
               <motion.div key="layers" layout="position" className="panel layers" {...CARD}>
                 <header><h4>Layers</h4><button className="iconbtn sm" onClick={() => setLayersOpen(false)} aria-label="Close layers"><X size={14} /></button></header>
-                <div className="layer-group">
+                {!player && <div className="layer-group">
                   <div className="layer-title"><ImageIcon size={14} /> Map art</div>
                   {model && <p className="faint layer-note">This world's 3D model is its ground in the 3D view; the art shows on the flat map.</p>}
                   {art ? (
@@ -792,9 +827,9 @@ export function MapView() {
                       <span><b>Add map art</b><br /><span className="faint">Choose an image, or drop one on the map. PNG, JPEG or WebP up to 25 MB.</span></span>
                     </button>
                   )}
-                </div>
+                </div>}
                 <div className="layer-group">
-                  {art && (
+                  {art && !player && (
                     <label className="slider"><span>Terrain colors over art</span>
                       <input type="range" min={0} max={0.8} step={0.05} value={layers.terrainOverlay} onChange={(e) => setLayers({ ...layers, terrainOverlay: Number(e.target.value) })} />
                     </label>
@@ -803,7 +838,7 @@ export function MapView() {
                   <label className="toggle"><input type="checkbox" checked={layers.territory} onChange={(e) => setLayers({ ...layers, territory: e.target.checked })} /><Shield size={14} /> Territories and borders</label>
                   {mode === '3d' && <label className="toggle"><input type="checkbox" checked={layers.atmosphere !== false} onChange={(e) => setLayers({ ...layers, atmosphere: e.target.checked })} /><CloudFog size={14} /> Weather and clouds</label>}
                 </div>
-                <div className="layer-group">
+                {!player && <div className="layer-group">
                   <div className="layer-title"><Mountain size={14} /> 3D terrain model</div>
                   {model ? (
                     <>
@@ -832,15 +867,15 @@ export function MapView() {
                       ))}
                     </div>
                   )}
-                </div>
-                <div className="layer-group">
+                </div>}
+                {!player && <div className="layer-group">
                   <div className="layer-title"><Eye size={14} /> Party fog</div>
                   <select className="select" value={fogCamp ?? ''} onChange={(e) => setCampaignId(e.target.value || null)} aria-label="Party fog campaign">
                     <option value="">No campaign</option>
                     {data.campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                   {fogCamp && <label className="toggle"><input type="checkbox" checked={showFog} onChange={(e) => setShowFog(e.target.checked)} /> Shade unexplored hexes</label>}
-                </div>
+                </div>}
               </motion.div>
             )}
           </AnimatePresence>
@@ -869,7 +904,7 @@ export function MapView() {
           <AnimatePresence>
             {keysOpen && (
               <motion.div key="keys" layout="position" className="panel keys-card" {...CARD}>
-                <ShortcutsCard mode={mode} onClose={() => setKeysOpen(false)} />
+                <ShortcutsCard mode={mode} player={player} onClose={() => setKeysOpen(false)} />
               </motion.div>
             )}
           </AnimatePresence>
@@ -883,7 +918,7 @@ export function MapView() {
               <Flag size={16} strokeWidth={1.7} />
               {!territoriesOpen && !!data.factions.length && <span className="stack-dots" aria-hidden>{data.factions.slice(0, 4).map((f) => <Diamond key={f.id} color={f.color} size={4} />)}</span>}
             </StackButton>
-            <StackButton label="Layers" tip="Layers and map art" keys="L" expanded={layersOpen} onClick={() => setLayersOpen((o) => !o)}><Layers size={16} strokeWidth={1.7} /></StackButton>
+            <StackButton label="Layers" tip={player ? 'Layers' : 'Layers and map art'} keys="L" expanded={layersOpen} onClick={() => setLayersOpen((o) => !o)}><Layers size={16} strokeWidth={1.7} /></StackButton>
             <span className="stack-sep" aria-hidden />
           </>
         )}
@@ -933,7 +968,7 @@ export function MapView() {
 
       {hover && hoverInfo && !focus && !align && (
         <div className="tooltip" style={{ left: hover.x, top: hover.y }}>
-          <div className="tt-title">{hoverInfo.hex.name || hoverInfo.terrain?.name || hoverInfo.hex.terrain}<span className="faint">{r?.label(hoverInfo.hex)}</span></div>
+          <div className="tt-title">{hoverInfo.fogged ? 'Unexplored' : hoverInfo.hex.name || hoverInfo.terrain?.name || hoverInfo.hex.terrain}<span className="faint">{r?.label(hoverInfo.hex)}</span></div>
           {hoverInfo.hex.name && <div className="row" style={{ gap: 6 }}><span className="swatch" style={{ background: hoverInfo.terrain?.color }} />{hoverInfo.terrain?.name}</div>}
           {hoverInfo.faction && <div className="row" style={{ gap: 6 }}><Diamond color={hoverInfo.faction.color} size={8} />{hoverInfo.faction.name}</div>}
           {hoverInfo.contested && <div className="tone-warn">Contested</div>}

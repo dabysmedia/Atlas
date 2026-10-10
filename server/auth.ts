@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
-import { and, eq, gt, lt } from 'drizzle-orm';
+import { and, eq, gt, lt, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Db } from './db/index.js';
@@ -27,36 +27,60 @@ export async function verifyPassword(pw: string, stored: string): Promise<boolea
 
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 
+export type Role = 'gm' | 'player';
+
 /**
- * Single-owner account, defined by ADMIN_USERNAME / ADMIN_PASSWORD.
+ * The owner's account, defined by ADMIN_USERNAME / ADMIN_PASSWORD; the owner is the GM, always.
  * On boot the account is created, or its password re-synced if the env value changed,
  * so changing the Railway variable is how the owner changes their password.
+ * Everyone else is a player the GM adds from Settings (server/routes/players.ts).
  */
 export async function ensureOwner(db: Db, username: string, password: string) {
   const existing = await db.query.users.findFirst({ where: eq(users.username, username) });
   if (!existing) {
-    await db.insert(users).values({ username, passwordHash: await hashPassword(password) });
+    await db.insert(users).values({ username, role: 'gm', passwordHash: await hashPassword(password) });
     return 'created';
+  }
+  if (existing.role !== 'gm') {
+    await db.update(users).set({ role: 'gm' }).where(eq(users.id, existing.id));
+    await db.delete(sessions).where(eq(sessions.userId, existing.id));
   }
   if (!(await verifyPassword(password, existing.passwordHash))) {
     await db.update(users).set({ passwordHash: await hashPassword(password) }).where(eq(users.id, existing.id));
     await db.delete(sessions).where(eq(sessions.userId, existing.id));
     return 'password-updated';
   }
-  return 'unchanged';
+  return existing.role !== 'gm' ? 'made-gm' : 'unchanged';
 }
+
+/** Who a request (or socket) is: their role decides what they see and may change (server/access.ts). */
+export type Who = { id: string; username: string; role: Role; name: string };
 
 declare module 'fastify' {
-  interface FastifyRequest { userId?: string }
+  interface FastifyRequest { userId?: string; user?: Who }
 }
 
+const whoCols = { id: users.id, username: users.username, role: users.role, displayName: users.displayName };
+const toWho = (u: { id: string; username: string; role: string; displayName: string }): Who =>
+  ({ id: u.id, username: u.username, role: u.role === 'gm' ? 'gm' : 'player', name: u.displayName.trim() || u.username });
+
 /** The user a session cookie belongs to, while the session lasts. */
-export async function sessionUser(db: Db, token: string | undefined) {
+export async function sessionUser(db: Db, token: string | undefined): Promise<Who | null> {
   if (!token) return null;
-  const [row] = await db.select({ id: users.id, username: users.username }).from(sessions).innerJoin(users, eq(users.id, sessions.userId))
+  const [row] = await db.select(whoCols).from(sessions).innerJoin(users, eq(users.id, sessions.userId))
     .where(and(eq(sessions.tokenHash, sha256(token)), gt(sessions.expiresAt, new Date())));
-  return row ?? null;
+  return row ? toWho(row) : null;
 }
+
+/** Sign a user out everywhere but (optionally) the session making the request. */
+export async function endSessions(db: Db, userId: string, keepToken?: string) {
+  await db.delete(sessions).where(keepToken
+    ? and(eq(sessions.userId, userId), sql`${sessions.tokenHash} <> ${sha256(keepToken)}`)
+    : eq(sessions.userId, userId));
+}
+
+/** The hash a session's token is stored under (the live hub matches sockets to sessions by it). */
+export const tokenHash = sha256;
 
 export function registerAuth(app: FastifyInstance, db: Db, opts: { secureCookies: boolean; onSignOut?: (token: string) => void }) {
   const cookieOpts = {
@@ -67,11 +91,12 @@ export function registerAuth(app: FastifyInstance, db: Db, opts: { secureCookies
   app.decorate('requireUser', async (req: FastifyRequest, reply: FastifyReply) => {
     const token = req.cookies[COOKIE];
     if (!token) return reply.code(401).send({ error: 'unauthenticated' });
-    const row = await db.query.sessions.findFirst({
-      where: and(eq(sessions.tokenHash, sha256(token)), gt(sessions.expiresAt, new Date())),
-    });
+    const [row] = await db.select({ ...whoCols, tokenHash: sessions.tokenHash, createdAt: sessions.createdAt })
+      .from(sessions).innerJoin(users, eq(users.id, sessions.userId))
+      .where(and(eq(sessions.tokenHash, sha256(token)), gt(sessions.expiresAt, new Date())));
     if (!row) return reply.code(401).send({ error: 'unauthenticated' });
-    req.userId = row.userId;
+    req.userId = row.id;
+    req.user = toWho(row);
     // Rolling session: refresh when more than a day has passed since issue.
     if (Date.now() - row.createdAt.getTime() > 86400_000) {
       const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400_000);
@@ -86,7 +111,10 @@ export function registerAuth(app: FastifyInstance, db: Db, opts: { secureCookies
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const body = Login.parse(req.body);
-    const user = await db.query.users.findFirst({ where: eq(users.username, body.username.trim()) });
+    const name = body.username.trim();
+    // Exact first; then regardless of case (player usernames are unique regardless of case).
+    const user = await db.query.users.findFirst({ where: eq(users.username, name) })
+      ?? await db.query.users.findFirst({ where: sql`lower(${users.username}) = lower(${name})` });
     // Verify against a dummy hash when the user is unknown so timing doesn't reveal usernames.
     const ok = await verifyPassword(body.password, user?.passwordHash ?? DUMMY_HASH);
     if (!user || !ok) return reply.code(401).send({ error: 'Wrong username or password.' });
@@ -97,7 +125,7 @@ export function registerAuth(app: FastifyInstance, db: Db, opts: { secureCookies
     });
     await db.delete(sessions).where(lt(sessions.expiresAt, new Date()));
     reply.setCookie(COOKIE, token, cookieOpts);
-    return { username: user.username };
+    return { username: user.username, role: user.role };
   });
 
   app.post('/api/auth/logout', async (req, reply) => {
@@ -115,7 +143,7 @@ export function registerAuth(app: FastifyInstance, db: Db, opts: { secureCookies
     await app.requireUser(req, reply);
     if (reply.sent) return;
     const user = await db.query.users.findFirst({ where: eq(users.id, req.userId!) });
-    return { username: user?.username };
+    return { id: user?.id, username: user?.username, displayName: user?.displayName ?? '', name: req.user!.name, role: req.user!.role };
   });
 }
 

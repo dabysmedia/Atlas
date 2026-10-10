@@ -8,6 +8,8 @@ function store<T>(key: string) {
   };
 }
 export const lastWorld = store<string>('atlas.lastWorld');
+/** A player's party to view a world as, when they belong to several of its campaigns. */
+export const partyPref = (worldId: string) => store<string>(`atlas.party.${worldId}`);
 export const fogCampaign = (worldId: string) => store<string | null>(`atlas.fogCampaign.${worldId}`);
 export const cameraPref = (worldId: string) => store<{ x: number; y: number; zoom: number }>(`atlas.camera.${worldId}`);
 export const lastPage = (worldId: string) => store<string>(`atlas.lastPage.${worldId}`);

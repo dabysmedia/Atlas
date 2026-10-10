@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Db, Tx } from '../db/index.js';
 import { worlds } from '../db/schema.js';
-import { logEvent, notFound } from '../history.js';
+import { forbidden, logEvent, notFound } from '../history.js';
 import { changed } from '../live.js';
 import { createWorld, deleteWorld, seedDemoWorld } from '../worlds.js';
 import { seedNewWorld } from '../lore/newworld.js';
@@ -53,7 +53,28 @@ const Terrain = z.object({ key: z.string().min(1).max(40), name: z.string().min(
 const HexState = z.object({ key: z.string().min(1).max(40), name: z.string().min(1).max(60), color: z.string().max(20).optional() });
 
 export function worldRoutes(app: FastifyInstance, db: Db) {
-  app.get('/api/worlds', async () => {
+  app.get('/api/worlds', async (req) => {
+    // A player's list: the worlds of their campaigns, counted as they see them (no GM-only pages; terrain only
+    // where their parties have been; no map art, which shows the whole map).
+    if (req.user?.role === 'player') {
+      const me = req.user.id;
+      const mine = sql`select 1 from campaign_members cm join campaigns c on c.id = cm.campaign_id where cm.user_id = ${me} and c.world_id = w.id`;
+      const rows = await db.execute(sql`
+        select w.id, w.name, w.description, w.accent, w.current_day as "currentDay", w.updated_at as "updatedAt", w.created_at as "createdAt",
+          (select count(*)::int from wiki_pages p where p.world_id = w.id and not p.gm_only) as "pageCount",
+          (select count(*)::int from factions f where f.world_id = w.id) as "factionCount",
+          (select count(*)::int from campaign_members cm join campaigns c on c.id = cm.campaign_id where cm.user_id = ${me} and c.world_id = w.id) as "campaignCount",
+          (select count(*)::int from hexes h join maps m on m.id = h.map_id where m.world_id = w.id) as "hexCount",
+          (select coalesce(json_agg(t), '[]') from (
+             select h.terrain, count(*)::int as n from hexes h join maps m on m.id = h.map_id
+             where m.world_id = w.id and m.parent_hex_id is null and exists (
+               select 1 from campaign_fog f join campaign_members cm on cm.campaign_id = f.campaign_id where f.hex_id = h.id and cm.user_id = ${me})
+             group by h.terrain order by n desc limit 5) t) as "terrainMix",
+          null as "artVersion",
+          w.terrain_types as "terrainTypes"
+        from worlds w where exists (${mine}) order by w.sort_order, w.created_at`);
+      return rows.rows;
+    }
     const rows = await db.execute(sql`
       select w.id, w.name, w.description, w.accent, w.current_day as "currentDay", w.updated_at as "updatedAt", w.created_at as "createdAt",
         (select count(*)::int from wiki_pages p where p.world_id = w.id) as "pageCount",
@@ -186,6 +207,9 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
   app.post('/api/worlds/:w/day', async (req) => {
     const w = await getWorld(db, (req.params as { w: string }).w);
     const body = Day.parse(req.body);
+    // Every open screen asks for the next day when a running clock passes midnight, players' screens too (the
+    // stored clock decides, below). Moving the day by hand is the GM's.
+    if (req.view && (!body.rollover || body.day !== undefined || body.advance !== undefined)) throw forbidden();
     const res = await db.transaction(async (tx) => {
       // Locked, so two tabs passing midnight together roll the day (and its weather) over once.
       const cur = await lockClock(tx, w.id);

@@ -59,3 +59,4 @@ export class HttpError extends Error {
 }
 export const notFound = (what: string) => new HttpError(404, `${what} not found`);
 export const badRequest = (msg: string) => new HttpError(400, msg);
+export const forbidden = (msg = 'Only the GM can do that.') => new HttpError(403, msg);

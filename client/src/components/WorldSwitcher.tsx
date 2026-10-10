@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Pencil, Plus, Trash2, X } from 'lucide-react';
 import { api, qk } from '../api';
 import { useDraft } from '../live';
+import { useIsGM } from '../me';
 import type { WorldSummary } from '../types';
 import { Dialog } from './Dialog';
 import { toast, toastError } from './toast';
@@ -18,6 +19,8 @@ export function WorldSwitcher({ open, onClose, currentId, forced }: { open: bool
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<WorldSummary | null>(null);
   const [deleting, setDeleting] = useState<WorldSummary | null>(null);
+  // Players see the worlds of their campaigns; making, renaming and deleting worlds is the GM's.
+  const gm = useIsGM();
 
   useEffect(() => {
     if (!open || forced) return;
@@ -44,7 +47,7 @@ export function WorldSwitcher({ open, onClose, currentId, forced }: { open: bool
                 <motion.div className="row" initial={{ y: -12, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 28 }}>
                   <div className="grow">
                     <h2 className="display">Your worlds</h2>
-                    <span className="muted">Each world keeps its own map, lore, factions and campaigns.</span>
+                    <span className="muted">{gm ? 'Each world keeps its own map, lore, factions and campaigns.' : 'The worlds your campaigns play in.'}</span>
                   </div>
                   {!forced && <button className="btn ghost icon" onClick={onClose} aria-label="Close"><X size={18} /></button>}
                 </motion.div>
@@ -59,10 +62,12 @@ export function WorldSwitcher({ open, onClose, currentId, forced }: { open: bool
                           <div className="art">{w.artVersion != null
                             ? <img src={`/api/worlds/${w.id}/map/art?v=${w.artVersion}`} alt="" loading="lazy" />
                             : <WorldArt world={w} />}</div>
-                          <div className="menu">
-                            <button className="btn sm icon" title="Rename" onClick={(e) => { e.stopPropagation(); setRenaming(w); }}><Pencil size={13} /></button>
-                            <button className="btn sm icon danger" title="Delete" onClick={(e) => { e.stopPropagation(); setDeleting(w); }}><Trash2 size={13} /></button>
-                          </div>
+                          {gm && (
+                            <div className="menu">
+                              <button className="btn sm icon" title="Rename" onClick={(e) => { e.stopPropagation(); setRenaming(w); }}><Pencil size={13} /></button>
+                              <button className="btn sm icon danger" title="Delete" onClick={(e) => { e.stopPropagation(); setDeleting(w); }}><Trash2 size={13} /></button>
+                            </div>
+                          )}
                           <div className="body">
                             <div className="title">{w.name}</div>
                             <div className="muted" style={{ fontSize: 13, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
@@ -75,12 +80,19 @@ export function WorldSwitcher({ open, onClose, currentId, forced }: { open: bool
                         </div>
                       </motion.div>
                     ))}
-                    <motion.div key="new" layout variants={cardVariants} whileHover={{ y: -4 }}>
-                      <button className="world-card new" style={{ width: '100%' }} onClick={() => setCreating(true)}>
-                        <Plus size={26} />
-                        <span style={{ marginTop: 6 }}>New world</span>
-                      </button>
-                    </motion.div>
+                    {gm ? (
+                      <motion.div key="new" layout variants={cardVariants} whileHover={{ y: -4 }}>
+                        <button className="world-card new" style={{ width: '100%' }} onClick={() => setCreating(true)}>
+                          <Plus size={26} />
+                          <span style={{ marginTop: 6 }}>New world</span>
+                        </button>
+                      </motion.div>
+                    ) : worlds.data && !list.length && (
+                      <motion.div key="none" layout variants={cardVariants} className="world-card new player-none">
+                        <span>No worlds yet.</span>
+                        <span className="faint" style={{ marginTop: 6, fontSize: 13 }}>When the GM adds you to a campaign, its world opens here.</span>
+                      </motion.div>
+                    )}
                   </AnimatePresence>
                 </motion.div>
               </div>

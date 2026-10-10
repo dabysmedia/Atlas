@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, qk } from './api';
+import { fetchMe } from './me';
 import type { WorldSummary } from './types';
 import { Login } from './components/Login';
 import { Shell } from './components/Shell';
@@ -9,7 +10,7 @@ import { lastWorld } from './prefs';
 
 export function App() {
   const qc = useQueryClient();
-  const me = useQuery({ queryKey: qk.me, queryFn: () => api<{ username: string }>('/api/auth/me'), retry: false, staleTime: Infinity });
+  const me = useQuery({ queryKey: qk.me, queryFn: fetchMe, retry: false, staleTime: Infinity });
   useEffect(() => {
     const onUnauth = () => qc.setQueryData(qk.me, null);
     window.addEventListener('atlas:unauthenticated', onUnauth);

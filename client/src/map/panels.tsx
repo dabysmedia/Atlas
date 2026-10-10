@@ -16,11 +16,9 @@ import { Dialog } from '../components/Dialog';
 import { bandFor } from '../../../shared/meters';
 import { markerSprite } from './markers';
 import { useDraft } from '../live';
+import { TOKEN_KINDS, isNotableKind, isMajorCity } from '../../../shared/markers';
+export { TOKEN_KINDS } from '../../../shared/markers';
 
-export const TOKEN_KINDS: { kind: TokenKind; label: string }[] = [
-  { kind: 'city', label: 'City' }, { kind: 'outpost', label: 'Outpost' }, { kind: 'party', label: 'Party' },
-  { kind: 'unit', label: 'Unit' }, { kind: 'character', label: 'Character' }, { kind: 'marker', label: 'Marker' },
-];
 const KIND_LABEL = Object.fromEntries(TOKEN_KINDS.map((k) => [k.kind, k.label])) as Record<TokenKind, string>;
 
 export type Focus = { kind: 'hex' | 'token' | 'faction'; id: string };
@@ -99,16 +97,16 @@ export function Diamond({ color, size = 10 }: { color: string; size?: number }) 
   return <span className="diamond" style={{ background: color, width: size, height: size }} />;
 }
 
-function MarkerIcon({ kind, color, size = 26 }: { kind: TokenKind; color: string; size?: number }) {
+function MarkerIcon({ kind, color, size = 26, major = false }: { kind: TokenKind; color: string; size?: number; major?: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const c = ref.current;
     if (!c) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const s = markerSprite(kind, color, size * 0.42, dpr);
+    const s = markerSprite(kind, color, size * 0.42, dpr, major);
     c.width = s.canvas.width; c.height = s.canvas.height;
     c.getContext('2d')!.drawImage(s.canvas, 0, 0);
-  }, [kind, color, size]);
+  }, [kind, color, size, major]);
   return <canvas ref={ref} className="marker-icon" style={{ width: size * 1.25, height: size * 1.25 }} />;
 }
 
@@ -324,14 +322,15 @@ function AddToken({ hexId, data, onPlaced }: { hexId: string; data: MapData; onP
   const [kind, setKind] = useState<TokenKind>('outpost');
   const [name, setName] = useState('');
   const [factionId, setFactionId] = useState('');
+  const [majorCity, setMajorCity] = useState(false);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
     try {
       const t = await api<Token>(`/api/worlds/${world.id}/tokens`, {
-        body: { kind, name: name.trim(), hexId, factionId: factionId || null, campaignId: kind === 'party' ? data.campaigns[0]?.id ?? null : null },
+        body: { kind, name: name.trim(), hexId, factionId: factionId || null, campaignId: kind === 'party' ? data.campaigns[0]?.id ?? null : null, data: { majorCity: kind === 'city' && majorCity } },
       });
-      // Settlements are created server-side for cities and outposts; refetch to pick them up.
+      // Settlement types also create a details row; refetch to pick it up.
       if (t.settlementId) await qc.invalidateQueries({ queryKey: qk.map(world.id) });
       else qc.setQueryData<MapData>(qk.map(world.id), (d) => (d ? { ...d, tokens: [...d.tokens, t] } : d));
       touch();
@@ -344,13 +343,15 @@ function AddToken({ hexId, data, onPlaced }: { hexId: string; data: MapData; onP
       <button className="iconbtn sm" onClick={() => setOpen(true)} title="Place a marker" aria-label="Place a marker"><Plus size={14} /></button>
       <Dialog open={open} onClose={() => setOpen(false)} title="Place a marker">
         <form onSubmit={submit} style={{ display: 'grid', gap: 12 }}>
-          <div className="kind-grid">
+          <div className="kind-grid" style={{ maxHeight: '40vh', overflowY: 'auto' }}>
             {TOKEN_KINDS.map((k) => (
               <button type="button" key={k.kind} className={`kind-opt ${kind === k.kind ? 'on' : ''}`} onClick={() => setKind(k.kind)}>
                 <MarkerIcon kind={k.kind} color={data.factions.find((f) => f.id === factionId)?.color ?? '#b9b2a3'} size={22} />{k.label}
               </button>
             ))}
           </div>
+          {kind === 'city' && <label className="toggle"><input type="checkbox" checked={majorCity} onChange={e => setMajorCity(e.target.checked)} /> Major city — visible in world overview</label>}
+          {isNotableKind(kind) && kind !== 'city' && <div className="faint">Visible during exploration.</div>}
           <input className="input" autoFocus placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} />
           <select className="select" value={factionId} onChange={(e) => setFactionId(e.target.value)}>
             <option value="">No faction</option>
@@ -403,7 +404,7 @@ export function TokenPanel({ token, data, onClose, onFocus, onLocate, snap }: {
   return (
     <Panel onClose={onClose} className="token-panel">
       <PanelArt snap={snap} deps={[token.id, token.hexId, color]} onClose={onClose} tint={color}>
-        <div className="art-medallion"><MarkerIcon kind={token.kind} color={color} size={44} /></div>
+        <div className="art-medallion"><MarkerIcon kind={token.kind} color={color} size={44} major={isMajorCity(token)} /></div>
       </PanelArt>
       <div className="panel-head">
         <input className="panel-title" value={name} aria-label="Marker name" onChange={(e) => setName(e.target.value)}
@@ -414,6 +415,7 @@ export function TokenPanel({ token, data, onClose, onFocus, onLocate, snap }: {
         </div>
       </div>
       <div className="panel-body scroll">
+        {token.kind === 'city' && <Section title="Map visibility"><label className="toggle"><input type="checkbox" checked={isMajorCity(token)} onChange={e => patchToken({ data: { ...token.data, majorCity: e.target.checked } })} /> Major city — visible in world overview</label></Section>}
         <Section title="Allegiance">
           <Prop label="Faction" value={faction ? <span className="row" style={{ gap: 7 }}><Diamond color={faction.color} size={9} />{faction.name}</span> : <span className="faint">None</span>}>
             {(close) => (

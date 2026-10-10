@@ -30,7 +30,8 @@ export type Hex = {
   wikiPageId: string | null; data: Record<string, unknown>;
 };
 export type Claim = { id: string; hexId: string; factionId: string; kind: 'control' | 'contested' | 'influence'; sinceDay: number | null; note: string };
-export type TokenKind = 'party' | 'city' | 'outpost' | 'unit' | 'character' | 'marker';
+import type { TokenKind } from '../../shared/markers';
+export type { TokenKind } from '../../shared/markers';
 export type Token = {
   id: string; worldId: string; mapId: string; hexId: string | null; kind: TokenKind; name: string;
   factionId: string | null; campaignId: string | null; settlementId: string | null; color: string | null;

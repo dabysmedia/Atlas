@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
 import { wikiPages, wikiLinks, mapModel, maps, appMeta, worlds } from '../server/db/schema';
 import { WEATHER_KINDS, rollWeather, type WeatherKind } from '../shared/weather';
+import { TOKEN_KINDS, isNotableKind } from '../shared/markers';
 
 const URL = process.env.TEST_DATABASE_URL ?? 'postgres://postgres@localhost:5432/atlas_test';
 let app: FastifyInstance;
@@ -81,6 +82,34 @@ describe('worlds', () => {
     expect((await call('DELETE', `/api/worlds/${a.id}`)).status).toBe(200);
     expect((await call('GET', `/api/worlds/${a.id}`)).status).toBe(404);
     expect((await call('GET', `/api/worlds/${b.id}/map`)).body.hexes).toHaveLength(30);
+  });
+});
+
+describe('notable places', () => {
+  it('persists every place type and major-city designation without changing hexes', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Places test', cols: 4, rows: 4 })).body;
+    const before = (await call('GET', `/api/worlds/${w.id}/map`)).body;
+    for (const type of TOKEN_KINDS.filter(t => isNotableKind(t.kind))) {
+      const res = await call('POST', `/api/worlds/${w.id}/tokens`, {
+        kind: type.kind, name: `Test ${type.label}`, hexId: before.hexes[0].id,
+        data: { majorCity: type.kind === 'city', unresolved: true },
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.kind).toBe(type.kind);
+      expect(res.body.data.unresolved).toBe(true);
+      if (type.kind === 'city') {
+        expect(res.body.data.majorCity).toBe(true);
+        const edited = await call('PATCH', `/api/worlds/${w.id}/tokens/${res.body.id}`, { data: { majorCity: false, unresolved: true } });
+        expect(edited.body.data).toEqual({ majorCity: false, unresolved: true });
+      }
+    }
+    const after = (await call('GET', `/api/worlds/${w.id}/map`)).body;
+    expect(after.hexes).toEqual(before.hexes);
+    expect(after.tokens).toHaveLength(14);
+    expect(after.settlements.map((s: { size: string }) => s.size).sort()).toEqual(['city', 'outpost', 'town', 'village']);
+    expect((await call('POST', `/api/worlds/${w.id}/tokens`, { kind: 'unknown', name: 'No' })).status).toBe(400);
+    expect((await call('POST', `/api/worlds/${w.id}/tokens`, { kind: 'city', name: 'No', data: { majorCity: 'yes' } })).status).toBe(400);
+    await call('DELETE', `/api/worlds/${w.id}`);
   });
 });
 

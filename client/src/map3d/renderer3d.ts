@@ -34,6 +34,7 @@ import { NeonBorders, type NeonLine } from './neon';
 import { Beacon } from './beacon';
 import { HoverMask } from './hoverMask';
 import { GridProjection, GRID_GLSL } from './gridProjection';
+import { isNotableKind, isMajorCity } from '../../../shared/markers';
 import { FactionLabels, type LabelPlace, type LabelSpot } from './labels3d';
 import type { CardAnchor, FactionArea } from '../map/FactionCard';
 
@@ -498,6 +499,9 @@ export class HexMapRenderer3D extends HexMapRenderer {
   }
 
   protected tokenLift(kind: TokenKind, r: number) { return r * (kind === 'city' || kind === 'outpost' ? 1.15 : 1.35); }
+  protected tokenVisibility(token: Token) {
+    return isNotableKind(token.kind) && !isMajorCity(token) ? 1 - this.overviewAlpha() : 1;
+  }
 
   /** Markers behind a ridge from where the camera stands are shown faintly. */
   protected tokenAlpha(x: number, y: number) {
@@ -1012,6 +1016,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     let nb = 0;
     const z = this.cam.zoom, s = this.scr;
     for (const tok of this.tokens) {
+      if (this.tokenVisibility(tok) < 0.05) continue;
       const p = this.tokenPos(tok);
       if (!p) continue;
       this.groundScreen(p.x, p.y, s);

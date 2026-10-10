@@ -10,6 +10,7 @@ import { imageSize } from '../imagesize.js';
 import { fitModelPlacement } from '../placement.js';
 import { archiveModel, installModel, listArchive, restoreModel } from '../modelArchive.js';
 import { changed } from '../live.js';
+import { TOKEN_KIND_KEYS, settlementSize } from '../../shared/markers.js';
 
 type P = { w: string; id: string };
 
@@ -230,11 +231,13 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
   });
 
   // ---------------------------------------------------------------- tokens
-  const TokenKind = z.enum(['party', 'city', 'outpost', 'unit', 'character', 'marker']);
+  const TokenKind = z.enum(TOKEN_KIND_KEYS);
+  const TokenData = z.object({ majorCity: z.boolean().optional() }).catchall(z.unknown());
   const TokenCreate = z.object({
     kind: TokenKind, name: z.string().trim().min(1).max(120), hexId: Uuid.nullable().optional(),
     factionId: Uuid.nullable().optional(), campaignId: Uuid.nullable().optional(), color: z.string().max(20).nullable().optional(),
     visibleToPlayers: z.boolean().optional(),
+    data: TokenData.optional(),
   });
   app.post('/api/worlds/:w/tokens', async (req) => {
     const w = await getWorld(db, (req.params as P).w);
@@ -242,20 +245,20 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const map = await rootMap(db, w.id);
     if (body.hexId) await worldHexes(db, w.id, [body.hexId]);
     let settlementId: string | undefined;
-    if (body.kind === 'city' || body.kind === 'outpost') {
+    if (settlementSize(body.kind)) {
       const [s] = await db.insert(settlements).values({
-        worldId: w.id, name: body.name, size: body.kind === 'outpost' ? 'outpost' : 'town', factionId: body.factionId ?? null,
+        worldId: w.id, name: body.name, size: settlementSize(body.kind), factionId: body.factionId ?? null,
       }).returning();
       settlementId = s.id;
     }
     const [row] = await db.insert(tokens).values({ ...body, worldId: w.id, mapId: map.id, settlementId }).returning();
-    // A city or outpost brings a settlement row with it, so screens refetch the map for both.
+    // Settlement types bring a details row, so screens refetch the map for both.
     changed(req, settlementId ? { scopes: ['map'] } : { patches: [{ op: 'token', token: row }] });
     await logEvent(db, { worldId: w.id, kind: 'token.created', summary: `${cap(body.kind)} "${body.name}" placed`, payload: { tokenId: row.id, hexId: body.hexId } });
     return row;
   });
 
-  const TokenPatch = TokenCreate.partial().extend({ data: z.record(z.string(), z.unknown()).optional() });
+  const TokenPatch = TokenCreate.partial();
   app.patch('/api/worlds/:w/tokens/:id', async (req) => {
     const { w: wid, id } = req.params as P;
     const w = await getWorld(db, wid);

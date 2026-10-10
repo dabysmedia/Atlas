@@ -13,6 +13,7 @@ import { axialToOffset, corner, DIRS, HEX_SIZE, hexLabel, hexToPixel, key, pixel
 import type { ArtPlacement, Claim, FactionLite, Hex, HexStateType, TerrainType, Token, TokenKind } from '../types';
 import { TerrainPainter, type PaintHex } from './painter';
 import { MARKER_RADIUS, markerSprite } from './markers';
+import { isMajorCity, isNotableKind } from '../../../shared/markers';
 
 export { HEX_SIZE };
 const CHUNK = 12; // hexes per chunk side, in offset coordinates
@@ -516,6 +517,7 @@ export class HexMapRenderer {
 
   tokenAt(sx: number, sy: number): Token | undefined {
     for (const t of [...this.tokens].sort((a, b) => order(b) - order(a))) {
+      if (this.tokenVisibility(t) < 0.05) continue;
       const pos = this.tokenPos(t);
       if (!pos) continue;
       const s = this.worldToScreen(pos.x, pos.y);
@@ -1087,8 +1089,8 @@ export class HexMapRenderer {
     const h = this.byId.get(t.hexId);
     if (!h) return null;
     const here = this.tokens.filter((x) => x.hexId === t.hexId && x.id !== this.dragToken?.token.id);
-    const fixed = here.filter((x) => x.kind === 'city' || x.kind === 'outpost');
-    const movers = here.filter((x) => !(x.kind === 'city' || x.kind === 'outpost'));
+    const fixed = here.filter((x) => isNotableKind(x.kind));
+    const movers = here.filter((x) => !isNotableKind(x.kind));
     if (fixed.includes(t)) {
       const i = fixed.indexOf(t);
       return { x: h.cx + (fixed.length > 1 ? (i - (fixed.length - 1) / 2) * 20 : 0), y: h.cy - (movers.length ? 4 : 0) };
@@ -1107,6 +1109,8 @@ export class HexMapRenderer {
   protected tokenLift(_kind: TokenKind, _r: number) { return 0; }
   /** Opacity for a marker at a world point (the 3D view dims markers hidden behind terrain). */
   protected tokenAlpha(_x: number, _y: number) { return 1; }
+  /** Drawing and hit testing share mode visibility. */
+  protected tokenVisibility(_token: Token) { return 1; }
 
   protected drawTokens(now: number, z: number, still?: boolean) {
     const ctx = this.ctx;
@@ -1114,6 +1118,8 @@ export class HexMapRenderer {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     const plates: { text: string; x: number; y: number; kind: TokenKind; color: string; side: boolean; alpha: number }[] = [];
     for (const t of ordered) {
+      const visibility = this.tokenVisibility(t);
+      if (visibility < 0.01) continue;
       const p = this.tokenPos(t);
       if (!p) continue;
       const s = this.worldToScreen(p.x, p.y);
@@ -1122,7 +1128,7 @@ export class HexMapRenderer {
       const color = t.color ?? (t.factionId ? this.factionColor.get(t.factionId) : undefined) ?? '#b9b2a3';
       const dragging = this.dragToken?.token.id === t.id;
       const lift = this.tokenLift(t.kind, r);
-      const fade = this.tokenAlpha(p.x, p.y);
+      const fade = this.tokenAlpha(p.x, p.y) * visibility;
       ctx.globalAlpha = fade;
       if (lift > 0) {
         // Standing on the ground: a contact shadow at the foot and a short post up to the marker.
@@ -1143,7 +1149,7 @@ export class HexMapRenderer {
         ctx.strokeStyle = SELECT; ctx.lineWidth = 2; ctx.shadowColor = SELECT; ctx.shadowBlur = 10;
         ctx.beginPath(); ctx.arc(s.x, s.y, r * 1.35, 0, Math.PI * 2); ctx.stroke(); ctx.shadowBlur = 0;
       }
-      const sprite = markerSprite(t.kind, color, r * (dragging ? 1.15 : 1), this.dpr);
+      const sprite = markerSprite(t.kind, color, r * (dragging ? 1.15 : 1), this.dpr, isMajorCity(t));
       const size = sprite.canvas.width / this.dpr;
       ctx.globalAlpha = (dragging ? 0.85 : 1) * fade;
       ctx.drawImage(sprite.canvas, s.x - size / 2, s.y - size / 2, size, size);

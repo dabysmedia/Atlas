@@ -9,6 +9,19 @@ import { __iconData as swords } from 'lucide-react/dist/esm/icons/swords.mjs';
 import { __iconData as user } from 'lucide-react/dist/esm/icons/user.mjs';
 import { __iconData as mapPin } from 'lucide-react/dist/esm/icons/map-pin.mjs';
 import { __iconData as compass } from 'lucide-react/dist/esm/icons/compass.mjs';
+import { __iconData as crown } from 'lucide-react/dist/esm/icons/crown.mjs';
+import { __iconData as houses } from 'lucide-react/dist/esm/icons/houses.mjs';
+import { __iconData as house } from 'lucide-react/dist/esm/icons/house.mjs';
+import { __iconData as skull } from 'lucide-react/dist/esm/icons/skull.mjs';
+import { __iconData as landmark } from 'lucide-react/dist/esm/icons/landmark.mjs';
+import { __iconData as shield } from 'lucide-react/dist/esm/icons/shield.mjs';
+import { __iconData as lighthouse } from 'lucide-react/dist/esm/icons/lighthouse.mjs';
+import { __iconData as church } from 'lucide-react/dist/esm/icons/church.mjs';
+import { __iconData as mountain } from 'lucide-react/dist/esm/icons/mountain.mjs';
+import { __iconData as pickaxe } from 'lucide-react/dist/esm/icons/pickaxe.mjs';
+import { __iconData as tent } from 'lucide-react/dist/esm/icons/tent.mjs';
+import { __iconData as anchor } from 'lucide-react/dist/esm/icons/anchor.mjs';
+import { __iconData as gem } from 'lucide-react/dist/esm/icons/gem.mjs';
 import type { TokenKind } from '../types';
 
 type IconNode = [string, Record<string, string>][];
@@ -39,11 +52,19 @@ const ICONS: Record<TokenKind, Path2D> = {
   unit: iconPath(swords.node as IconNode),
   character: iconPath(user.node as IconNode),
   marker: iconPath(mapPin.node as IconNode),
+  town: iconPath(houses.node as IconNode), village: iconPath(house.node as IconNode),
+  dungeon: iconPath(skull.node as IconNode), ruins: iconPath(landmark.node as IconNode),
+  fortress: iconPath(shield.node as IconNode), tower: iconPath(lighthouse.node as IconNode),
+  temple: iconPath(church.node as IconNode), cave: iconPath(mountain.node as IconNode),
+  mine: iconPath(pickaxe.node as IconNode), camp: iconPath(tent.node as IconNode),
+  port: iconPath(anchor.node as IconNode), landmark: iconPath(gem.node as IconNode),
 };
+const MAJOR_CITY_ICON = iconPath(crown.node as IconNode);
 export const FLAG_ICON = iconPath(flag.node as IconNode);
 
 /** On-screen radius in CSS px for each kind, at the reference zoom. */
-export const MARKER_RADIUS: Record<TokenKind, number> = { city: 17, outpost: 13, party: 14, unit: 12, character: 11, marker: 10 };
+export const MARKER_RADIUS: Record<TokenKind, number> = { city: 17, outpost: 13, party: 14, unit: 12, character: 11, marker: 10,
+  town: 14, village: 12, dungeon: 13, ruins: 13, fortress: 15, tower: 13, temple: 13, cave: 12, mine: 12, camp: 12, port: 13, landmark: 12 };
 
 const cache = new Map<string, HTMLCanvasElement>();
 
@@ -58,10 +79,10 @@ function shade(hex: string, amt: number) {
  * A sprite canvas with the marker centered; `pad` leaves room for the drop shadow.
  * Settlements are shields-in-a-ring, movers are round medallions, the party is a gilded compass.
  */
-export function markerSprite(kind: TokenKind, color: string, r: number, dpr: number): { canvas: HTMLCanvasElement; pad: number } {
+export function markerSprite(kind: TokenKind, color: string, r: number, dpr: number, major = false): { canvas: HTMLCanvasElement; pad: number } {
   const px = Math.max(4, Math.round(r * dpr));
   const pad = Math.ceil(px * 0.6);
-  const k = `${kind}|${color}|${px}`;
+  const k = `${kind}|${color}|${px}|${major}`;
   let c = cache.get(k);
   if (!c) {
     if (cache.size > 400) cache.clear();
@@ -69,13 +90,13 @@ export function markerSprite(kind: TokenKind, color: string, r: number, dpr: num
     c.width = c.height = (px + pad) * 2;
     const g = c.getContext('2d')!;
     g.translate(px + pad, px + pad);
-    drawMarker(g, kind, color, px);
+    drawMarker(g, kind, color, px, major);
     cache.set(k, c);
   }
   return { canvas: c, pad };
 }
 
-function drawMarker(g: CanvasRenderingContext2D, kind: TokenKind, color: string, r: number) {
+function drawMarker(g: CanvasRenderingContext2D, kind: TokenKind, color: string, r: number, major: boolean) {
   const settlement = kind === 'city' || kind === 'outpost';
   // Drop shadow.
   g.save();
@@ -103,11 +124,12 @@ function drawMarker(g: CanvasRenderingContext2D, kind: TokenKind, color: string,
 
   // Engraved icon.
   const s = (r * (settlement ? 1.05 : 1.0)) / 24;
+  const icon = kind === 'city' && major ? MAJOR_CITY_ICON : ICONS[kind];
   g.save();
   g.scale(s, s); g.translate(-12, kind === 'city' ? -12.5 : -12);
   g.lineCap = 'round'; g.lineJoin = 'round';
-  g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = 3.4; g.translate(0, 0.7); g.stroke(ICONS[kind]); g.translate(0, -0.7);
-  g.strokeStyle = kind === 'party' ? '#f2d27a' : shade(color, 0.55); g.lineWidth = 2.1; g.stroke(ICONS[kind]);
+  g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = 3.4; g.translate(0, 0.7); g.stroke(icon); g.translate(0, -0.7);
+  g.strokeStyle = kind === 'party' ? '#f2d27a' : shade(color, 0.55); g.lineWidth = 2.1; g.stroke(icon);
   g.restore();
 }
 

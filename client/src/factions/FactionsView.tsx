@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import { BookOpen, Check, ChevronDown, Dices, History, Plus, Trash2, X } from 'lucide-react';
 import { api, qk } from '../api';
 import { useDraft } from '../live';
-import type { Faction, FactionMeter, MeterBand, MeterChange, MeterDef, RollEntry, RollTable } from '../types';
+import type { Faction, FactionMeter, MapData, MeterBand, MeterChange, MeterDef, RollEntry, RollTable } from '../types';
 import { useWorld } from '../world';
 import { isLowTone } from '../../../shared/meters';
 import { usePageIndex } from '../wiki/usePages';
@@ -128,14 +128,23 @@ function FactionRow({ faction, meters, tables, open, onToggle }: { faction: Fact
   const navigate = useNavigate();
   const pages = usePageIndex(world.id);
   const [name, setName] = useDraft(faction.name, faction.id);
+  const [color, setColor] = useDraft(faction.color, faction.id);
+  const colorTimer = useRef<number | undefined>(undefined);
+  const colorSave = useRef<(() => void) | null>(null);
+  const saveColor = () => { window.clearTimeout(colorTimer.current); colorSave.current?.(); colorSave.current = null; };
+  useEffect(() => saveColor, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [confirmDelete, setConfirmDelete] = useState(false);
   const patch = async (p: Partial<Faction>) => {
     qc.setQueryData<Faction[]>(qk.factions(world.id), (xs) => xs?.map((f) => (f.id === faction.id ? { ...f, ...p } : f)));
     try {
       await api(`/api/worlds/${world.id}/factions/${faction.id}`, { method: 'PATCH', body: p });
       if ('signatureMeterId' in p) qc.invalidateQueries({ queryKey: qk.factions(world.id) });
-      if ('color' in p || 'name' in p) qc.invalidateQueries({ queryKey: qk.map(world.id) });
-    } catch (e) { toastError(e); qc.invalidateQueries({ queryKey: qk.factions(world.id) }); }
+      // The map shows the name and color: patch them in rather than read the whole map again.
+      if ('color' in p || 'name' in p) {
+        const lite = { ...('name' in p ? { name: p.name } : {}), ...('color' in p ? { color: p.color } : {}) };
+        qc.setQueryData<MapData>(qk.map(world.id), (d) => (d ? { ...d, factions: d.factions.map((f) => (f.id === faction.id ? { ...f, ...lite } : f)) } : d));
+      }
+    } catch (e) { toastError(e); qc.invalidateQueries({ queryKey: qk.factions(world.id) }); qc.invalidateQueries({ queryKey: qk.map(world.id) }); }
   };
   const del = async () => {
     try {
@@ -182,8 +191,16 @@ function FactionRow({ faction, meters, tables, open, onToggle }: { faction: Fact
               </label>
               <label className="row" style={{ gap: 8, position: 'relative', cursor: 'pointer' }} title="Faction color">
                 <span className="label" style={{ margin: 0 }}>Color</span>
-                <span className="swatch" style={{ background: faction.color, width: 22, height: 22, borderRadius: 5 }} />
-                <input type="color" value={faction.color} onChange={(e) => patch({ color: e.target.value })} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
+                <span className="swatch" style={{ background: color, width: 22, height: 22, borderRadius: 5 }} />
+                {/* The picker reports every step of a drag: show each at once, save once it rests. */}
+                <input type="color" value={color} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }}
+                  onChange={(e) => {
+                    const c = e.target.value;
+                    setColor(c);
+                    colorSave.current = () => { if (c !== faction.color) void patch({ color: c }); };
+                    window.clearTimeout(colorTimer.current);
+                    colorTimer.current = window.setTimeout(saveColor, 350);
+                  }} />
               </label>
               <label className="row" style={{ gap: 8 }}>
                 <span className="label" style={{ margin: 0 }}>Sigil</span>

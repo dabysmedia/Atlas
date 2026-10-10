@@ -22,6 +22,12 @@ export const pendingWrites = {
   },
 };
 
+/**
+ * Where the server's change count stood when each read began (x-atlas-seq). Live sync compares it with the count its
+ * subscription started from, to tell a read that may have missed a change from one that can't have.
+ */
+export const reads = { onSeq: null as ((seq: number) => void) | null };
+
 export async function api<T = unknown>(path: string, init?: { method?: string; body?: unknown; signal?: AbortSignal }): Promise<T> {
   const method = init?.method ?? (init?.body !== undefined ? 'POST' : 'GET');
   const req = fetch(path, {
@@ -32,6 +38,8 @@ export async function api<T = unknown>(path: string, init?: { method?: string; b
     signal: init?.signal,
   });
   const res = await (method === 'GET' ? req : pendingWrites.track(req));
+  const seq = res.headers.get('x-atlas-seq');
+  if (seq && res.ok) reads.onSeq?.(Number(seq));
   const text = await res.text();
   const data = text ? JSON.parse(text) : undefined;
   if (!res.ok) {

@@ -7,6 +7,7 @@ import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
 import { z } from 'zod';
+import { eq } from 'drizzle-orm';
 import { createDb, runMigrations } from './db/index.js';
 import { registerAuth, ensureOwner, sessionUser, COOKIE } from './auth.js';
 import { LiveHub, LocalBus, liveRoutes } from './live.js';
@@ -28,7 +29,10 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
 
   const app = Fastify({ logger: opts.logger ?? false, trustProxy: true, bodyLimit: 8 * 1024 * 1024 });
   // One process, so the hub's bus is in-process (see server/live.ts for running several).
-  const live = new LiveHub(new LocalBus(), async (token) => !!(await sessionUser(db, token)));
+  const live = new LiveHub(new LocalBus(), {
+    stillSignedIn: async (token) => !!(await sessionUser(db, token)),
+    canView: async (_who, world) => !!(await db.query.worlds.findFirst({ where: eq(worlds.id, world), columns: { id: true } })),
+  });
   app.addHook('onClose', async () => { live.close(); await pool.end(); });
   await app.register(cookie);
   await app.register(rateLimit, { global: false });
@@ -44,16 +48,19 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
   });
 
   app.get('/healthz', async () => ({ ok: true }));
-  registerAuth(app, db, { secureCookies: opts.secureCookies ?? false });
+  registerAuth(app, db, { secureCookies: opts.secureCookies ?? false, onSignOut: (token) => live.closeSession(token) });
 
   // Everything else under /api requires the owner's session.
   await app.register(async (api) => {
     api.addHook('preHandler', app.requireUser);
     // First, so every mutating route below is held to broadcasting its changes.
-    liveRoutes(api, live, async (req) => {
-      const token = req.cookies[COOKIE];
-      const u = await sessionUser(db, token);
-      return u && token ? { name: u.username, token } : null;
+    liveRoutes(api, live, {
+      user: async (req) => {
+        const token = req.cookies[COOKIE];
+        const u = await sessionUser(db, token);
+        return u && token ? { name: u.username, token } : null;
+      },
+      token: (req) => req.cookies[COOKIE],
     });
     worldRoutes(api, db);
     wikiRoutes(api, db);

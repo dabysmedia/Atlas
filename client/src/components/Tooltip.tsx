@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 
@@ -15,6 +15,16 @@ const OFFSET: Record<Side, { x?: number; y?: number }> = { top: { y: 5 }, bottom
  */
 export function TooltipHost() {
   const [tip, setTip] = useState<Tip | null>(null);
+  // How far the tip moves sideways to stay inside the window (a control near the edge, a long tip).
+  const [shift, setShift] = useState(0);
+  const anchor = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    setShift(0);
+    const el = anchor.current;
+    if (!el || !tip || tip.side === 'left' || tip.side === 'right') return;
+    const r = el.getBoundingClientRect();
+    setShift(Math.max(0, 8 - r.left) + Math.min(0, window.innerWidth - 8 - r.right));
+  }, [tip]);
   useEffect(() => {
     let timer = 0;
     let cur: HTMLElement | null = null;
@@ -79,7 +89,7 @@ export function TooltipHost() {
     <AnimatePresence>
       {tip && (
         // The anchor holds the position (its stylesheet transform pins the side); the inner card does the motion.
-        <motion.div key={tip.id} className={`tip-anchor tip-${tip.side}`} style={{ left: tip.x, top: tip.y }} aria-hidden
+        <motion.div key={tip.id} ref={anchor} className={`tip-anchor tip-${tip.side}`} style={{ left: tip.x + shift, top: tip.y }} aria-hidden
           initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.08 } }} transition={{ duration: 0.12 }}>
           <motion.div className="tip" initial={{ scale: 0.94, ...OFFSET[tip.side] }} animate={{ scale: 1, x: 0, y: 0 }} transition={{ type: 'spring', stiffness: 620, damping: 34 }}>
             <span>{tip.label}</span>

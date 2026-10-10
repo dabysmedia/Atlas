@@ -711,7 +711,8 @@ export class HexMapRenderer3D extends HexMapRenderer {
     for (const s of [...this.glows.children]) { this.glows.remove(s); ((s as THREE.Sprite).material as THREE.Material).dispose(); }
     for (const t of this.tokens) {
       if (t.kind !== 'city' && t.kind !== 'outpost') continue;
-      const p = this.tokenPos(t);
+      // Where it rests, not where a glide happens to be: glows are only rebuilt when the rows change.
+      const p = this.slotPos(t);
       if (!p) continue;
       const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: 0xffb35c, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: true }));
       const size = HEX_SIZE * (t.kind === 'city' ? 2.6 : 1.5);

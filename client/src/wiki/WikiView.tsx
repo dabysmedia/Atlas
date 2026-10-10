@@ -167,7 +167,12 @@ function PageEditor({ pageId }: { pageId: string }) {
     try {
       if (body.content) body.content = resolveLinks(body.content);
       const row = await api<PageIndex>(`/api/worlds/${world.id}/pages/${pageId}`, { method: 'PATCH', body });
-      shown.current = { title: row.title, category: row.category, content: body.content ? canonical(body.content) : shown.current.content };
+      // Only what this save sent counts as taken in: another screen's rename that arrived meanwhile still has to show.
+      shown.current = {
+        title: body.title !== undefined ? row.title : shown.current.title,
+        category: body.category !== undefined ? row.category : shown.current.category,
+        content: body.content ? canonical(body.content) : shown.current.content,
+      };
       setTitleError('');
       qc.setQueryData<PageIndex[]>(qk.pages(world.id), (xs) => [row, ...(xs ?? []).filter((x) => x.id !== row.id)]);
       qc.setQueryData<Page>(qk.page(world.id, pageId), (p) => (p ? { ...p, ...row, ...(body.content ? { content: body.content } : {}) } : p));

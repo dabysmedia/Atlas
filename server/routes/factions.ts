@@ -8,6 +8,7 @@ import {
 import { badRequest, logEvent, notFound, setMeter } from '../history.js';
 import { bandFor } from '../../shared/meters.js';
 import { getWorld, Uuid } from './worlds.js';
+import { changed } from '../live.js';
 
 type P = { w: string; id: string; m: string };
 
@@ -86,6 +87,8 @@ export function factionRoutes(app: FastifyInstance, db: Db) {
         const existing = await tx.query.meterValues.findFirst({ where: and(eq(meterValues.factionId, f.id), eq(meterValues.meterId, body.signatureMeterId)) });
         if (def && !existing) await setMeter(tx, { worldId: w.id, factionId: f.id, factionName: row.name, meterId: def.id, value: def.defaultValue, cause: `Adopted ${def.name} as signature` });
       }
+      // The map holds only a faction's name and color: patched there, rather than every screen refetching the map.
+      changed(req, { patches: [{ op: 'faction', faction: { id: row.id, name: row.name, color: row.color } }] });
       return row;
     });
   });

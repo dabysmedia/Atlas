@@ -111,8 +111,12 @@ function Notes({ value, onSave, placeholder }: { value: string; onSave: (v: stri
   const [text, setText] = useState(value);
   const t = useRef<number | undefined>(undefined);
   const latest = useRef(value);
-  useEffect(() => { if (!editing) setText(value); }, [value, editing]);
-  const flush = () => { window.clearTimeout(t.current); if (latest.current !== value) onSave(latest.current); };
+  // Another screen's save shows here too, and becomes what this one compares its own edits against.
+  useEffect(() => { if (!editing) { setText(value); latest.current = value; } }, [value, editing]);
+  /** Whether this screen typed since it last saved; opening the editor and leaving it saves nothing. */
+  const typed = useRef(false);
+  const save = () => { typed.current = false; onSave(latest.current); };
+  const flush = () => { window.clearTimeout(t.current); if (typed.current && latest.current !== value) save(); };
   useEffect(() => () => flush(), []); // eslint-disable-line react-hooks/exhaustive-deps
   if (!editing) {
     return (
@@ -123,7 +127,7 @@ function Notes({ value, onSave, placeholder }: { value: string; onSave: (v: stri
   }
   return (
     <textarea className="textarea" rows={6} autoFocus value={text} placeholder={placeholder}
-      onChange={(e) => { setText(e.target.value); latest.current = e.target.value; window.clearTimeout(t.current); t.current = window.setTimeout(() => onSave(latest.current), 600); }}
+      onChange={(e) => { setText(e.target.value); latest.current = e.target.value; typed.current = true; window.clearTimeout(t.current); t.current = window.setTimeout(save, 600); }}
       onBlur={() => { flush(); setEditing(false); }} />
   );
 }

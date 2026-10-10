@@ -20,9 +20,16 @@ and subscribed to the world it shows. The server half is `server/live.ts`, the c
   into their query cache, so the map redraws without refetching. The world clock and weather carry the world's
   fields. Everything else names the parts of the cache to refetch ("scopes"). `ROUTE_SCOPES` lists every mutating
   route; one missing from it stops the server at boot.
-- **Echoes.** Each tab sends an `x-atlas-client` id with its requests; its own changes come back tagged with it and
-  are skipped. Refetches heard while the tab has a write of its own in flight wait for it to land, and form fields
-  keep what is being typed (`useDraft`); the last save wins.
+- **Order.** Writes to one world take turns, each broadcast before the next runs, so every screen hears a world's
+  changes in the order they were saved, numbered (`seq`). Reads say where the count stood as they began
+  (`x-atlas-seq`) and a subscription says where it took effect, so a screen that read something before subscribing
+  refetches if a change slipped in between.
+- **Echoes.** Each tab sends an `x-atlas-client` id with its requests (and on its socket); the server leaves the tab's
+  own changes out of what it sends that tab, matching the session too. Refetches heard while the tab has a write of
+  its own in flight wait for it to land, and form fields keep what is being typed (`useDraft`); the last save wins.
+- **Limits.** Per socket, drags, let-gos and subscriptions have budgets; presence updates are gathered per world; a
+  socket that stops reading is dropped rather than buffered for; a session holds at most 10 sockets; signing out
+  closes the session's sockets at once.
 - **Marker drags** stream positions (about 25 a second, never stored) so others see the marker move; the drop saves
   through the usual `PATCH`, and remote moves glide rather than jump.
 - **Presence.** The top bar shows who has the world open, one avatar per screen, and whether this one is live.

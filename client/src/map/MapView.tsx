@@ -124,14 +124,15 @@ export function MapView() {
 
   const placedCamera = useRef(false);
   // A brush stroke or marker drag in progress shows its own edits ahead of the cache; changes arriving from other
-  // screens meanwhile wait for it to end rather than wiping the stroke from view.
-  const interacting = useRef(false);
+  // screens meanwhile wait for it to end (a stroke, until it is saved) rather than wiping it from view. Counted, as
+  // a new stroke can start while the last one is still saving.
+  const interacting = useRef(0);
   const [held, setHeld] = useState(0);
   const heldData = useRef(false);
   useEffect(() => {
     const r = rendererRef.current;
     if (!r || !data) return;
-    if (interacting.current) { heldData.current = true; return; }
+    if (interacting.current > 0) { heldData.current = true; return; }
     heldData.current = false;
     r.setData({
       orientation: data.map.layout.orientation, hexes: data.hexes, claims: data.claims, tokens: data.tokens,
@@ -437,9 +438,11 @@ export function MapView() {
       if (dragSent || dragOut) live.drag({ token, ...at, end: true, to });
       dragOut = dragSent = null;
     };
-    const settle = () => {
-      interacting.current = false;
-      if (heldData.current) setHeld((n) => n + 1);
+    let holding = false;
+    const hold = () => { if (!holding) { holding = true; interacting.current++; } };
+    const release = () => {
+      interacting.current = Math.max(0, interacting.current - 1);
+      if (interacting.current === 0 && heldData.current) setHeld((n) => n + 1);
     };
 
     const pos = (e: PointerEvent | WheelEvent | MouseEvent) => {
@@ -481,11 +484,11 @@ export function MapView() {
       const t = toolRef.current.tool;
       if (t === 'select') {
         const tok = r().tokenAt(p.x, p.y);
-        if (tok) { dragTok = tok; mode = 'token'; interacting.current = true; return; }
+        if (tok) { dragTok = tok; mode = 'token'; hold(); return; }
         mode = 'maybe-click';
       } else {
         if (t === 'fog' && !toolRef.current.fogCamp) { mode = 'maybe-click'; return; }
-        mode = 'stroke'; stroke = new Set(); interacting.current = true; strokeAt(p);
+        mode = 'stroke'; stroke = new Set(); hold(); strokeAt(p);
       }
     };
 
@@ -541,15 +544,17 @@ export function MapView() {
       if (!rendererRef.current) return;
       const p = pos(e);
       pointers.delete(e.pointerId);
-      settle();
-      if (mode === 'pinch') { if (pointers.size === 0) mode = 'none'; return; }
+      const held = holding;
+      holding = false;
+      let saving: Promise<void> | null = null;
+      if (mode === 'pinch') { if (held) release(); if (pointers.size === 0) mode = 'none'; return; }
       if (mode === 'pan') {
         if (performance.now() - lastMove.t < 80 && Math.hypot(vel.x, vel.y) > 120) r().fling(vel.x, vel.y);
       } else if (mode === 'maybe-click') {
         const h = r().hexAt(p.x, p.y);
         setFocus(h ? { kind: 'hex', id: h.id } : null);
       } else if (mode === 'stroke') {
-        handlers.current.commitStroke([...stroke]);
+        saving = handlers.current.commitStroke([...stroke]);
         stroke = new Set();
       } else if (mode === 'token' && dragTok) {
         const dragging = r().dragToken;
@@ -567,6 +572,7 @@ export function MapView() {
         r().invalidate();
         dragTok = null;
       }
+      if (held) { if (saving) void saving.finally(release); else release(); }
       mode = 'none';
       canvas.style.cursor = '';
     };
@@ -653,6 +659,11 @@ export function MapView() {
       wrap.removeEventListener('drop', onDrop);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKey);
+      // Leaving mid-drag: stop streaming, and tell the others to let the marker go home rather than hold it.
+      const last = dragOut ?? dragSent;
+      if (dragTok && last) endDrag(dragTok.id, { x: last.x, y: last.y }, null);
+      window.clearTimeout(dragTimer); window.clearInterval(dragKeep);
+      if (holding) { holding = false; release(); }
     };
   }, [gen]);
   const uploadRef = useRef(uploadArt);

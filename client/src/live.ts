@@ -1,12 +1,12 @@
 /**
  * Live sync, client side: one WebSocket per tab (server/live.ts) that keeps this screen's cache in step with every
  * other screen's edits. Changed map rows are patched straight into the cache, so the map redraws without a refetch;
- * everything else arrives as scopes, which become invalidations. This tab's own changes come back tagged with its
- * client id and are skipped, since it already applied them.
+ * everything else arrives as scopes, which become invalidations. The server leaves out this tab's own changes (it
+ * knows the tab by the client id api() sends), since it already applied them.
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { QueryClient, QueryFilters } from '@tanstack/react-query';
-import { CLIENT_ID, qk, pendingWrites } from './api';
+import type { QueryClient, QueryFilters, QueryKey } from '@tanstack/react-query';
+import { CLIENT_ID, qk, pendingWrites, reads } from './api';
 import type { Claim, Hex, MapArt, MapData, MapModel, Token, World } from './types';
 import { daySweep } from './daylight';
 
@@ -21,6 +21,7 @@ type Patch =
   | { op: 'claimGone'; id: string }
   | { op: 'token'; token: Token }
   | { op: 'tokenGone'; id: string }
+  | { op: 'faction'; faction: { id: string; name: string; color: string } }
   | { op: 'fog'; campaignId: string; hexIds: string[]; explored: boolean }
   | { op: 'art'; art: MapArt | null }
   | { op: 'model'; model: MapModel | null }
@@ -28,7 +29,8 @@ type Patch =
 export type DragMsg = { t: 'drag'; world: string; conn: string; token: string; x: number; y: number; end?: boolean; to?: string | null };
 type ServerMsg =
   | { t: 'hello'; conn: string }
-  | { t: 'change'; world: string | null; origin: string | null; scopes: Scope[]; patches?: Patch[] }
+  | { t: 'change'; world: string | null; seq: number; scopes: Scope[]; patches?: Patch[] }
+  | { t: 'subbed'; world: string | null; seq: number }
   | { t: 'presence'; world: string; viewers: Viewer[] }
   | DragMsg
   | { t: 'hb' };
@@ -62,6 +64,21 @@ class Live {
   private drags = new Set<(m: DragMsg) => void>();
   /** Scopes heard while this tab had writes of its own in flight, refetched once they land. */
   private held = new Map<string, QueryFilters>();
+  /**
+   * The server's change count when this screen's subscription took effect (null until it has): every change after
+   * it arrives here. Until then, the lowest count any read began at; a read from before it may have missed one.
+   */
+  private since: number | null = null;
+  private oldest: number | null = null;
+  private resyncing = 0;
+
+  constructor() {
+    reads.onSeq = (seq) => {
+      if (this.since === null) this.oldest = Math.min(this.oldest ?? seq, seq);
+      // A read that began before the subscription answered after it: whatever was saved in between may be missing.
+      else if (seq < this.since) this.resyncSoon();
+    };
+  }
 
   get snapshot() { return this.snap; }
   subscribe = (fn: () => void) => { this.subs.add(fn); return () => { this.subs.delete(fn); }; };
@@ -83,6 +100,7 @@ class Live {
       const ws = this.ws;
       this.ws = null;
       ws?.close();
+      this.unsubscribed();
       this.set({ status: 'connecting', viewers: [], me: null });
     };
   }
@@ -99,9 +117,13 @@ class Live {
   view(world: string | null) {
     if (world === this.world) return;
     // Nothing from the world being left arrives from now on: its cache must be read fresh next visit.
-    if (this.world) void this.qc?.invalidateQueries({ queryKey: ['w', this.world], refetchType: 'none' });
+    if (this.world) {
+      void this.qc?.invalidateQueries({ queryKey: ['w', this.world], refetchType: 'none' });
+      void this.qc?.invalidateQueries({ queryKey: ['modelArchive', this.world], refetchType: 'none' });
+    }
     this.world = world;
     this.set({ viewers: [] });
+    this.unsubscribed();
     this.sendRaw({ t: 'sub', world });
   }
 
@@ -119,9 +141,11 @@ class Live {
     ws.onopen = () => {
       if (this.ws !== ws) return;
       this.tries = 0;
+      this.unsubscribed();
       this.sendRaw({ t: 'sub', world: this.world });
-      // Back after a gap: whatever changed meanwhile was missed, so read it all again.
-      if (this.opened++ > 0) this.resync();
+      // Back after a gap (or connected at last, after failing at first): whatever changed meanwhile was missed, so
+      // read it all again.
+      if (this.opened++ > 0 || this.snap.status === 'reconnecting') this.resync();
       this.set({ status: 'live' });
       this.feed();
     };
@@ -144,6 +168,7 @@ class Live {
     if (this.ws !== ws) return;
     this.ws = null;
     ws.close();
+    this.unsubscribed();
     window.clearTimeout(this.watchdog);
     // Who was here stays on show, dimmed, until the line is back and says who still is.
     this.set({ status: 'reconnecting' });
@@ -158,8 +183,17 @@ class Live {
     this.watchdog = window.setTimeout(() => { if (ws) this.lost(ws); }, QUIET_MS);
   }
 
+  /** No subscription in effect (a new world, a new socket): reads from now on count as before the next one. */
+  private unsubscribed() { this.since = null; }
+
+  private resyncSoon() {
+    if (this.resyncing) return;
+    this.resyncing = window.setTimeout(() => { this.resyncing = 0; this.resync(); }, 50);
+  }
+
   private resync() {
-    const qc = this.qc!;
+    const qc = this.qc;
+    if (!qc) return;
     void qc.invalidateQueries({ queryKey: qk.worlds });
     if (this.world) {
       void qc.invalidateQueries({ queryKey: ['w', this.world] });
@@ -170,14 +204,32 @@ class Live {
   private receive(m: ServerMsg) {
     const qc = this.qc!;
     if (m.t === 'hello') this.set({ me: m.conn });
+    else if (m.t === 'subbed') {
+      if (m.world !== this.world) {
+        // Refused (the server couldn't check, or the world is gone, in which case the app leaves it anyway) or an
+        // answer to an older sub: ask again in a while if nothing newer has taken.
+        window.setTimeout(() => { if (this.since === null && this.world) this.sendRaw({ t: 'sub', world: this.world }); }, 5000);
+        return;
+      }
+      // Reads that began before the subscription took effect may have missed what was saved in between.
+      if (this.oldest !== null && this.oldest < m.seq) this.resyncSoon();
+      this.since = m.seq;
+      this.oldest = null;
+    }
     else if (m.t === 'presence') { if (m.world === this.world) this.set({ viewers: m.viewers }); }
     else if (m.t === 'drag') { if (m.world === this.world) this.drags.forEach((f) => f(m)); }
     else if (m.t === 'change') {
-      if (m.origin === CLIENT_ID) return;
-      for (const p of m.patches ?? []) applyPatch(qc, m.world!, p);
+      const stale: QueryFilters[] = [];
+      for (const p of m.patches ?? []) {
+        const key = applyPatch(qc, m.world!, p);
+        // A read already on its way may have left the database before this change: read again once it lands.
+        if (key && qc.isFetching({ queryKey: key, exact: true })) stale.push({ queryKey: key, exact: true });
+      }
       for (const s of m.scopes) {
         const f = filterFor(m.world, s);
-        if (!f) continue;
+        if (f) stale.push(f);
+      }
+      for (const f of stale) {
         // A refetch that starts before this tab's own write lands could bring back the value it is replacing.
         if (pendingWrites.count > 0) this.held.set(JSON.stringify(f), f);
         else void qc.invalidateQueries(f);
@@ -230,12 +282,14 @@ export function useDraft<T>(value: T, key?: unknown): [T, (v: T) => void] {
   return [draft, setDraft];
 }
 
-const patchMap = (qc: QueryClient, world: string, fn: (d: MapData) => MapData) =>
+const patchMap = (qc: QueryClient, world: string, fn: (d: MapData) => MapData): QueryKey => {
   qc.setQueryData<MapData>(qk.map(world), (d) => (d ? fn(d) : d));
+  return qk.map(world);
+};
 const upsert = <T extends { id: string }>(xs: T[], x: T) => (xs.some((y) => y.id === x.id) ? xs.map((y) => (y.id === x.id ? { ...y, ...x } : y)) : [...xs, x]);
 
-/** Another screen's change, put straight into this one's cache; the map and the clock redraw from there. */
-function applyPatch(qc: QueryClient, world: string, p: Patch) {
+/** Another screen's change, put straight into this one's cache; the map and the clock redraw from there. Returns the query it changed. */
+function applyPatch(qc: QueryClient, world: string, p: Patch): QueryKey | null {
   switch (p.op) {
     case 'hexes': {
       const ids = new Set(p.ids);
@@ -250,13 +304,15 @@ function applyPatch(qc: QueryClient, world: string, p: Patch) {
     case 'claimGone': return patchMap(qc, world, (d) => ({ ...d, claims: d.claims.filter((c) => c.id !== p.id) }));
     case 'token': return patchMap(qc, world, (d) => ({ ...d, tokens: upsert(d.tokens, p.token) }));
     case 'tokenGone': return patchMap(qc, world, (d) => ({ ...d, tokens: d.tokens.filter((t) => t.id !== p.id) }));
+    case 'faction': return patchMap(qc, world, (d) => ({ ...d, factions: d.factions.map((f) => (f.id === p.faction.id ? { ...f, ...p.faction } : f)) }));
     case 'fog': {
-      return qc.setQueryData<string[]>(qk.fog(world, p.campaignId), (xs) => {
+      qc.setQueryData<string[]>(qk.fog(world, p.campaignId), (xs) => {
         if (!xs) return xs;
         const s = new Set(xs);
         p.hexIds.forEach((id) => (p.explored ? s.add(id) : s.delete(id)));
         return [...s];
       });
+      return qk.fog(world, p.campaignId);
     }
     case 'art': return patchMap(qc, world, (d) => ({ ...d, map: { ...d.map, art: p.art } }));
     case 'model': return patchMap(qc, world, (d) => ({ ...d, map: { ...d.map, model: p.model } }));
@@ -266,6 +322,8 @@ function applyPatch(qc: QueryClient, world: string, p: Patch) {
       if (p.sweep && before && p.world.currentDay !== undefined && p.world.currentDay !== before.currentDay) daySweep.emit();
       // This tab's own clock or weather change in flight may land after this one: read the world again once it has.
       if (pendingWrites.count > 0) pendingWrites.whenSettled(() => void qc.invalidateQueries({ queryKey: qk.world(world), exact: true }));
+      return qk.world(world);
     }
   }
+  return null;
 }

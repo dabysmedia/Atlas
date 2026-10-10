@@ -8,7 +8,8 @@ const hue = (id: string) => [...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) 
 
 /**
  * Who else has this world open, as small glass avatars (one per screen), and whether this screen is live. Quiet
- * when all is well: a green dot. Amber and a word while the link is being restored.
+ * when all is well: a green dot. While the link is being restored the dot pulses amber and the avatars dim, and the
+ * tip says so; nothing changes width, so the bar never shifts.
  */
 export function Presence(motionProps: HTMLMotionProps<'div'>) {
   const { status, viewers, me } = useLive();
@@ -21,7 +22,6 @@ export function Presence(motionProps: HTMLMotionProps<'div'>) {
   return (
     <motion.div className={`presence glass ${status}`} role="status" aria-label={tip} data-tip={tip} data-status={status} data-count={viewers.length} {...motionProps}>
       <span className="live-dot" aria-hidden />
-      {status === 'reconnecting' && <span className="pres-state">Reconnecting</span>}
       <span className="avatars" aria-hidden>
         <AnimatePresence initial={false}>
           {shown.map((v) => (

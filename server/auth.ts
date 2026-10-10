@@ -58,7 +58,7 @@ export async function sessionUser(db: Db, token: string | undefined) {
   return row ?? null;
 }
 
-export function registerAuth(app: FastifyInstance, db: Db, opts: { secureCookies: boolean }) {
+export function registerAuth(app: FastifyInstance, db: Db, opts: { secureCookies: boolean; onSignOut?: (token: string) => void }) {
   const cookieOpts = {
     path: '/', httpOnly: true, sameSite: 'lax' as const, secure: opts.secureCookies,
     maxAge: SESSION_DAYS * 86400,
@@ -102,7 +102,11 @@ export function registerAuth(app: FastifyInstance, db: Db, opts: { secureCookies
 
   app.post('/api/auth/logout', async (req, reply) => {
     const token = req.cookies[COOKIE];
-    if (token) await db.delete(sessions).where(eq(sessions.tokenHash, sha256(token)));
+    if (token) {
+      await db.delete(sessions).where(eq(sessions.tokenHash, sha256(token)));
+      // Its live sockets close now, rather than at their next heartbeat.
+      opts.onSignOut?.(token);
+    }
     reply.clearCookie(COOKIE, { path: '/' });
     return { ok: true };
   });

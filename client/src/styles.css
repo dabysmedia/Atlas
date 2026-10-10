@@ -259,7 +259,6 @@ button.chip:hover { border-color: var(--glass-edge-hi); color: var(--text); }
 }
 .presence:not(.live) .live-dot { background: var(--warn); box-shadow: 0 0 8px rgba(227, 181, 90, 0.6); animation: live-wait 1.4s ease-in-out infinite; }
 @keyframes live-wait { 50% { opacity: 0.35; } }
-.presence .pres-state { font-size: 11.5px; letter-spacing: 0.04em; color: var(--warn); white-space: nowrap; }
 .presence .avatars { display: flex; align-items: center; transition: opacity 0.3s, filter 0.3s; }
 .presence:not(.live) .avatars { opacity: 0.45; filter: grayscale(0.7); }
 .presence .avatar {
@@ -364,7 +363,7 @@ button.chip:hover { border-color: var(--glass-edge-hi); color: var(--text); }
   .searchbox, .signout { width: 44px !important; }
   /* Just the dot and a head count. */
   .presence { gap: 6px; padding: 0 10px; }
-  .presence .avatars, .presence .pres-state { display: none; }
+  .presence .avatars { display: none; }
   .presence .pres-n { display: inline; }
   /* Centred with margins: the entry animation owns transform. */
   .rail {

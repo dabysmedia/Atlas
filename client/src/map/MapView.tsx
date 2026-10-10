@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  Archive, Box, Brush, ChevronLeft, CloudFog, Compass, Eye, EyeOff, Flag, Grid3x3, Image as ImageIcon, Layers, Map as MapIcon, Maximize, Minus, Mountain, MousePointer2, Move, Plus,
-  RotateCcw, RotateCw, Shield, Stamp, Trash2, Upload, X,
+  Archive, Box, Brush, CloudFog, Eye, EyeOff, Flag, Grid3x3, Image as ImageIcon, Layers, Map as MapIcon, Mountain, MousePointer2, Move,
+  RotateCcw, Shield, Stamp, Trash2, Upload, X,
 } from 'lucide-react';
 import { api, ApiError, qk } from '../api';
 import type { ArchivedModel, ArtPlacement, Claim, Hex, MapArt, MapData, MapModel, Token } from '../types';
@@ -14,6 +14,7 @@ import { HEX_SIZE, HexMapRenderer, type Camera, type Layers as RLayers } from '.
 import { FactionPanel, HexPanel, TokenPanel, Diamond, type Focus } from './panels';
 import { toast, toastError } from '../components/toast';
 import { Dialog } from '../components/Dialog';
+import { ShortcutsCard, StackButton, ToolDock, ViewControls, type ToolDef } from '../components/MapChrome';
 import { DIRS, key } from '../../../shared/hex';
 import type { HexMapRenderer3D } from '../map3d/renderer3d';
 import { is3d, load3d, webgl2Available } from '../map3d/support';
@@ -24,12 +25,12 @@ const HAS_WEBGL2 = typeof document !== 'undefined' && webgl2Available();
 if (HAS_WEBGL2 && mapModePref.get() !== '2d') void load3d();
 
 type Tool = 'select' | 'terrain' | 'state' | 'claim' | 'fog';
-const TOOLS: { id: Tool; label: string; icon: typeof Brush; keyHint: string }[] = [
-  { id: 'select', label: 'Inspect and move', icon: MousePointer2, keyHint: '1' },
-  { id: 'terrain', label: 'Paint terrain', icon: Brush, keyHint: '2' },
-  { id: 'state', label: 'Paint hex state', icon: Stamp, keyHint: '3' },
-  { id: 'claim', label: 'Paint faction control', icon: Shield, keyHint: '4' },
-  { id: 'fog', label: 'Reveal or hide party fog', icon: Eye, keyHint: '5' },
+const TOOLS: ToolDef<Tool>[] = [
+  { id: 'select', label: 'Inspect and move', short: 'Inspect', icon: MousePointer2, keyHint: '1' },
+  { id: 'terrain', label: 'Paint terrain', short: 'Terrain', icon: Brush, keyHint: '2' },
+  { id: 'state', label: 'Paint hex state', short: 'State', icon: Stamp, keyHint: '3' },
+  { id: 'claim', label: 'Paint faction control', short: 'Control', icon: Shield, keyHint: '4' },
+  { id: 'fog', label: 'Reveal or hide party fog', short: 'Fog', icon: Eye, keyHint: '5' },
 ];
 
 /** Cameras survive tab switches within the session; localStorage carries them across visits. */
@@ -60,7 +61,9 @@ export function MapView() {
   const [showFog, setShowFog] = useState(false);
   const [layers, setLayers] = useState<RLayers>(() => ({ ...DEFAULT_LAYERS, ...layerPrefs(world.id).get() }));
   const [layersOpen, setLayersOpen] = useState(false);
-  const [territoriesOpen, setTerritoriesOpen] = useState(() => panelPrefs.get()?.territories ?? true);
+  // Details on demand: the map opens bare unless this browser left the territories card open.
+  const [territoriesOpen, setTerritoriesOpen] = useState(() => panelPrefs.get()?.territories ?? false);
+  const [keysOpen, setKeysOpen] = useState(false);
   const [align, setAlign] = useState<ArtPlacement | null>(null);
   const [artLoaded, setArtLoaded] = useState(0);
   const [dropping, setDropping] = useState(false);
@@ -542,7 +545,8 @@ export function MapView() {
       if (e.type !== 'keydown' || e.metaKey || e.ctrlKey || e.altKey) return;
       const idx = ['1', '2', '3', '4', '5'].indexOf(e.key);
       if (idx >= 0) setTool(TOOLS[idx].id);
-      else if (e.key === 'Escape') { setFocus(null); setLayersOpen(false); }
+      else if (e.key === 'Escape') { setFocus(null); setLayersOpen(false); setKeysOpen(false); }
+      else if (e.key === '?') setKeysOpen((o) => !o);
       else if (e.key === '+' || e.key === '=') r().zoomAt(r().viewport.w / 2, r().viewport.h / 2, 1.5);
       else if (e.key === '-') r().zoomAt(r().viewport.w / 2, r().viewport.h / 2, 1 / 1.5);
       else if (e.key === 'f') { const c = r().fitCamera(); r().flyTo(c.x, c.y, c.zoom); }
@@ -610,6 +614,8 @@ export function MapView() {
   }, [hoverHex, data, world.terrainTypes]);
 
   const r = rendererRef.current;
+  const getRenderer = useCallback(() => rendererRef.current, []);
+  const fitMap = () => { const rr = rendererRef.current; if (rr) { const c = rr.fitCamera(); rr.flyTo(c.x, c.y, c.zoom); } };
   const snapAt = (x: number, y: number, zoom = 1.6) => () => {
     const rr = rendererRef.current;
     if (!rr) return null;
@@ -638,44 +644,13 @@ export function MapView() {
       {!data && <div className="map-loading"><span>Unrolling the map…</span></div>}
       {mode === '3d' && modelState === 'loading' && <div className="map-raising"><Mountain size={13} /> Raising the island…</div>}
 
-      {/* Territories: compact, collapsible. */}
-      {data && !align && (
-        <AnimatePresence initial={false} mode="wait">
-          {territoriesOpen ? (
-            <motion.div key="open" className="panel territories" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} transition={{ duration: 0.16 }}>
-              <header>
-                <h4>Territories</h4>
-                <button className="iconbtn sm" onClick={() => setTerritoriesOpen(false)} aria-label="Collapse territories"><ChevronLeft size={14} /></button>
-              </header>
-              {data.factions.map((f) => (
-                <button key={f.id} className={`terr-row ${focus?.kind === 'faction' && focus.id === f.id ? 'on' : ''}`}
-                  onClick={() => setFocus(focus?.kind === 'faction' && focus.id === f.id ? null : { kind: 'faction', id: f.id })}>
-                  <Diamond color={f.color} /> <span className="grow">{f.name}</span> <span className="num faint">{territoryCounts.get(f.id) ?? 0}</span>
-                </button>
-              ))}
-              {!data.factions.length && <div className="faint" style={{ fontSize: 12, padding: '2px 4px 6px' }}>No factions yet.</div>}
-              <div className="legend-rows">
-                <span><i className="lg-contested" /> Contested</span>
-                <span><i className="lg-influence" /> Influence</span>
-                <span><i className="lg-border" /> Border</span>
-              </div>
-            </motion.div>
-          ) : (
-            <motion.button key="closed" className="panel territories-pill" onClick={() => setTerritoriesOpen(true)} title="Territories"
-              initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} transition={{ duration: 0.16 }}>
-              <Flag size={14} />
-              <span className="dots">{data.factions.slice(0, 6).map((f) => <Diamond key={f.id} color={f.color} size={7} />)}</span>
-            </motion.button>
-          )}
-        </AnimatePresence>
-      )}
-
-      {/* Tool dock. */}
+      {/* Tool dock: the tool in hand, with its brushes tiling up above it. */}
       {data && !align && (
         <div className="dock-wrap">
           <AnimatePresence>
             {tool !== 'select' && (
-              <motion.div className="panel brushbar" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }} transition={{ duration: 0.15 }}>
+              <motion.div key={tool} className="panel brushbar" initial={{ opacity: 0, y: 14, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.98, transition: { duration: 0.12 } }}
+                transition={{ type: 'spring', stiffness: 420, damping: 32 }}>
                 <span className="brushbar-title">{TOOLS.find((t) => t.id === tool)?.label}</span>
                 <div className="brush-list">
                   {tool === 'terrain' && world.terrainTypes.map((t) => (
@@ -709,15 +684,21 @@ export function MapView() {
                     ) : <span className="faint" style={{ padding: 4, fontSize: 12 }}>Pick a campaign under Layers to edit its party fog.</span>
                   )}
                 </div>
-                <div className="seg" title="Brush size ([ and ])">
-                  {[0, 1, 2].map((n) => <button key={n} className={radius === n ? 'on' : ''} onClick={() => setRadius(n)}>{n === 0 ? '1 hex' : `r${n}`}</button>)}
+                <div className="seg" role="radiogroup" aria-label="Brush size" data-tip="Brush size" data-key="[ ]" data-tip-side="top">
+                  {[0, 1, 2].map((n) => <button key={n} role="radio" aria-checked={radius === n} className={radius === n ? 'on' : ''} onClick={() => setRadius(n)}>{n === 0 ? '1 hex' : `r${n}`}</button>)}
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
+          <ToolDock tools={TOOLS} tool={tool} onTool={setTool} />
+        </div>
+      )}
+      {/* Cards that tile up beside the control stack: territories, layers, keys. */}
+      {data && !align && (
+        <div className="stack-cards">
           <AnimatePresence>
             {layersOpen && (
-              <motion.div className="panel layers" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }} transition={{ duration: 0.15 }}>
+              <motion.div key="layers" layout="position" className="panel layers" {...CARD}>
                 <header><h4>Layers</h4><button className="iconbtn sm" onClick={() => setLayersOpen(false)} aria-label="Close layers"><X size={14} /></button></header>
                 <div className="layer-group">
                   <div className="layer-title"><ImageIcon size={14} /> Map art</div>
@@ -794,17 +775,56 @@ export function MapView() {
               </motion.div>
             )}
           </AnimatePresence>
-          <div className="panel dock" role="toolbar" aria-label="Map tools">
-            {TOOLS.map((t) => (
-              <button key={t.id} className={tool === t.id ? 'on' : ''} onClick={() => setTool(t.id)} data-tip={`${t.label} · ${t.keyHint}`} aria-label={t.label}>
-                <t.icon size={17} strokeWidth={1.7} />
-              </button>
-            ))}
-            <span className="dock-sep" />
-            <button className={layersOpen ? 'on' : ''} onClick={() => setLayersOpen((o) => !o)} data-tip="Layers and map art · L" aria-label="Layers"><Layers size={17} strokeWidth={1.7} /></button>
-          </div>
+          <AnimatePresence>
+            {territoriesOpen && (
+              <motion.div key="territories" layout="position" className="panel territories" {...CARD}>
+                <header>
+                  <h4>Territories</h4>
+                  <button className="iconbtn sm" onClick={() => setTerritoriesOpen(false)} aria-label="Close territories"><X size={14} /></button>
+                </header>
+                {data.factions.map((f) => (
+                  <button key={f.id} className={`terr-row ${focus?.kind === 'faction' && focus.id === f.id ? 'on' : ''}`} aria-pressed={focus?.kind === 'faction' && focus.id === f.id}
+                    onClick={() => setFocus(focus?.kind === 'faction' && focus.id === f.id ? null : { kind: 'faction', id: f.id })}>
+                    <Diamond color={f.color} /> <span className="grow">{f.name}</span> <span className="num faint">{territoryCounts.get(f.id) ?? 0}</span>
+                  </button>
+                ))}
+                {!data.factions.length && <div className="faint" style={{ fontSize: 12, padding: '2px 4px 6px' }}>No factions yet.</div>}
+                <div className="legend-rows">
+                  <span><i className="lg-contested" /> Contested</span>
+                  <span><i className="lg-influence" /> Influence</span>
+                  <span><i className="lg-border" /> Border</span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+          <AnimatePresence>
+            {keysOpen && (
+              <motion.div key="keys" layout="position" className="panel keys-card" {...CARD}>
+                <ShortcutsCard mode={mode} onClose={() => setKeysOpen(false)} />
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       )}
+      {/* The control stack, floating at the right: territories and layers open their cards beside it; the compass holds the view. */}
+      <div className="stack-col" data-tip-side="left">
+        {data && !align && (
+          <>
+            <StackButton label="Territories" expanded={territoriesOpen} onClick={() => setTerritoriesOpen((o) => !o)}>
+              <Flag size={16} strokeWidth={1.7} />
+              {!territoriesOpen && !!data.factions.length && <span className="stack-dots" aria-hidden>{data.factions.slice(0, 4).map((f) => <Diamond key={f.id} color={f.color} size={4} />)}</span>}
+            </StackButton>
+            <StackButton label="Layers" tip="Layers and map art" keys="L" expanded={layersOpen} onClick={() => setLayersOpen((o) => !o)}><Layers size={16} strokeWidth={1.7} /></StackButton>
+            <span className="stack-sep" aria-hidden />
+          </>
+        )}
+        <ViewControls getRenderer={getRenderer} mode={mode} onFit={fitMap} keysOpen={keysOpen} onKeys={() => setKeysOpen((o) => !o)} />
+        {HAS_WEBGL2 && (
+          <StackButton className="mode-toggle" label={mode === '3d' ? 'Switch to the flat map' : 'Switch to the 3D island'} tip={mode === '3d' ? 'Flat map' : '3D island'} onClick={() => setModePref(mode === '3d' ? '2d' : '3d')}>
+            {mode === '3d' ? <MapIcon size={14} strokeWidth={1.7} /> : <Mountain size={14} strokeWidth={1.7} />}<span>{mode === '3d' ? '2D' : '3D'}</span>
+          </StackButton>
+        )}
+      </div>
       <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void uploadArt(f); }} />
       <input ref={modelRef} type="file" accept=".glb,model/gltf-binary" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void uploadModel(f); }} />
 
@@ -841,29 +861,6 @@ export function MapView() {
         )}
       </AnimatePresence>
       {align && <ArtHandles renderer={r} align={align} onChange={setAlign} />}
-
-      <div className="zoombar panel">
-        <button onClick={() => r?.zoomAt(r.viewport.w / 2, r.viewport.h / 2, 1.6)} title="Zoom in (+)" aria-label="Zoom in"><Plus size={15} /></button>
-        <button onClick={() => { if (r) { const c = r.fitCamera(); r.flyTo(c.x, c.y, c.zoom); } }} title="Whole map (F)" aria-label="Fit map"><Maximize size={14} /></button>
-        <button onClick={() => r?.zoomAt(r.viewport.w / 2, r.viewport.h / 2, 1 / 1.6)} title="Zoom out (-)" aria-label="Zoom out"><Minus size={15} /></button>
-        {mode === '3d' && (
-          <>
-            <span className="zoombar-sep" />
-            <button onClick={() => r3()?.rotate(Math.PI / 8)} title="Turn left (Q) · right-drag to turn and tip" aria-label="Turn left"><RotateCcw size={14} /></button>
-            <button onClick={() => r3()?.faceNorth()} title="Face north (N)" aria-label="Face north"><Compass size={14} /></button>
-            <button onClick={() => r3()?.rotate(-Math.PI / 8)} title="Turn right (E)" aria-label="Turn right"><RotateCw size={14} /></button>
-            <button onClick={() => { const x = r3(); if (x) x.setOverhead(!x.overhead); }} title="Look straight down (T)" aria-label="Overhead view"><Grid3x3 size={14} /></button>
-          </>
-        )}
-        {HAS_WEBGL2 && (
-          <>
-            <span className="zoombar-sep" />
-            <button className="mode-toggle" onClick={() => setModePref(mode === '3d' ? '2d' : '3d')} title={mode === '3d' ? 'Flat map' : '3D island'} aria-label={mode === '3d' ? 'Switch to the flat map' : 'Switch to the 3D island'}>
-              {mode === '3d' ? <MapIcon size={14} /> : <Mountain size={14} />}<span>{mode === '3d' ? '2D' : '3D'}</span>
-            </button>
-          </>
-        )}
-      </div>
 
       {hover && hoverInfo && !focus && !align && (
         <div className="tooltip" style={{ left: hover.x, top: hover.y }}>
@@ -911,6 +908,12 @@ export function MapView() {
     </div>
   );
 }
+
+/** Cards tile out from the control stack and slide aside for each other. */
+const CARD = {
+  initial: { opacity: 0, x: 18, scale: 0.97 }, animate: { opacity: 1, x: 0, scale: 1 }, exit: { opacity: 0, x: 12, scale: 0.98, transition: { duration: 0.14 } },
+  transition: { type: 'spring' as const, stiffness: 400, damping: 34 },
+};
 
 /** Corner handles over the art while aligning: drag one to scale about the opposite corner. */
 function ArtHandles({ renderer, align, onChange }: { renderer: HexMapRenderer | null; align: ArtPlacement; onChange: (a: ArtPlacement) => void }) {

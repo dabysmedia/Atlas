@@ -906,7 +906,8 @@ export class HexMapRenderer3D extends HexMapRenderer {
       L.sync(spots);
       if (this.hoverArea) this.hoverArea.rev = -1;
     }
-    const dt = this.labelLast ? Math.min(0.1, (now - this.labelLast) / 1000) : 0;
+    // Real time (within reason), so fades finish on schedule even when frames come slowly.
+    const dt = this.labelLast ? Math.min(0.5, (now - this.labelLast) / 1000) : 0;
     this.labelLast = now;
     L.step(dt);
     // Markers and their name plates (as drawTokens lays them out) push labels up and keep the pointer.

@@ -754,11 +754,11 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 @keyframes fcard-in-below { from { opacity: 0; transform: translateY(-6px) scale(0.94); } }
 .fcard-head { display: flex; align-items: center; gap: 9px; }
 .fcard-name { font-family: var(--font-display); font-size: 14.5px; font-weight: 600; letter-spacing: 0.06em; color: #f6ecd4; }
-.fcard-sub { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-faint); margin-top: 1px; }
+.fcard-sub { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-dim); margin-top: 1px; }
 .fcard-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 10px 0 2px; }
 .fcard-stats div { display: flex; flex-direction: column; align-items: center; padding: 6px 0 5px; border-radius: 9px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.05); }
 .fcard-stats b { font-size: 16px; font-weight: 600; color: #fff6e2; }
-.fcard-stats span { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); }
+.fcard-stats span { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
 .fcard-meters, .fcard-terrain, .fcard-places { margin-top: 9px; padding-top: 9px; border-top: 1px solid rgba(255, 236, 200, 0.07); display: grid; gap: 7px; font-size: 12px; }
 .fcard-meter .row { gap: 8px; }
 .fcard-meter .row > span:not(.grow) { font-size: 11px; }

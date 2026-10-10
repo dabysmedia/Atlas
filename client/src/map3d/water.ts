@@ -446,12 +446,14 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
 
   let sim: OceanSim | null = null;
   let seaY = 0;
+  let seaSpan = 1;
   let holeEnabled = true;
   let lastStep = -1;
 
   /** Center the far sea on the map and size it; the wave grid follows the camera (update). */
   const place = (cx: number, cz: number, sea: number, span: number) => {
     seaY = sea;
+    seaSpan = span;
     uniforms.uSeaLevel.value = sea;
     far.position.set(cx, sea, cz); far.scale.set(span * 16, 1, span * 16);
     near.position.y = sea;
@@ -528,6 +530,11 @@ export function makeWater(atmos: Record<string, THREE.IUniform>) {
     // leave it be, and snapped to its own cells so panning never makes it swim.
     camera.getWorldDirection(dir);
     const o = camera.position;
+    // Cover every visible sea ray, including a low orbit at the overview limit. The shader
+    // reads world positions, so moving this support plane cannot move the waves or overlays.
+    const horizon = (camera as THREE.PerspectiveCamera).far;
+    far.position.set(o.x, seaY, o.z);
+    far.scale.setScalar(Math.max(seaSpan * 16, horizon * 4));
     const t = dir.y < -1e-3 ? (seaY - o.y) / dir.y : Math.max(o.y - seaY, 1);
     const fx = o.x + dir.x * t, fz = o.z + dir.z * t;
     const d = Math.hypot(fx - o.x, seaY - o.y, fz - o.z);

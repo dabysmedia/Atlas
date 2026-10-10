@@ -43,8 +43,15 @@ function Panel({ children, onClose, className = '' }: { children: ReactNode; onC
 function PanelArt({ snap, deps, children, onClose, tint }: { snap: () => string | null; deps: unknown[]; children?: ReactNode; onClose: () => void; tint?: string }) {
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
-    let raf = requestAnimationFrame(() => { raf = requestAnimationFrame(() => setSrc(snap())); });
-    return () => cancelAnimationFrame(raf);
+    let timer = 0, raf = 0;
+    const capture = () => {
+      const next = snap();
+      if (next) setSrc(next);
+      else timer = window.setTimeout(() => { raf = requestAnimationFrame(capture); }, 100);
+    };
+    setSrc(null);
+    raf = requestAnimationFrame(() => { raf = requestAnimationFrame(capture); });
+    return () => { cancelAnimationFrame(raf); window.clearTimeout(timer); };
   }, deps); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="panel-art" style={tint ? { ['--tint' as string]: tint } : undefined}>

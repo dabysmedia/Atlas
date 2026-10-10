@@ -32,6 +32,7 @@ import type { WeatherKind } from '../../../shared/weather';
 import { corner } from '../../../shared/hex';
 import { NeonBorders, type NeonLine } from './neon';
 import { Beacon } from './beacon';
+import { HoverMask } from './hoverMask';
 import { FactionLabels, type LabelPlace, type LabelSpot } from './labels3d';
 import type { CardAnchor, FactionArea } from '../map/FactionCard';
 
@@ -123,6 +124,9 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected neonSig = '';
   protected neonAt = 0;
   protected beacon = new Beacon();
+  protected hoverMask = new HoverMask();
+  protected selectionMask = new HoverMask(true);
+  pointer: { x: number; y: number } | null = null;
   protected labels = new FactionLabels();
   protected labelRev = -1;
   protected tethers: { id: string; gx: number; gy: number; lx: number; ly: number; color: string; a: number; hot: number }[] = [];
@@ -140,6 +144,8 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected idleTick = 0;
   protected frameMs: number[] = [];
   protected lastFrame = 0;
+  protected interactionsWarmed = false;
+  protected panelCapture: { x: number; y: number; w: number; h: number; canvas?: HTMLCanvasElement } | null = null;
   onLoadState?: (s: 'loading' | 'ready' | 'error') => void;
 
   constructor(glCanvas: HTMLCanvasElement, hud: HTMLCanvasElement) {
@@ -148,7 +154,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.glCanvas = glCanvas;
     this.hud = hud;
     this.hudCtx = hud.getContext('2d')!;
-    this.gl = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, powerPreference: 'high-performance' });
+    this.gl = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, stencil: true, powerPreference: 'high-performance' });
     this.gl.outputColorSpace = THREE.SRGBColorSpace;
     this.gl.toneMapping = THREE.ACESFilmicToneMapping;
     this.gl.shadowMap.enabled = true;
@@ -166,7 +172,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.water.uniforms.uOverlay.value = this.ovTex;
     this.water.uniforms.uOverlayRect = this.ovUniforms.uOverlayRect;
     this.water.uniforms.uOverlayGlow = this.ovUniforms.uOverlayGlow;
-    this.scene.add(this.neon.group, this.beacon.group);
+    this.scene.add(this.neon.group, this.beacon.group, this.hoverMask.mesh, this.selectionMask.mesh);
     this.labels.wheelTarget = hud;
     this.labels.onHover = (id) => { if (!id) { this.hoverArea = null; this.onFactionHover?.(null, null); } this.dirty = true; };
     this.labels.onClick = (id) => this.onFactionClick?.(id);
@@ -208,6 +214,11 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.gl.setSize(w, h, false);
     this.hud.width = Math.round(w * this.dpr); this.hud.height = Math.round(h * this.dpr);
     this.camera.aspect = w / Math.max(1, h);
+    if (this.hexes.length) {
+      const min = this.minZoom();
+      this.cam.zoom = Math.max(min, this.cam.zoom);
+      this.target.zoom = Math.max(min, this.target.zoom);
+    }
     this.dirty = true;
   }
 
@@ -303,6 +314,31 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.rebuildGlows();
     this.groundY = this.groundAround(this.cam.x, this.cam.y);
     this.ovRect.zoom = 0; // redraw the overlay for the new ground
+    if (!this.interactionsWarmed) {
+      this.interactionsWarmed = true;
+      // Selection shaders otherwise compile on the first click, in the middle of its glide.
+      const beacon = this.beacon.group.visible, hover = this.hoverMask.mesh.visible;
+      this.beacon.group.visible = true; this.hoverMask.mesh.visible = true;
+      const compiled = this.gl.compileAsync(this.scene, this.camera);
+      this.beacon.group.visible = beacon; this.hoverMask.mesh.visible = hover;
+      const ticket = this.modelLoad;
+      void compiled.then(() => {
+        if (ticket !== this.modelLoad) return;
+        // Some drivers defer work until the first draw even after compileAsync. Warm that draw
+        // into a tiny offscreen buffer while the map loads, without showing a selection.
+        const target = new THREE.WebGLRenderTarget(32, 32, { stencilBuffer: true });
+        const previous = this.gl.getRenderTarget(), visible = this.beacon.group.visible;
+        try {
+          this.beacon.group.visible = true;
+          this.gl.setRenderTarget(target);
+          this.gl.render(this.scene, this.camera);
+        } finally {
+          this.beacon.group.visible = visible;
+          this.gl.setRenderTarget(previous);
+          target.dispose();
+        }
+      }).catch(() => { this.interactionsWarmed = false; });
+    }
     this.dirty = true;
   }
 
@@ -475,6 +511,8 @@ export class HexMapRenderer3D extends HexMapRenderer {
 
   // ---------------------------------------------------------------- camera
   protected camDist(z = this.cam.zoom) { return this.h / (2 * z * Math.tan(THREE.MathUtils.degToRad(FOV / 2))); }
+  /** The 3D overview is the widest view; the 2D renderer keeps its own zoom range. */
+  minZoom() { return this.w && this.hexes.length ? this.fitCamera().zoom : super.minZoom(); }
   protected autoTilt(z: number) { return 0.62 * smooth(26, 84, HEX_SIZE * z); }
   protected wantedTilt() { return this.overhead ? 0 : clamp(this.autoTilt(this.cam.zoom) + this.tiltBias, 0, MAX_TILT); }
 
@@ -489,7 +527,8 @@ export class HexMapRenderer3D extends HexMapRenderer {
     c.lookAt(T);
     const span = Math.max(this.bounds.maxX - this.bounds.minX, this.bounds.maxY - this.bounds.minY);
     c.near = Math.max(1, dist * 0.04);
-    c.far = dist * 10 + span * 6;
+    // At maximum tilt the upper view ray grazes the sea. Keep its horizon in the frustum.
+    c.far = dist * 64 + span * 6;
     c.updateProjectionMatrix();
     c.updateMatrixWorld();
     const sig = `${c.position.x.toFixed(2)},${c.position.y.toFixed(2)},${c.position.z.toFixed(2)},${this.yaw.toFixed(4)},${this.w},${this.h}`;
@@ -549,6 +588,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
    * the panel on the right. The view before the first focus is kept for restoreView().
    */
   focusOn(x: number, y: number, zoom: number, panelPx = 0) {
+    this.panelCapture = null;
     if (!this.saved) this.saved = { cam: { ...this.target }, yaw: this.yawT, tiltBias: this.tiltBiasT, overhead: this.overhead };
     const z = clamp(zoom, this.minZoom(), MAX_ZOOM);
     const rx = Math.cos(this.yawT), rz = -Math.sin(this.yawT);
@@ -557,12 +597,12 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.target = { x: x + (rx * panelPx) / z, y: y + (rz * panelPx) / z, zoom: z };
     this.overhead = false;
     this.tiltBiasT = this.saved.tiltBias + 0.16;
-    this.ease = 2.4;
-    this.dirty = true;
+    this.ease = 5.5;
   }
 
   /** Back out of a focus to exactly the view before it. */
   restoreView() {
+    this.panelCapture = null;
     const s = this.saved;
     if (!s) return;
     this.saved = null;
@@ -574,6 +614,13 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.dirty = true;
   }
   get focused() { return !!this.saved; }
+  get cameraMoving() {
+    return Math.hypot(this.target.x - this.cam.x, this.target.y - this.cam.y) * this.cam.zoom > 0.5
+      || Math.abs(Math.log(this.target.zoom / this.cam.zoom)) > 0.0005
+      || Math.abs(this.yawT - this.yaw) > 0.0001 || Math.abs(this.tiltBiasT - this.tiltBias) > 0.0001
+      || Math.abs(this.wantedTilt() - this.tiltNow) > 0.0001
+      || Math.abs(this.groundAround(this.cam.x, this.cam.y) - this.groundY) > 0.05;
+  }
 
   protected step(dt: number): boolean {
     const k = 1 - Math.exp(-dt * this.ease);
@@ -683,7 +730,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     const sw = this.wxSky;
     sw.flash = wx.flash; sw.flashX = wx.flashPos.x; sw.flashZ = wx.flashPos.z; sw.flashR = wx.flashReach;
     this.atmos.setOverlay(this.ovTex, this.ovUniforms.uOverlayRect.value);
-    this.atmos.update(now, dt, L, view.camDist, this.cam.zoom, this.groundY, sw);
+    this.atmos.update(now, dt, L, view.camDist, this.cam.zoom, sw);
     // Rain catches the light of the sky around it: kept paler than the ground it falls past, so
     // fine drizzle and rain by night still show. The lightning catches it too.
     const sky = this.tmpColor.copy(L.hemiSky).multiplyScalar(L.hemiIntensity);
@@ -727,7 +774,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected loop(now: number) {
     this.raf = requestAnimationFrame(this.loop);
     const raw = now - this.last;
-    const dt = Math.min(0.05, raw / 1000);
+    const dt = Math.min(0.25, raw / 1000);
     this.last = now;
     if (!this.w || !this.h) return;
     this.watchPace(raw);
@@ -780,6 +827,13 @@ export class HexMapRenderer3D extends HexMapRenderer {
   }
 
   protected frame(now: number, moving: boolean) {
+    if (moving && this.pointer && !this.stills) {
+      const id = this.hexAt(this.pointer.x, this.pointer.y)?.id ?? null;
+      if (id !== this.hoverId) this.hoverId = id;
+    }
+    this.hoverMask.update(this.stills ? undefined : this.byId.get(this.hoverId ?? ''), HEX_SIZE, this.o, this.groundFn, this.ground?.id ?? 0, this.hoverId === this.selectedId);
+    this.selectionMask.update(this.stills ? undefined : this.byId.get(this.selectedId ?? ''), HEX_SIZE, this.o, this.groundFn, this.ground?.id ?? 0);
+    this.selectionMask.mesh.material.uniforms.uTime.value = now;
     this.applyLight(now);
     this.updateOverlay(now, false);
     this.updateNeon(now);
@@ -790,7 +844,8 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.gl.render(this.scene, this.camera);
     this.layoutLabels(now);
     this.drawHud(now);
-    void moving;
+    const capture = this.panelCapture;
+    if (capture && !capture.canvas && !this.cameraMoving) capture.canvas = this.copyView(capture.x, capture.y, capture.w, capture.h);
   }
 
   // ---------------------------------------------------------------- borders, names, beacon
@@ -814,7 +869,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.neon.uniforms.uGlow.value = 1 + 0.5 * this.light.night;
     const sel = this.selectedId ? this.byId.get(this.selectedId) : undefined;
     this.beacon.place(sel ? { x: sel.cx, y: sel.cy } : null, this.groundFn);
-    this.beacon.update(now, this.camDist(), HEX_SIZE, pixAngle);
+    this.beacon.update(now, HEX_SIZE, pixAngle);
   }
   protected groundFn = (x: number, y: number) => this.groundAt(x, y);
 
@@ -1084,7 +1139,10 @@ export class HexMapRenderer3D extends HexMapRenderer {
     // Map modes: the hexcrawl detail (grid, coordinates, names) arrives a little later than in 2D,
     // so the zoomed-out island reads as regions, borders and faction names.
     this.lodZoom = z * 0.62;
-    try { this.draw(now); } finally { this.cam = save.cam; this.w = save.w; this.h = save.h; this.dpr = save.dpr; this.lodZoom = null; }
+    // Hover is a small terrain mesh; moving across hexes must not upload the whole map texture.
+    const hover = this.hoverId, selected = this.selectedId;
+    this.hoverId = null; this.selectedId = null;
+    try { this.draw(now); } finally { this.hoverId = hover; this.selectedId = selected; this.cam = save.cam; this.w = save.w; this.h = save.h; this.dpr = save.dpr; this.lodZoom = null; }
     this.ovUniforms.uOverlayRect.value.set(rect.x, rect.y, rect.w, rect.h);
     this.ovTex.needsUpdate = true;
   }
@@ -1110,6 +1168,33 @@ export class HexMapRenderer3D extends HexMapRenderer {
   }
   protected shadowSig = '';
 
+  /** Copy the already rendered view for a panel after the glide, without a second GL render. */
+  captureView(x: number, y: number, w: number, h: number): HTMLCanvasElement | null {
+    if (this.cameraMoving || !this.lastFrame || w > this.w || h > this.h) return null;
+    const c = this.panelCapture;
+    if (c && c.x === x && c.y === y && c.w === w && c.h === h) {
+      if (!c.canvas) return null;
+      this.panelCapture = null;
+      return c.canvas;
+    }
+    this.panelCapture = { x, y, w, h };
+    return null;
+  }
+
+  protected copyView(x: number, y: number, w: number, h: number): HTMLCanvasElement {
+    const out = document.createElement('canvas');
+    out.width = Math.round(w * this.dpr); out.height = Math.round(h * this.dpr);
+    const p = this.worldToScreen(x, y);
+    const sx = clamp(p.x - w / 2, 0, this.w - w) * this.dpr;
+    const sy = clamp(p.y - h / 2, 0, this.h - h) * this.dpr;
+    const ctx = out.getContext('2d')!;
+    // Called in frame(), while the default WebGL framebuffer is still available.
+    const k = this.renderScale;
+    ctx.drawImage(this.glCanvas, sx * k, sy * k, out.width * k, out.height * k, 0, 0, out.width, out.height);
+    ctx.drawImage(this.hud, sx, sy, out.width, out.height, 0, 0, out.width, out.height);
+    return out;
+  }
+
   /**
    * A still for panel headers: the place seen at a gentle angle, rendered with the live scene and
    * copied out, then the live view is drawn again in the same task.
@@ -1118,13 +1203,15 @@ export class HexMapRenderer3D extends HexMapRenderer {
     const out = document.createElement('canvas');
     out.width = Math.round(w * this.dpr); out.height = Math.round(h * this.dpr);
     if (!this.w || !this.h || w > this.w || h > this.h) return out;
-    const saved = { cam: { ...this.cam }, tilt: this.tiltNow, g: this.groundY, hover: this.hoverId, sel: this.selectedId, brush: this.brushIds, selTok: this.selectedTokenId, beacon: this.beacon.group.visible };
+    const saved = { cam: { ...this.cam }, tilt: this.tiltNow, g: this.groundY, hover: this.hoverId, sel: this.selectedId, brush: this.brushIds, selTok: this.selectedTokenId, beacon: this.beacon.group.visible, hoverMask: this.hoverMask.mesh.visible };
     try {
       this.cam = { x, y, zoom };
       this.tiltNow = clamp(this.autoTilt(zoom) + 0.32, 0.55, 1.05);
       this.groundY = this.groundAround(x, y);
       this.hoverId = null; this.selectedId = null; this.brushIds = new Set(); this.selectedTokenId = null;
       this.stills = true; this.beacon.group.visible = false;
+      this.hoverMask.mesh.visible = false;
+      this.selectionMask.mesh.visible = false;
       this.updateCamera();
       this.applyLight(performance.now());
       this.updateOverlay(performance.now(), true);
@@ -1141,6 +1228,8 @@ export class HexMapRenderer3D extends HexMapRenderer {
       this.cam = saved.cam; this.tiltNow = saved.tilt; this.groundY = saved.g;
       this.hoverId = saved.hover; this.selectedId = saved.sel; this.brushIds = saved.brush; this.selectedTokenId = saved.selTok;
       this.stills = false; this.beacon.group.visible = saved.beacon;
+      this.hoverMask.mesh.visible = saved.hoverMask;
+      this.selectionMask.mesh.visible = !!saved.sel;
       this.updateCamera();
       this.updateOverlay(performance.now(), true);
       this.fitShadow();

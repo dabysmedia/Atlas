@@ -12,6 +12,7 @@ import { useWorld } from '../world';
 import { cameraPref, fogCampaign, layerPrefs, mapModePref, panelPrefs } from '../prefs';
 import { HEX_SIZE, HexMapRenderer, type Camera, type Layers as RLayers } from './renderer';
 import { FactionPanel, HexPanel, TokenPanel, Diamond, type Focus } from './panels';
+import { FactionCard, type CardAnchor, type FactionArea } from './FactionCard';
 import { toast, toastError } from '../components/toast';
 import { Dialog } from '../components/Dialog';
 import { DIRS, key } from '../../../shared/hex';
@@ -64,6 +65,7 @@ export function MapView() {
   const [align, setAlign] = useState<ArtPlacement | null>(null);
   const [artLoaded, setArtLoaded] = useState(0);
   const [dropping, setDropping] = useState(false);
+  const [factionHover, setFactionHover] = useState<{ area: FactionArea; at: CardAnchor } | null>(null);
 
   const mapQ = useQuery({ queryKey: qk.map(world.id), queryFn: () => api<MapData>(`/api/worlds/${world.id}/map`) });
   const data = mapQ.data;
@@ -93,6 +95,8 @@ export function MapView() {
         if (!live) return;
         const r3d = new m.HexMapRenderer3D(glRef.current!, canvasRef.current!);
         r3d.onLoadState = setModelState;
+        r3d.onFactionHover = (area, at) => setFactionHover(area && at ? { area, at } : null);
+        r3d.onFactionClick = (id) => setFocus((f) => (f?.kind === 'faction' && f.id === id ? null : { kind: 'faction', id }));
         start(r3d);
       }).catch(() => { if (live) setModePref('2d'); });
     } else start(new HexMapRenderer(canvasRef.current!));
@@ -109,7 +113,7 @@ export function MapView() {
       placedCamera.current = false;
       setGen((g) => g + 1);
     }
-    return () => { live = false; ro?.disconnect(); r?.destroy(); rendererRef.current = null; setModelState(null); };
+    return () => { live = false; ro?.disconnect(); r?.destroy(); rendererRef.current = null; setModelState(null); setFactionHover(null); };
   }, [world.id, mode]);
   useEffect(() => { mapModePref.set(modePref); }, [modePref]);
 
@@ -874,6 +878,10 @@ export function MapView() {
           {hoverInfo.tokens.map((t) => <div key={t.id} className="muted">{t.name}</div>)}
         </div>
       )}
+
+      <AnimatePresence>
+        {factionHover && !align && <FactionCard key={factionHover.area.id} area={factionHover.area} at={factionHover.at} mapH={r?.viewport.h ?? 0} />}
+      </AnimatePresence>
 
       <AnimatePresence>
         {dropping && (

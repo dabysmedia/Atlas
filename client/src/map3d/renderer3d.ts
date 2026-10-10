@@ -27,6 +27,11 @@ import { depthTexture, makeWater } from './water';
 import { ATMOS_GLSL, Atmosphere, type SkyWeather } from './atmosphere';
 import { WeatherFx, type WeatherView } from './weatherfx';
 import type { WeatherKind } from '../../../shared/weather';
+import { corner } from '../../../shared/hex';
+import { NeonBorders, type NeonLine } from './neon';
+import { Beacon } from './beacon';
+import { FactionLabels, type LabelPlace, type LabelSpot } from './labels3d';
+import type { CardAnchor, FactionArea } from '../map/FactionCard';
 
 const FOV = 24; // degrees, vertical; narrow so the overhead view stays close to a flat map
 const MAX_TILT = 1.32;
@@ -110,6 +115,26 @@ export class HexMapRenderer3D extends HexMapRenderer {
   /** For tests and the frame readout: the hour the light currently shows. */
   shownHour = 10;
 
+  // Faction borders as glowing lines in the scene, faction names floating over their land, and a
+  // beacon over the selected hex.
+  protected neon = new NeonBorders();
+  protected neonSig = '';
+  protected neonAt = 0;
+  protected beacon = new Beacon();
+  protected labels = new FactionLabels();
+  protected labelRev = -1;
+  protected tethers: { id: string; gx: number; gy: number; lx: number; ly: number; color: string; a: number; hot: number }[] = [];
+  protected tetherN = 0;
+  protected tmpV = new THREE.Vector3();
+  protected tmpV2 = new THREE.Vector2();
+  protected blocked: { x: number; y: number; r: number }[] = [];
+  protected hoverArea: { id: string; rev: number; area: FactionArea; at: CardAnchor } | null = null;
+  protected stills = false;
+  /** A faction name was hovered (with its territory and where its label is), or left (null). */
+  onFactionHover?: (area: FactionArea | null, at: CardAnchor | null) => void;
+  /** A faction name was clicked. */
+  onFactionClick?: (id: string) => void;
+
   protected idleTick = 0;
   protected frameMs: number[] = [];
   protected lastFrame = 0;
@@ -139,6 +164,10 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.water.uniforms.uOverlay.value = this.ovTex;
     this.water.uniforms.uOverlayRect = this.ovUniforms.uOverlayRect;
     this.water.uniforms.uOverlayGlow = this.ovUniforms.uOverlayGlow;
+    this.scene.add(this.neon.mesh, this.beacon.group);
+    this.labels.wheelTarget = hud;
+    this.labels.onHover = (id) => { if (!id) { this.hoverArea = null; this.onFactionHover?.(null, null); } this.dirty = true; };
+    this.labels.onClick = (id) => this.onFactionClick?.(id);
   }
 
   protected makeOverlayTexture() {
@@ -164,6 +193,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
       for (const mat of mats) { for (const v of Object.values(mat)) if (v instanceof THREE.Texture) v.dispose(); mat.dispose(); }
     });
     this.ovTex.dispose(); this.depthTex?.dispose(); this.glowTex.dispose();
+    this.labels.destroy();
     this.water.dispose();
     this.gl.dispose();
     this.gl.forceContextLoss();
@@ -748,13 +778,205 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected frame(now: number, moving: boolean) {
     this.applyLight(now);
     this.updateOverlay(now, false);
+    this.updateNeon(now);
     this.fitShadow();
     this.sky.mesh.position.copy(this.camera.position);
     this.sky.mesh.scale.setScalar(this.camera.far * 0.9);
     this.water.update(this.gl, now / 1000, this.camera, this.light);
     this.gl.render(this.scene, this.camera);
+    this.layoutLabels(now);
     this.drawHud(now);
     void moving;
+  }
+
+  // ---------------------------------------------------------------- borders, names, beacon
+  /**
+   * Border lines: territory loops (the same smoothed loops the wash is filled from), and a ring
+   * round each contested or influenced hex. Rebuilt when claims, factions or the ground change, at
+   * most a few times a second while a claim brush is painting.
+   */
+  protected updateNeon(now: number) {
+    const on = this.layers.territory;
+    this.neon.mesh.visible = on;
+    const sig = `${this.territoryRev}|${this.ground?.id ?? 0}`;
+    if (on && sig !== this.neonSig && this.ground && now - this.neonAt > 140) {
+      this.neonSig = sig;
+      this.neonAt = now;
+      this.buildNeon();
+    }
+    const pr = this.gl.getPixelRatio();
+    const pixAngle = (2 * Math.tan(THREE.MathUtils.degToRad(FOV / 2))) / Math.max(1, this.h);
+    this.neon.update(now, this.gl.getDrawingBufferSize(this.tmpV2), pr, 1 / this.cam.zoom, pixAngle);
+    this.neon.uniforms.uGlow.value = 1 + 0.5 * this.light.night;
+    const sel = this.selectedId ? this.byId.get(this.selectedId) : undefined;
+    this.beacon.place(sel ? { x: sel.cx, y: sel.cy } : null, this.groundFn);
+    this.beacon.update(now, this.camDist(), HEX_SIZE, pixAngle);
+  }
+  protected groundFn = (x: number, y: number) => this.groundAt(x, y);
+
+  protected buildNeon() {
+    const lines: NeonLine[] = [];
+    const H = HEX_SIZE;
+    for (const t of this.territories.values()) {
+      for (const loop of t.loops) {
+        if (loop.length < 3) continue;
+        // Which side of travel the territory lies on: probe a few points just to the left.
+        let vote = 0;
+        for (let k = 0; k < 5; k++) {
+          const i = Math.floor((k / 5) * loop.length), a = loop[i], b = loop[(i + 1) % loop.length];
+          const tx = b.x - a.x, ty = b.y - a.y, tl = Math.hypot(tx, ty) || 1;
+          const h = this.hexAtWorld((a.x + b.x) / 2 - (ty / tl) * H * 0.3, (a.y + b.y) / 2 + (tx / tl) * H * 0.3);
+          vote += h && this.control.get(h.id) === t.id ? 1 : -1;
+        }
+        lines.push({ pts: loop, closed: true, color: t.color, kind: 0, inside: vote >= 0 ? 1 : -1 });
+      }
+    }
+    // Rings: hex corners pulled in, their corners rounded off.
+    const ring = (cx: number, cy: number, s: number) => {
+      const pts: { x: number; y: number }[] = [];
+      for (let i = 0; i < 6; i++) {
+        const a = corner(i, H * s, this.o), b = corner((i + 1) % 6, H * s, this.o);
+        pts.push({ x: cx + a.x * 0.82 + b.x * 0.18, y: cy + a.y * 0.82 + b.y * 0.18 }, { x: cx + a.x * 0.18 + b.x * 0.82, y: cy + a.y * 0.18 + b.y * 0.82 });
+      }
+      return pts;
+    };
+    for (const [hexId, fids] of this.contested) {
+      const h = this.byId.get(hexId);
+      if (!h) continue;
+      const pts = ring(h.cx, h.cy, 0.84);
+      fids.forEach((fid, i) => lines.push({ pts, closed: true, color: this.factionColor.get(fid) ?? '#aaa', kind: 1, turn: i, of: fids.length }));
+    }
+    for (const [hexId, fids] of this.influence) {
+      const h = this.byId.get(hexId);
+      if (!h) continue;
+      fids.forEach((fid, i) => lines.push({ pts: ring(h.cx, h.cy, 0.72 - i * 0.09), closed: true, color: this.factionColor.get(fid) ?? '#aaa', kind: 2 }));
+    }
+    // Stand each point clear of the highest ground just around it (along the line and a little
+    // to each side), so the line follows the relief without cutting into a slope; on the sea,
+    // just above the waves.
+    const hf = this.hf, sea = this.sea;
+    const cell = Math.min(hf.w / (hf.nx - 1), hf.h / (hf.ny - 1));
+    const step = Math.max(2.5, cell * 1.25);
+    const lift = 0.3 + Math.max(0, hf.maxH - sea) * 0.0015;
+    const along = step * 0.6, across = Math.max(1.2, cell * 0.7);
+    this.neon.build(lines, (x, y, tx, ty) => {
+      const g = Math.max(hf.at(x, y), hf.at(x + tx * along, y + ty * along), hf.at(x - tx * along, y - ty * along),
+        hf.at(x - ty * across, y + tx * across), hf.at(x + ty * across, y - tx * across));
+      return g <= sea ? sea + 1.2 + lift : g + lift;
+    }, step);
+  }
+
+  /** The territory a faction holds, for the card over its name. */
+  factionArea(id: string): FactionArea | null {
+    const t = this.territories.get(id);
+    const f = this.factions.find((x) => x.id === id);
+    if (!f) return null;
+    let held = 0, contested = 0, influence = 0;
+    const terrain = new Map<string, number>();
+    for (const [hexId, fid] of this.control) {
+      if (fid !== id) continue;
+      held++;
+      const h = this.byId.get(hexId);
+      if (h) terrain.set(h.terrain, (terrain.get(h.terrain) ?? 0) + 1);
+    }
+    for (const fids of this.contested.values()) if (fids.includes(id)) contested++;
+    for (const fids of this.influence.values()) if (fids.includes(id)) influence++;
+    const places = this.tokens.filter((x) => (x.kind === 'city' || x.kind === 'outpost') && x.hexId && this.control.get(x.hexId) === id)
+      .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'city' ? -1 : 1))
+      .map((x) => ({ id: x.id, name: x.name, kind: x.kind }));
+    return {
+      id, name: f.name, color: t?.color ?? f.color, held, contested, influence, places,
+      terrain: [...terrain].map(([key, n]) => ({ key, n })).sort((a, b) => b.n - a.n),
+    };
+  }
+
+  /**
+   * Faction names over their land: raised well above the ground (higher, and a little larger,
+   * while hovered), sized by distance, gone once the view is down at hexcrawl detail.
+   */
+  protected layoutLabels(now: number) {
+    const L = this.labels;
+    L.attach(this.hud.parentElement);
+    if (this.labelRev !== this.territoryRev) {
+      this.labelRev = this.territoryRev;
+      const spots: LabelSpot[] = [];
+      for (const t of this.territories.values()) if (t.label.n >= 3 && t.name) spots.push({ id: t.id, name: t.name, color: t.color, n: t.label.n, width: t.label.width });
+      L.sync(spots);
+      if (this.hoverArea) this.hoverArea.rev = -1;
+    }
+    const dt = this.labelLast ? Math.min(0.1, (now - this.labelLast) / 1000) : 0;
+    this.labelLast = now;
+    L.step(dt);
+    const on = this.layers.territory;
+    const relief = Math.max(0, this.hf.maxH - this.sea);
+    const cam = this.camera, V = this.tmpV;
+    const k = this.h / (2 * Math.tan(THREE.MathUtils.degToRad(FOV / 2)));
+    // Markers keep the pointer where a label overlaps them.
+    let nb = 0;
+    for (const tok of this.tokens) {
+      const p = this.tokenPos(tok);
+      if (!p) continue;
+      const s = this.worldToScreen(p.x, p.y);
+      const r = this.markerRadius(tok.kind);
+      const b = (this.blocked[nb++] ??= { x: 0, y: 0, r: 0 });
+      b.x = s.x; b.y = s.y - this.tokenLift(tok.kind, r); b.r = r + 4;
+    }
+    this.blocked.length = nb;
+    this.tetherN = 0;
+    const place = (s: LabelSpot, hot: number): LabelPlace | null => {
+      const t = this.territories.get(s.id);
+      if (!t || !on) return null;
+      const gx = t.label.x, gy = t.label.y;
+      const ground = this.groundAt(gx, gy);
+      const lift = Math.max(HEX_SIZE * 2.4, relief * 0.36) * (1 + 0.55 * hot);
+      V.set(gx, ground + lift, gy).applyMatrix4(cam.matrixWorldInverse);
+      const depth = -V.z;
+      if (depth <= cam.near) return null;
+      const ppw = k / depth;
+      V.set(gx, ground + lift, gy).project(cam);
+      const x = ((V.x + 1) / 2) * this.w, y = ((1 - V.y) / 2) * this.h;
+      // Gone at hexcrawl detail, where hexes, names and markers take over; dimmed beside a focus.
+      let alpha = 1 - smooth(1.15, 1.75, ppw);
+      if (this.focusFactionId && this.focusFactionId !== s.id) alpha *= 0.5;
+      if (alpha <= 0.02) return null;
+      const g = this.worldToScreen(gx, gy);
+      const th = (this.tethers[this.tetherN++] ??= { id: '', gx: 0, gy: 0, lx: 0, ly: 0, color: '', a: 0, hot: 0 });
+      th.id = s.id; th.gx = g.x; th.gy = g.y; th.lx = x; th.ly = y; th.color = s.color; th.hot = hot;
+      th.a = alpha * this.tokenAlpha(gx, gy);
+      return { x, y, ppw, alpha };
+    };
+    L.layout(place, this.w, this.h, this.blocked);
+    // The hovered label's card follows it as the view moves.
+    const id = L.hovered;
+    const r = id ? L.rect(id) : null;
+    if (id && r && this.onFactionHover) {
+      const at = { x: r.x + r.w / 2, top: r.y, bottom: r.y + r.h };
+      const ha = this.hoverArea;
+      if (!ha || ha.id !== id || ha.rev !== this.territoryRev) {
+        const area = this.factionArea(id);
+        if (area) { this.hoverArea = { id, rev: this.territoryRev, area, at }; this.onFactionHover(area, at); }
+      } else if (Math.abs(ha.at.x - at.x) + Math.abs(ha.at.top - at.top) > 1.5) { ha.at = at; this.onFactionHover(ha.area, at); }
+    }
+  }
+  protected labelLast = 0;
+
+  /** Thin tethers from each floating name down to its ground, with a spark where they land. */
+  protected drawTethers() {
+    const ctx = this.hudCtx;
+    for (let i = 0; i < this.tetherN; i++) {
+      const t = this.tethers[i];
+      if (!this.labels.rect(t.id) || t.a < 0.02 || Math.hypot(t.lx - t.gx, t.ly - t.gy) < 6) continue;
+      const g = ctx.createLinearGradient(t.gx, t.gy, t.lx, t.ly);
+      g.addColorStop(0, t.color); g.addColorStop(1, 'rgba(255, 244, 220, 0.85)');
+      ctx.globalAlpha = t.a * (0.55 + 0.45 * t.hot);
+      ctx.strokeStyle = g; ctx.lineWidth = 1 + 0.6 * t.hot;
+      ctx.beginPath(); ctx.moveTo(t.gx, t.gy); ctx.lineTo(t.lx, t.ly); ctx.stroke();
+      ctx.fillStyle = t.color;
+      ctx.shadowColor = t.color; ctx.shadowBlur = 8 + 6 * t.hot;
+      ctx.beginPath(); ctx.ellipse(t.gx, t.gy, 3 + t.hot, 1.6 + t.hot * 0.5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+    ctx.globalAlpha = 1;
   }
 
   protected drawHud(now: number) {
@@ -763,7 +985,11 @@ export class HexMapRenderer3D extends HexMapRenderer {
     ctx.clearRect(0, 0, this.hud.width, this.hud.height);
     const saved = this.ctx;
     this.ctx = ctx;
-    try { this.drawTokens(now, this.cam.zoom, false); } finally { this.ctx = saved; }
+    try {
+      ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      if (!this.stills) this.drawTethers();
+      this.drawTokens(now, this.cam.zoom, false);
+    } finally { this.ctx = saved; }
   }
 
   /** The ground in view, as a world rectangle (conservative over the range of heights). */
@@ -869,6 +1095,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
       this.tiltNow = clamp(this.autoTilt(zoom) + 0.32, 0.55, 1.05);
       this.groundY = this.groundAround(x, y);
       this.hoverId = null; this.selectedId = null; this.brushIds = new Set(); this.selectedTokenId = null;
+      this.stills = true; this.beacon.group.visible = false;
       this.updateCamera();
       this.applyLight(performance.now());
       this.updateOverlay(performance.now(), true);
@@ -884,6 +1111,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     } finally {
       this.cam = saved.cam; this.tiltNow = saved.tilt; this.groundY = saved.g;
       this.hoverId = saved.hover; this.selectedId = saved.sel; this.brushIds = saved.brush; this.selectedTokenId = saved.selTok;
+      this.stills = false;
       this.updateCamera();
       this.updateOverlay(performance.now(), true);
       this.fitShadow();

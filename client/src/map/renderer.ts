@@ -89,6 +89,8 @@ export class HexMapRenderer {
   protected contested = new Map<string, string[]>(); // hexId -> factionIds
   protected influence = new Map<string, string[]>();
   protected territories = new Map<string, Territory>();
+  /** Counts territory rebuilds, so the 3D view knows when to rebuild its border lines. */
+  protected territoryRev = 0;
   protected tokens: Token[] = [];
   protected fog: Set<string> | null = null;
   protected fogPath: Path2D | null = null;
@@ -303,6 +305,7 @@ export class HexMapRenderer {
    */
   protected rebuildTerritories() {
     this.baseRev++;
+    this.territoryRev++;
     this.territories = new Map();
     const dirs = DIRS[this.o];
     const groups = new Map<string, HexR[]>();
@@ -666,8 +669,9 @@ export class HexMapRenderer {
       }
     }
 
-    // 5. Inked borders: dark ink under a faction-colored line, constant on-screen weight.
-    if (this.layers.territory) {
+    // 5. Inked borders: dark ink under a faction-colored line, constant on-screen weight. The 3D view
+    // draws borders and influence rings as lines in the scene instead.
+    if (this.layers.territory && !this.overlayMode) {
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
       for (const t of this.territories.values()) {
         const line = this.insetLine(t, z);
@@ -783,7 +787,8 @@ export class HexMapRenderer {
 
     // 8. Faction names over their territory when zoomed out: engraved capitals.
     const labelAlpha = 1 - smoothstep(16, 34, RL);
-    if (labelAlpha > 0.01 && this.layers.territory) {
+    // (The 3D view floats its own faction names above the terrain.)
+    if (labelAlpha > 0.01 && this.layers.territory && !this.overlayMode) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       for (const t of this.territories.values()) {
@@ -887,7 +892,9 @@ export class HexMapRenderer {
 
     // Territory: soft wash and an inner glow along the border.
     if (this.layers.territory) {
-      const wash = (this.art ? 0.1 : 0.12) + (1 - detail) * 0.2;
+      // Under 3D's glowing border lines a faint tint is enough to say whose land it is.
+      const ov = this.overlayMode;
+      const wash = ov ? 0.06 + (1 - detail) * 0.07 : (this.art ? 0.1 : 0.12) + (1 - detail) * 0.2;
       for (const t of this.territories.values()) {
         const focus = this.focusFactionId ? (this.focusFactionId === t.id ? 1.5 : 0.45) : 1;
         ctx.fillStyle = t.color;
@@ -898,10 +905,10 @@ export class HexMapRenderer {
         ctx.clip(t.smooth, 'evenodd');
         ctx.strokeStyle = t.color;
         ctx.lineJoin = 'round';
-        ctx.globalAlpha = 0.22 * Math.min(1.4, focus);
+        ctx.globalAlpha = (ov ? 0.12 : 0.22) * Math.min(1.4, focus);
         ctx.lineWidth = 22 / z;
         ctx.stroke(t.smooth);
-        ctx.globalAlpha = 0.25 * Math.min(1.4, focus);
+        ctx.globalAlpha = (ov ? 0.08 : 0.25) * Math.min(1.4, focus);
         ctx.lineWidth = 9 / z;
         ctx.stroke(t.smooth);
         ctx.restore();
@@ -957,7 +964,8 @@ export class HexMapRenderer {
     ctx.fillStyle = 'rgba(10, 6, 4, 0.25)';
     ctx.fill(this.hexPath);
     ctx.lineWidth = HEX_SIZE * 0.11;
-    ctx.globalAlpha = 0.7;
+    // In 3D the contested ring is a glowing line in the scene; the hatching only tints the hex.
+    ctx.globalAlpha = this.overlayMode ? 0.32 : 0.7;
     for (let i = -8; i <= 8; i++) {
       ctx.strokeStyle = this.factionColor.get(fids[(i + 8) % fids.length]) ?? '#888';
       ctx.beginPath();
@@ -966,6 +974,7 @@ export class HexMapRenderer {
       ctx.stroke();
     }
     ctx.restore();
+    if (this.overlayMode) { ctx.restore(); return; }
     const dash = 7 / z;
     const phase = still ? 0 : (now / 60) % (dash * 2 * fids.length);
     ctx.lineWidth = 2.6 / z;

@@ -184,7 +184,7 @@ await step('click-selects-and-focus-returns', async () => {
   await R(() => window.__atlasMap.advance(8));
   const after = await R(() => ({ ...window.__atlasMap.cam, yaw: window.__atlasMap.yaw, tb: window.__atlasMap.tiltBias }));
   const d = Math.hypot(after.x - target.before.x, after.y - target.before.y) + Math.abs(after.zoom - target.before.zoom) * 100;
-  expect(focused.zoom > target.before.zoom * 1.1, 'focus did not zoom in');
+  expect(Math.abs(focused.zoom - target.before.zoom) < 1e-6, 'selection changed magnification');
   expect(d < 0.01 && Math.abs(after.tb - target.before.tb) < 1e-3, `view not restored (off by ${d})`);
   return { selected: sel === target.id, restoredWithin: d };
 });

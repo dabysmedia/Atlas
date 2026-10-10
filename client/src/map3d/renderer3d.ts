@@ -589,6 +589,23 @@ export class HexMapRenderer3D extends HexMapRenderer {
   setOverhead(on: boolean) { this.overhead = on; if (on) this.tiltBiasT = 0; this.dirty = true; }
   faceNorth() { this.yawT = Math.round(this.yawT / (Math.PI * 2)) * Math.PI * 2; this.tiltBiasT = 0; this.dirty = true; }
 
+  /** Select without changing zoom or orbit; country overview selection leaves the view fixed. */
+  selectAt(x: number, y: number, panelPx = 0) {
+    this.panelCapture = null;
+    if (this.target.zoom <= this.minZoom() * 1.04) {
+      // Closing the card must not restore a view saved before zooming into the overview.
+      this.saved = null;
+      return;
+    }
+    if (!this.saved) this.saved = { cam: { ...this.target }, yaw: this.yawT, tiltBias: this.tiltBiasT, overhead: this.overhead };
+    const z = this.target.zoom;
+    this.anchor = null;
+    this.velocity = { x: 0, y: 0 };
+    this.target = { x: x + Math.cos(this.yawT) * panelPx / z, y: y - Math.sin(this.yawT) * panelPx / z, zoom: z };
+    this.ease = 5.5;
+    this.dirty = true;
+  }
+
   /**
    * A slow, gentle move onto a place: zoom in, tip a little toward the horizon, and leave room for
    * the panel on the right. The view before the first focus is kept for restoreView().

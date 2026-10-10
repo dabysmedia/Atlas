@@ -211,13 +211,13 @@ export function MapView() {
     r.focusFactionId = focus?.kind === 'faction' ? focus.id : null;
     if (!is3d(r) || previousFaction !== r.focusFactionId) r.invalidate();
   }, [focus, gen]);
-  // 3D: choosing a place is a slow move onto it; letting go returns to exactly the view before.
+  // 3D: selecting a place preserves magnification; the country overview stays fixed.
   useEffect(() => {
     const r = r3();
     if (!r || !data) return;
     if (focus?.kind === 'hex' || focus?.kind === 'token') {
       const p = focus.kind === 'hex' ? r.hexById(focus.id) && { x: r.hexById(focus.id)!.cx, y: r.hexById(focus.id)!.cy } : (() => { const t = data.tokens.find((x) => x.id === focus.id); return t ? r.tokenPos(t) : null; })();
-      if (p) r.focusOn(p.x, p.y, Math.max(r.target.zoom, 2.1), r.viewport.w > 900 ? 185 : 0);
+      if (p) r.selectAt(p.x, p.y, r.viewport.w > 900 ? 185 : 0);
     } else if (!focus) r.restoreView();
   }, [focus?.kind, focus?.id, gen]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { const r = rendererRef.current; if (r) { r.showFog = showFog; r.invalidate(); } }, [showFog, gen]);
@@ -255,7 +255,7 @@ export function MapView() {
       const h = hexId && r?.hexById(hexId);
       // Wait for the initial camera placement, or it would override this flight.
       if (h && r) {
-        const id = window.setInterval(() => { if (placedCamera.current) { window.clearInterval(id); centerOn(h.cx, h.cy, Math.max(r.target.zoom, 1.3)); } }, 16);
+        const id = window.setInterval(() => { if (placedCamera.current) { window.clearInterval(id); centerOn(h.cx, h.cy, Math.max(r.target.zoom, is3d(r) ? 2.1 : 1.3)); } }, 16);
         window.setTimeout(() => window.clearInterval(id), 3000);
       }
     }

@@ -65,6 +65,46 @@ try {
   assert.equal(results.fades[3].border,0);
   assert.equal(results.fades[3].label,0,'nation names must fade out with their borders');
   assert(results.dotted&&!results.throughCloudPass);
+  // Real hex clicks must retain magnification, and leave the country overview fixed.
+  results.selection=[];
+  for(const ratio of [3,1]) {
+    await page.keyboard.press('Escape');
+    await page.evaluate(ratio=>{
+      const r=window.__atlasMap;
+      r.saved=null;r.yaw=r.yawT=.2;r.tiltBias=r.tiltBiasT=.3;
+      r.setCamera({...r.fitCamera(),zoom:r.minZoom()*ratio});
+    },ratio);
+    await page.waitForFunction(()=>!window.__atlasMap.cameraMoving);
+    const before=await page.evaluate(()=>{
+      const r=window.__atlasMap;return {...r.cam,yaw:r.yaw,tilt:r.tiltNow};
+    });
+    for(let i=0;i<4;i++) {
+      const at=await page.evaluate(i=>{
+        const r=window.__atlasMap,b=r.hud.getBoundingClientRect();
+        const hs=r.hexIds().filter(h=>h.ground>r.seaLevel+10).map(h=>({...h,...r.hexScreen(h.id)}))
+          .filter(h=>h.id!==r.selectedId&&h.x>220&&h.x<r.viewport.w-420&&h.y>230&&h.y<r.viewport.h-180&&r.hexAt(h.x,h.y)?.id===h.id);
+        const h=hs[(i*7)%hs.length];
+        if(!h)throw new Error('No visible selectable hex');
+        return {id:h.id,x:h.x+b.left,y:h.y+b.top};
+      },i);
+      await page.mouse.click(at.x,at.y);
+      await page.waitForFunction(id=>window.__atlasMap.selectedId===id,at.id);
+      await page.waitForFunction(()=>!window.__atlasMap.cameraMoving);
+      const after=await page.evaluate(()=>{
+        const r=window.__atlasMap;return {...r.cam,yaw:r.yaw,tilt:r.tiltNow};
+      });
+      assert.equal(after.zoom,before.zoom,'hex click changed magnification');
+      assert.equal(after.yaw,before.yaw,'hex click changed orbit');
+      assert.equal(after.tilt,before.tilt,'hex click changed tilt');
+      if(ratio===1)assert.deepEqual(after,before,'overview click moved the camera');
+    }
+    await page.getByRole('button',{name:'Close panel',exact:true}).last().click();
+    await page.waitForFunction(()=>!window.__atlasMap.cameraMoving);
+    const closed=await page.evaluate(()=>({...window.__atlasMap.cam}));
+    assert.equal(closed.zoom,before.zoom,'closing selection changed magnification');
+    if(ratio===1)assert.deepEqual(closed,{x:before.x,y:before.y,zoom:before.zoom},'closing overview selection moved the camera');
+    results.selection.push({ratio,clicks:4,zoom:closed.zoom,overviewFixed:ratio===1});
+  }
   for(const [name,ratio] of [['countries',1],['fading',1.25],['exploration',3]]){
     await page.evaluate(ratio=>{
       const r=window.__atlasMap,fit=r.fitCamera();

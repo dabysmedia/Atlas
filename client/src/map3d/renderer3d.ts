@@ -514,7 +514,13 @@ export class HexMapRenderer3D extends HexMapRenderer {
   /** The 3D overview is the widest view; the 2D renderer keeps its own zoom range. */
   minZoom() { return this.w && this.hexes.length ? this.fitCamera().zoom : super.minZoom(); }
   protected autoTilt(z: number) { return 0.62 * smooth(26, 84, HEX_SIZE * z); }
-  protected wantedTilt() { return this.overhead ? 0 : clamp(this.autoTilt(this.cam.zoom) + this.tiltBias, 0, MAX_TILT); }
+  /** Blend out the stored user tilt near the overview, without overwriting it. */
+  protected wantedTilt() {
+    const detail = smooth(1, 2.25, this.cam.zoom / this.minZoom());
+    return this.overhead ? 0 : clamp(this.autoTilt(this.cam.zoom) + this.tiltBias, 0, MAX_TILT) * detail;
+  }
+  /** Country-scale borders and names belong to the full-island overview. */
+  protected overviewAlpha() { return 1 - smooth(1.04, 1.45, this.cam.zoom / this.minZoom()); }
 
   protected updateCamera() {
     const dist = this.camDist();
@@ -866,6 +872,8 @@ export class HexMapRenderer3D extends HexMapRenderer {
     const pr = this.gl.getPixelRatio();
     const pixAngle = (2 * Math.tan(THREE.MathUtils.degToRad(FOV / 2))) / Math.max(1, this.h);
     this.neon.update(now, this.gl.getDrawingBufferSize(this.tmpV2), pr, 1 / this.cam.zoom, pixAngle);
+    this.neon.uniforms.uOverview.value = this.overviewAlpha();
+    this.neon.uniforms.uBorderSpacing.value = 8 / this.minZoom();
     this.neon.uniforms.uGlow.value = 1 + 0.5 * this.light.night;
     const sel = this.selectedId ? this.byId.get(this.selectedId) : undefined;
     this.beacon.place(sel ? { x: sel.cx, y: sel.cy } : null, this.groundFn);
@@ -1021,7 +1029,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     // A little screen lift too, so the tether shows even looking straight down.
     const x = ((V.x + 1) / 2) * this.w, y = ((1 - V.y) / 2) * this.h - 16 - 8 * hot;
     // Gone at hexcrawl detail, where hexes, names and markers take over; dimmed beside a focus.
-    let alpha = (1 - smooth(1.15, 1.75, ppw)) * (1 - smooth(1.25, 1.8, this.cam.zoom));
+    let alpha = this.overviewAlpha();
     if (this.focusFactionId && this.focusFactionId !== s.id) alpha *= 0.65;
     if (alpha <= 0.02) return null;
     const g = this.groundScreen(gx, gy, this.scr);

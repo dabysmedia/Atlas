@@ -1,11 +1,11 @@
 /**
- * Faction borders in 3D: glowing lines that lie just above the terrain, following every ridge and
+ * Faction borders in 3D: cartographic dots that lie just above the terrain, following every ridge and
  * valley, instead of strokes painted into the draped overlay.
  *
  * Every line (territory borders, contested and influence rings) is one merged ribbon mesh drawn in
  * a single call. Each point of a line is stored twice, once per side; the vertex shader spreads the
  * pair to a fixed width on screen, so the lines stay fine up close and readable from far out, and
- * the fragment shader draws a hot core, a thin dark rim and a soft halo from the distance across.
+ * the fragment shader draws colored dots, a thin dark rim and a restrained halo.
  * The halo adds light (premultiplied blending: the core covers, the glow adds), so no post pass.
  *
  * Depth: the lines test against the terrain, so ridges hide them, but are pulled toward the camera
@@ -74,6 +74,7 @@ void main() {
 
 const FRAG = /* glsl */`
 uniform float uTime, uCore, uFlowLen, uDashLen, uInfl, uCont, uOpacity, uGlow, uAdd;
+uniform float uOverview, uBorderSpacing, uWorldPerPx, uPixelRatio;
 varying vec3 vColor;
 varying vec3 vStyle;
 varying float vAcross, vDist, vHalf;
@@ -92,19 +93,22 @@ void main() {
     on = (abs(k - vStyle.y) < 0.5 ? 1.0 : 0.0) * smoothstep(0.0, 0.06, f) * (1.0 - smoothstep(0.94, 1.0, f));
     inten = (0.85 + 0.3 * sin(uTime * 3.4)) * uCont;
   } else {
-    // Energy running along the border: a bright pulse with a fading tail.
-    float f = fract(vDist / uFlowLen - uTime * 0.11);
-    flow = 0.8 + 0.75 * pow(f, 10.0) + 0.25 * pow(f, 3.0);
+    // Fixed cartographic dots. World-anchored spacing stays still while the camera zooms.
+    float along = abs(fract(vDist / uBorderSpacing + 0.5) - 0.5) * uBorderSpacing;
+    px = length(vec2(px, along / uWorldPerPx * uPixelRatio));
+    inten = uOverview;
   }
   float core = 1.0 - smoothstep(uCore - 0.55, uCore + 0.55, px);
   float edge = 1.0 - smoothstep(vHalf * 0.7, vHalf, px);
   float g = px / vHalf;
   float glow = (exp(-g * g * 10.0) * 0.75 + exp(-g * 4.0) * 0.35) * edge;
-  // A white-hot thread down the middle of a saturated tube.
+  // A pale center and dark rim keep the faction color readable on varied terrain.
   float thread = 1.0 - smoothstep(0.0, uCore, px);
-  vec3 tube = mix(vColor, vec3(1.0), 0.08 + 0.4 * thread * thread);
+  vec3 tube = mix(vColor, vec3(1.0), 0.08 + (vStyle.x < 0.5 ? 0.12 : 0.4) * thread * thread);
   float k = on * inten;
-  vec3 rgb = (tube * core * 1.25 * flow + vColor * glow * uGlow * flow) * k;
+  float country = 1.0 - step(0.5, vStyle.x);
+  vec3 rgb = (tube * core * mix(1.25, 0.95, country) * flow
+    + vColor * glow * uGlow * mix(1.0, 0.1, country) * flow) * k;
   // A whisper of dark just outside the core keeps the line crisp on bright ground.
   float rim = (1.0 - smoothstep(uCore + 0.5, uCore + 2.6, px)) * 0.28;
   float a = max(core * 0.9, rim) * k * (1.0 - uAdd);
@@ -121,6 +125,7 @@ export class NeonBorders {
     uRes: { value: new THREE.Vector2(1, 1) }, uHalf: { value: 8 }, uShift: { value: 1.6 }, uBias: { value: 0.006 },
     uTime: { value: 0 }, uCore: { value: 1.1 }, uFlowLen: { value: 400 }, uDashLen: { value: 10 }, uInfl: { value: 1 }, uCont: { value: 1 },
     uOpacity: { value: 1 }, uGlow: { value: 1 }, uAdd: { value: 0 },
+    uOverview: { value: 1 }, uBorderSpacing: { value: 24 }, uWorldPerPx: { value: 1 }, uPixelRatio: { value: 1 },
   };
   /** Terrain lines; the optional second pass stays disabled while clouds occlude the map. */
   readonly group = new THREE.Group();
@@ -143,7 +148,7 @@ export class NeonBorders {
     // Retain the additive pass, but keep it disabled: cloud bodies must hide map lines.
     this.through = new THREE.Mesh(geo, new THREE.ShaderMaterial({ uniforms: { ...this.uniforms, ...this.throughU }, vertexShader: VERT, fragmentShader: FRAG, ...blend }));
     this.through.renderOrder = 8;
-    // Atmosphere occludes map lines. Only the hovered surface mask clears clouds.
+    // Clouds veil map lines; hover outlines are drawn separately above the atmosphere.
     this.through.visible = false;
     for (const m of [this.mesh, this.through]) { m.frustumCulled = false; this.group.add(m); }
   }
@@ -236,6 +241,8 @@ export class NeonBorders {
    */
   update(now: number, res: THREE.Vector2, pr: number, worldPerPx: number, pixAngle: number) {
     const u = this.uniforms;
+    u.uWorldPerPx.value = worldPerPx;
+    u.uPixelRatio.value = pr;
     u.uRes.value.copy(res);
     u.uHalf.value = 8 * pr;
     u.uCore.value = Math.max(0.75, 1.15 * pr);

@@ -14,7 +14,7 @@ import { HEX_SIZE, HexMapRenderer, type Camera, type Layers as RLayers } from '.
 import { FactionPanel, HexPanel, TokenPanel, Diamond, type Focus } from './panels';
 import { toast, toastError } from '../components/toast';
 import { Dialog } from '../components/Dialog';
-import { ShortcutsCard, StackButton, ToolDock, ViewControls, type ToolDef } from '../components/MapChrome';
+import { ShortcutsCard, StackButton, ToolDock, ViewControls, useGlassBudget, type ToolDef } from '../components/MapChrome';
 import { DIRS, key } from '../../../shared/hex';
 import type { HexMapRenderer3D } from '../map3d/renderer3d';
 import { is3d, load3d, webgl2Available } from '../map3d/support';
@@ -67,6 +67,7 @@ export function MapView() {
   const [align, setAlign] = useState<ArtPlacement | null>(null);
   const [artLoaded, setArtLoaded] = useState(0);
   const [dropping, setDropping] = useState(false);
+  useGlassBudget();
 
   const mapQ = useQuery({ queryKey: qk.map(world.id), queryFn: () => api<MapData>(`/api/worlds/${world.id}/map`) });
   const data = mapQ.data;

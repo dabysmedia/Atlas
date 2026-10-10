@@ -8,6 +8,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Grid3x3, Keyboard, Maximize, RotateCcw, RotateCw, X, type LucideIcon } from 'lucide-react';
 import type { HexMapRenderer } from '../map/renderer';
 import { is3d } from '../map3d/support';
+import { glassPref } from '../prefs';
 
 const SPRING = { type: 'spring' as const, stiffness: 520, damping: 34, mass: 0.8 };
 
@@ -32,6 +33,38 @@ function useFan() {
     },
   };
   return { open, set, pointer, props };
+}
+
+/**
+ * Frosted glass costs a blur of whatever is behind it every frame, and behind the map's chrome is a scene that
+ * redraws every frame. While the map is open, watch the browser's pace; a machine that can't keep up (frames
+ * slower than ~25 a second for a few seconds, or a crawl) trades the blur for thicker tint. Once per session.
+ */
+export const glassLite = {
+  get: () => document.documentElement.classList.contains('glass-lite'),
+  set: (on: boolean) => { document.documentElement.classList.toggle('glass-lite', on); },
+};
+if (typeof document !== 'undefined' && glassPref.get() === 'lite') glassLite.set(true);
+export function useGlassBudget() {
+  useEffect(() => {
+    if (glassLite.get() || glassPref.get()) return;
+    let raf = 0, last = 0, pace = 16, slow = 0;
+    const tick = (now: number) => {
+      const dt = last ? now - last : 0;
+      last = now;
+      if (dt > 0 && dt < 5000 && !document.hidden) {
+        pace = pace * 0.95 + dt * 0.05;
+        slow = pace > 40 ? slow + 1 : 0;
+        if (slow > 120 || (slow > 3 && pace > 400)) {
+          glassLite.set(true);
+          return;
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
 }
 
 export type ToolDef<T extends string> = { id: T; label: string; short: string; icon: LucideIcon; keyHint: string };

@@ -61,6 +61,23 @@
   --chrome-bottom: 0px;    /* phones move the rail to the bottom */
   color-scheme: dark;
 }
+/* Glass without the blur: for machines whose map can't keep pace with it (MapChrome's useGlassBudget sets
+   .glass-lite) and for people who ask for less transparency. The tints thicken so text keeps its contrast. */
+:root.glass-lite {
+  --glass-blur: none;
+  --glass-tint: rgba(11, 19, 24, 0.88);
+  --glass-tint-top: rgba(21, 33, 40, 0.86);
+  --glass-tint-strong: rgba(11, 19, 24, 0.94);
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass-blur: none;
+    --glass-tint: rgba(11, 19, 24, 0.95);
+    --glass-tint-top: rgba(19, 30, 37, 0.95);
+    --glass-tint-strong: rgba(11, 19, 24, 0.97);
+    --glass-sheet: rgba(10, 17, 21, 0.95);
+  }
+}
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }

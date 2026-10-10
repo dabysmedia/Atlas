@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import {
   BookOpen, ChevronLeft, ChevronRight, ChevronsUpDown, Cloud, CloudDrizzle, CloudFog, CloudLightning, CloudMoon, CloudRain, CloudRainWind, CloudSun,
   Dices, Flag, Hexagon, LogOut, Moon, Pause, Play, ScrollText, Search, Settings, Sunrise, Sunset, Swords, Sun, Wind, type LucideIcon,
@@ -14,6 +14,7 @@ import { Sigil } from './Sigil';
 import { WorldSwitcher } from './WorldSwitcher';
 import { CommandPalette } from './CommandPalette';
 import { toastError } from './toast';
+import { TooltipHost } from './Tooltip';
 import { MapView } from '../map/MapView';
 import { FactionsView } from '../factions/FactionsView';
 import { ChronicleView } from '../chronicle/ChronicleView';
@@ -167,10 +168,16 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
   const loc = useLocation();
   const section = loc.pathname.split('/')[3] ?? 'map';
   const ambient = useAmbientPref() && section !== 'map';
+  // Chrome floats over the page as glass islands; they drift in one after another on arrival.
+  const rise = (i: number, from: { x?: number; y?: number } = { y: -10 }) => ({
+    initial: { opacity: 0, ...from }, animate: { opacity: 1, x: 0, y: 0 },
+    transition: { type: 'spring' as const, stiffness: 260, damping: 26, delay: 0.05 + i * 0.05 },
+  });
   return (
+    <MotionConfig reducedMotion="user">
     <div className="shell">
-      <header className="topbar">
-        <button className="world-button" onClick={() => setSwitcher(true)} title="Switch world">
+      <header className="topbar" data-tip-side="bottom">
+        <motion.button className="world-button glass" onClick={() => setSwitcher(true)} data-tip="Switch world" aria-label={`Switch world (${w?.name ?? 'none chosen'})`} {...rise(0)}>
           <Sigil color={w?.accent ?? '#d4a64a'} />
           <AnimatePresence mode="wait">
             <motion.span key={w?.id ?? 'none'} className="name"
@@ -179,30 +186,31 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
             </motion.span>
           </AnimatePresence>
           <ChevronsUpDown size={13} className="faint" />
-        </button>
+        </motion.button>
         <div className="spacer" />
         {w && (
-          <button className="searchbox" onClick={() => setPalette(true)} title="Search the atlas (Ctrl+K)" aria-label="Search the atlas">
-            <Search size={14} /> <span className="grow">Search the atlas</span> <span className="kbd">Ctrl K</span>
-          </button>
+          <motion.button className="searchbox glass" onClick={() => setPalette(true)} aria-label="Search the atlas" aria-keyshortcuts="Control+K" {...rise(1)}>
+            <Search size={15} /> <span className="grow">Search the atlas</span> <span className="kbd">Ctrl K</span>
+          </motion.button>
         )}
         <div className="spacer" />
         {w && (
-          <div className="clock" title="World clock (in-game day)">
-            <button onClick={() => day.mutate(-1)} aria-label="Previous day"><ChevronLeft size={14} /></button>
+          <motion.div className="clock glass" role="group" aria-label="World clock" {...rise(2)}>
+            <button onClick={() => day.mutate(-1)} aria-label="Previous day" data-tip="Previous day"><ChevronLeft size={14} /></button>
             <span className="day"><small>Day</small> {w.currentDay}</span>
             <TimeOfDay daylight={w.daylight} onChange={(b) => daylight.mutate(b)} />
             <WeatherControl weather={w.weather} daylight={w.daylight} onChange={(b) => weather.mutate(b)} onRoll={() => rollWeather.mutate()} rolling={rollWeather.isPending} />
-            <button onClick={() => day.mutate(1)} aria-label="Next day"><ChevronRight size={14} /></button>
-          </div>
+            <button onClick={() => day.mutate(1)} aria-label="Next day" data-tip="Next day"><ChevronRight size={14} /></button>
+          </motion.div>
         )}
-        <button className="iconbtn" onClick={logout} title="Sign out" aria-label="Sign out"><LogOut size={15} /></button>
+        <motion.button className="glass signout" onClick={logout} data-tip="Sign out" aria-label="Sign out" {...rise(3)}><LogOut size={15} /></motion.button>
       </header>
-      <div className="body">
-        {w && (
-          <nav className="rail" aria-label="Sections">
-            {NAV.map((n, i) => (
-              <NavLink key={n.to} to={`/w/${w.id}/${n.to}`} className={({ isActive }) => `${isActive ? 'active' : ''} ${i === NAV.length - 1 ? 'end' : ''}`} data-tip={n.label} aria-label={n.label}>
+      {w && (
+        <motion.nav className="rail glass" aria-label="Sections" data-tip-side="right" {...rise(1, { x: -12 })}>
+          {NAV.map((n, i) => (
+            <span key={n.to} className="rail-slot">
+              {i === NAV.length - 1 && <span className="rail-sep" aria-hidden />}
+              <NavLink to={`/w/${w.id}/${n.to}`} className={({ isActive }) => `${isActive ? 'active' : ''} ${i === NAV.length - 1 ? 'end' : ''}`} data-tip={n.label} aria-label={n.label}>
                 {({ isActive }) => (
                   <>
                     {isActive && <motion.span layoutId="rail-mark" className="rail-mark" transition={{ type: 'spring', stiffness: 500, damping: 38 }} />}
@@ -210,9 +218,11 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
                   </>
                 )}
               </NavLink>
-            ))}
-          </nav>
-        )}
+            </span>
+          ))}
+        </motion.nav>
+      )}
+      <div className="body">
         <main className={`main ${ambient ? 'ambient-live' : ''}`}>
           {w && (
             <WorldCtx.Provider value={w}>
@@ -225,7 +235,9 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
         </main>
       </div>
       <WorldSwitcher open={switcher} onClose={() => setSwitcher(false)} currentId={worldId} forced={!!noWorld} />
+      <TooltipHost />
     </div>
+    </MotionConfig>
   );
 }
 
@@ -288,7 +300,7 @@ function TimeOfDay({ daylight, onChange }: { daylight: Daylight; onChange: (b: {
   const Icon = part === 'Night' ? Moon : part === 'Dawn' ? Sunrise : part === 'Dusk' || part === 'Golden hour' ? Sunset : Sun;
   return (
     <span className="tod" {...rootProps}>
-      <button ref={btn} className="tod-btn" onClick={() => setOpen((o) => !o)} aria-label="Time of day" aria-expanded={open} title={`${part} · day cycle ${DAY_SPEEDS[daylight.speed].label.toLowerCase()}`}>
+      <button ref={btn} className="tod-btn" onClick={() => setOpen((o) => !o)} aria-label="Time of day" aria-expanded={open} data-tip={`${part} · day cycle ${DAY_SPEEDS[daylight.speed].label.toLowerCase()}`}>
         <Icon size={13} className="clock-icon" />
         <span className="hour">{formatHour(shown)}</span>
         {daylight.speed === 'paused' && <Pause size={10} className="faint" />}
@@ -346,7 +358,7 @@ function WeatherControl({ weather, daylight, onChange, onRoll, rolling }: {
   return (
     <span className="wx" {...rootProps}>
       <button ref={btn} className="wx-btn" onClick={() => setOpen((o) => !o)} aria-label={`Weather: ${info.label}`} aria-expanded={open} aria-haspopup="dialog"
-        title={`${info.label} · ${info.note}${weather.auto ? ' · new weather each day' : ''}`}>
+        data-tip={`${info.label} · ${info.note}${weather.auto ? ' · new weather each day' : ''}`}>
         <Icon size={14} className="clock-icon" />
         <span className="wx-label">{info.label}</span>
         {weather.auto && <Dices size={10} className="faint" />}

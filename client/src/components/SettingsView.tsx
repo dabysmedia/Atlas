@@ -5,7 +5,8 @@ import { api, qk } from '../api';
 import type { HexStateType, TerrainType, World } from '../types';
 import { useWorld } from '../world';
 import { toast, toastError } from './toast';
-import { ambientPref } from '../prefs';
+import { ambientPref, glassPref } from '../prefs';
+import { glassLite } from './MapChrome';
 import { useAmbientPref } from './AmbientMap';
 
 const GLYPHS = ['none', 'grass', 'trees', 'hills', 'peaks', 'reeds', 'dunes', 'waves'];
@@ -20,6 +21,7 @@ export function SettingsView() {
   const [terrain, setTerrain] = useState<TerrainType[]>(world.terrainTypes);
   const [states, setStates] = useState<HexStateType[]>(world.hexStates);
   const ambient = useAmbientPref();
+  const [glass, setGlass] = useState(() => !glassLite.get());
   const dirty = name !== world.name || description !== world.description || accent !== world.accent
     || JSON.stringify(terrain) !== JSON.stringify(world.terrainTypes) || JSON.stringify(states) !== JSON.stringify(world.hexStates);
 
@@ -89,6 +91,11 @@ export function SettingsView() {
         <p className="muted" style={{ marginTop: 0 }}>Saved in this browser only.</p>
         <div className="card"><div className="card-body">
           <label className="toggle"><input type="checkbox" checked={ambient} onChange={(e) => ambientPref.set(e.target.checked)} /> Show the world map behind pages</label>
+          <label className="toggle" style={{ marginTop: 10 }}>
+            <input type="checkbox" checked={glass} onChange={(e) => { const on = e.target.checked; glassPref.set(on ? 'full' : 'lite'); glassLite.set(!on); setGlass(on); }} />
+            Frosted glass behind panels
+          </label>
+          <p className="faint" style={{ margin: '6px 0 0 36px', fontSize: 12 }}>The blur costs a little every frame. Unless you choose here, a map that can't keep pace turns it off for the visit.</p>
         </div></div>
       </div>
     </div>

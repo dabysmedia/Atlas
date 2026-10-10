@@ -24,5 +24,8 @@ export const ambientPref = {
   subscribe(f: () => void) { ambientSubs.add(f); return () => { ambientSubs.delete(f); }; },
 };
 
+/** Frosted glass: 'full' keeps the blur, 'lite' drops it; unset lets a map that can't keep pace drop it for the session. */
+export const glassPref = store<'full' | 'lite'>('atlas.glass');
+
 /** 3D map (default) or the flat 2D map, per browser. */
 export const mapModePref = store<'3d' | '2d'>('atlas.mapMode');

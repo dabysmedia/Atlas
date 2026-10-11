@@ -554,10 +554,9 @@ export class HexMapRenderer3D extends HexMapRenderer {
         }
         tiles.push({ token, x: foot.x, y: foot.y, foot, radius, modeled, plate: null, modelBottom, modelBounds: extent ? { x:left,y:top,width:right-left,height:bottom-top } : null });
       }
-      for (const tile of tiles.filter(t => !t.modeled)) {
-        const hovering = this.pointer && Math.hypot(this.pointer.x-tile.x,this.pointer.y-tile.y) <= Math.max(8,tile.radius+3);
-        // In a dense overview, names appear on hover/selection rather than covering adjacent hexes.
-        if (this.miniatureMode() || tile.radius >= 14 || tile.token.id === this.selectedTokenId || tile.token.id === this.hoveredTokenId || hovering) { const size = tokenNameplateSize(ctx, tile.token, false); tile.plate = { x:tile.x-size.width/2,y:tile.y+tile.radius+5,...size }; }
+      for (const tile of tiles.filter(t => !t.modeled && this.miniatureMode())) {
+        const size = tokenNameplateSize(ctx, tile.token, false);
+        tile.plate = { x:tile.x-size.width/2,y:tile.y+tile.radius+5,...size };
       }
       for (const tile of tiles.filter(t => t.modeled)) {
         const size = tokenNameplateSize(ctx, tile.token, true);

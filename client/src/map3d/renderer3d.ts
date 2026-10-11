@@ -39,6 +39,7 @@ import { isNotableKind, isMajorCity } from '../../../shared/markers';
 import { FactionLabels, type LabelPlace, type LabelSpot } from './labels3d';
 import type { CardAnchor, FactionArea } from '../map/FactionCard';
 import { drawPlaceGlyph, placeDiamond } from '../map/markers';
+import { drawTokenNameplate, tokenNameplateSize } from './tokenNameplate';
 import { markerSprite } from '../map/markers';
 import { Miniatures } from './miniatures';
 
@@ -530,7 +531,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.pieceTiles = [];
     const groups = new Map<string, Token[]>();
     for (const token of this.tokens) if (!isNotableKind(token.kind) && token.hexId) { const key = this.dragToken?.token.id === token.id ? token.id : token.hexId; const group = groups.get(key) ?? []; group.push(token); groups.set(key, group); }
-    const ctx = this.hudCtx; ctx.save(); ctx.font = '600 12px Inter, sans-serif';
+    const ctx = this.hudCtx; ctx.save();
     for (const group of groups.values()) {
       group.sort((a, b) => a.id.localeCompare(b.id));
       const tiles: typeof this.pieceTiles = [];
@@ -556,21 +557,21 @@ export class HexMapRenderer3D extends HexMapRenderer {
       for (const tile of tiles.filter(t => !t.modeled)) {
         const hovering = this.pointer && Math.hypot(this.pointer.x-tile.x,this.pointer.y-tile.y) <= Math.max(8,tile.radius+3);
         // In a dense overview, names appear on hover/selection rather than covering adjacent hexes.
-        if (this.miniatureMode() || tile.radius >= 14 || tile.token.id === this.selectedTokenId || hovering) tile.plate = { x: tile.x-38,y: tile.y+tile.radius+4,width:76,height:18 };
+        if (this.miniatureMode() || tile.radius >= 14 || tile.token.id === this.selectedTokenId || tile.token.id === this.hoveredTokenId || hovering) { const size = tokenNameplateSize(ctx, tile.token, false); tile.plate = { x:tile.x-size.width/2,y:tile.y+tile.radius+5,...size }; }
       }
       const flat = tiles.filter(t => !t.modeled && t.plate);
       if (flat.some((tile,i) => flat.slice(i+1).some(other => { const a=tile.plate!,b=other.plate!; return a.x < b.x+b.width+4 && a.x+a.width+4 > b.x && a.y < b.y+b.height+4 && a.y+a.height+4 > b.y; }))) {
         const center = flat.reduce((sum,t) => sum+t.x,0)/flat.length;
         let y = Math.max(...tiles.map(t => t.modeled ? t.modelBottom : t.y+t.radius))+6;
-        for (const tile of flat) { tile.plate = { x:center-38,y,width:76,height:18 }; y += 22; }
+        for (const tile of flat) { const size = tokenNameplateSize(ctx, tile.token, false); tile.plate = { x:center-size.width/2,y,...size }; y += size.height + 5; }
       }
       const modeled = tiles.filter(t => t.modeled);
       if (modeled.length) {
         const center = modeled.reduce((sum,t) => sum+t.x,0) / modeled.length;
         let y = Math.max(...tiles.map(t => t.modeled ? t.modelBottom : (t.plate ? t.plate.y+t.plate.height : t.y+t.radius))) + 10;
         for (const tile of modeled) {
-          const width = clamp(ctx.measureText(tile.token.name).width + 44,112,164);
-          tile.plate = { x: center-width/2, y, width, height: 30 }; y += 34;
+          const size = tokenNameplateSize(ctx, tile.token, true);
+          tile.plate = { x:center-size.width/2,y,...size }; y += size.height + 6;
         }
       }
       this.pieceTiles.push(...tiles);
@@ -688,7 +689,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
       hud.setLineDash([]);
     }
     for (const tile of this.pieceTiles) {
-      const t = tile.token, color = t.color ?? this.factionColor.get(t.factionId ?? '') ?? '#d6b06a';
+      const t = tile.token, color = this.factionColor.get(t.factionId ?? '') ?? t.color ?? '#d6b06a';
       hud.globalAlpha = t.visibleToPlayers ? 1 : 0.62;
       if (!tile.modeled) {
         const sprite = markerSprite(t.kind,color,tile.radius,this.dpr), size = sprite.canvas.width/this.dpr;
@@ -701,14 +702,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
         hud.beginPath(); hud.moveTo(tile.foot.x,tile.modelBottom+3); hud.lineTo(plate.x+plate.width/2,plate.y); hud.stroke();
         hud.globalAlpha = t.visibleToPlayers ? 1 : 0.62;
       }
-      hud.fillStyle = 'rgba(6,12,17,.92)'; hud.beginPath(); hud.roundRect(plate.x,plate.y,plate.width,plate.height,tile.modeled ? 8 : 5); hud.fill();
-      hud.strokeStyle = this.selectedTokenId === t.id ? '#8fe8e2' : color; hud.lineWidth = this.selectedTokenId === t.id ? 2 : 1; hud.stroke();
-      if (tile.modeled) drawPlaceGlyph(hud,t.kind,false,plate.x+16,plate.y+15,20,color);
-      hud.font = tile.modeled ? '600 12px Inter, sans-serif' : '600 10px Inter, sans-serif';
-      hud.textAlign = tile.modeled ? 'left' : 'center'; hud.textBaseline = 'middle'; hud.fillStyle = '#f4ead4';
-      let name = `${!t.visibleToPlayers ? '◌ ' : ''}${t.name}`; const available = plate.width-(tile.modeled ? 42 : 6);
-      while (hud.measureText(name).width > available && name.length > 2) name = name.slice(0,-2)+'…';
-      hud.fillText(name,tile.modeled ? plate.x+32 : plate.x+plate.width/2,plate.y+plate.height/2);
+      drawTokenNameplate(hud, t, plate, tile.modeled, color, this.selectedTokenId === t.id || this.hoveredTokenId === t.id);
     }
     hud.restore();
     this.layoutPlaces();

@@ -16,7 +16,7 @@ import { z } from 'zod';
 
 /** Parts of a screen's cache a change can make stale. The client maps each onto its query keys (client/src/live.ts). */
 export const SCOPES = [
-  'worlds', 'world', 'map', 'pages', 'page', 'search', 'factions', 'meters', 'mh', 'rolls', 'campaigns', 'events', 'fog', 'modelArchive', 'files', 'tokenModels', 'interiors', 'rules', 'sheets', 'portraits',
+  'worlds', 'world', 'map', 'pages', 'page', 'search', 'factions', 'meters', 'mh', 'rolls', 'campaigns', 'events', 'fog', 'modelArchive', 'files', 'tokenModels', 'interiors', 'rules', 'sheets', 'portraits', 'hexPresentation',
 ] as const;
 export type Scope = (typeof SCOPES)[number];
 
@@ -106,6 +106,8 @@ export const ROUTE_SCOPES: Record<string, Scope[]> = {
   'PATCH /api/worlds/:w/pages/:id': ['pages', 'page', 'search', 'files'],
   'DELETE /api/worlds/:w/pages/:id': ['pages', 'page', 'search', 'events', 'map', 'factions', 'files'],
   // map: hexes, claims, fog and markers patch rows; art and models patch the map's metadata
+  'PATCH /api/worlds/:w/hexes/:id/presentation': ['hexPresentation', 'events', 'files'],
+  'POST /api/worlds/:w/hex-artwork': ['files'],
   'PATCH /api/worlds/:w/hexes/:id': ['events'],
   'POST /api/worlds/:w/hexes/paint': ['events', 'worlds'],
   'POST /api/worlds/:w/claims/control': ['factions', 'events'],
@@ -126,8 +128,8 @@ export const ROUTE_SCOPES: Record<string, Scope[]> = {
   'POST /api/worlds/:w/interiors/:id/enter': ['interiors', 'events'],
   'POST /api/worlds/:w/interiors/:id/move': ['interiors', 'events'],
   'POST /api/worlds/:w/interiors/:id/leave': ['interiors', 'events'],
-  'PATCH /api/worlds/:w/files/:kind/:id': ['files', 'map', 'modelArchive', 'tokenModels', 'events', 'interiors', 'portraits'],
-  'DELETE /api/worlds/:w/files/:kind/:id': ['files', 'map', 'modelArchive', 'tokenModels', 'events', 'interiors', 'portraits'],
+  'PATCH /api/worlds/:w/files/:kind/:id': ['files', 'map', 'modelArchive', 'tokenModels', 'events', 'interiors', 'portraits', 'hexPresentation'],
+  'DELETE /api/worlds/:w/files/:kind/:id': ['files', 'map', 'modelArchive', 'tokenModels', 'events', 'interiors', 'portraits', 'hexPresentation'],
   'POST /api/worlds/:w/rules': ['rules'],
   'PATCH /api/worlds/:w/rules/:id': ['rules', 'sheets'],
   'PUT /api/worlds/:w/rules/active': ['rules', 'sheets', 'events'],
@@ -281,7 +283,7 @@ export class LiveHub {
     if (c.role === 'player') {
       if (m.t === 'drag') return;
       if (m.t === 'change') {
-        if (ev.world === null || ev.world === c.world) this.send(c, { ...m, scopes: ['map', 'world', 'worlds', 'fog', 'interiors', 'rules', 'sheets', 'portraits'], patches: undefined });
+        if (ev.world === null || ev.world === c.world) this.send(c, { ...m, scopes: ['map', 'world', 'worlds', 'fog', 'interiors', 'rules', 'sheets', 'portraits', 'hexPresentation'], patches: undefined });
         return;
       }
     }

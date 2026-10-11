@@ -77,7 +77,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const shown = await visibleTokens(db, req, w.id, tokenRows);
     await ensureSheets(db,w.id);
     const access = req.userRole === 'player' ? await accessFor(db, req.userId!, w.id) : null;
-    return { map: { ...map, art: artRows[0] ?? null, model: modelRows[0] ?? null }, hexes: hexRows, claims: claimRows, tokens: shown, settlements: req.userRole === 'player' ? settlementRows.filter(s => shown.some(t => t.settlementId === s.id)) : settlementRows, factions: factionRows, campaigns: access ? campaignRows.filter(c => c.id === access.campaignId) : campaignRows, playerFactionId: access?.factionId ?? null, playerCampaignId: access?.campaignId ?? null };
+    return { map: { ...map, art: artRows[0] ?? null, model: modelRows[0] ?? null }, hexes: req.userRole === 'player' ? hexRows.map(h => ({ ...h, notes: '' })) : hexRows, claims: claimRows, tokens: shown, settlements: req.userRole === 'player' ? settlementRows.filter(s => shown.some(t => t.settlementId === s.id)) : settlementRows, factions: factionRows, campaigns: access ? campaignRows.filter(c => c.id === access.campaignId) : campaignRows, playerFactionId: access?.factionId ?? null, playerCampaignId: access?.campaignId ?? null };
   });
 
   const HexPatch = z.object({

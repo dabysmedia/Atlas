@@ -15,6 +15,7 @@ import {
 import type { MeterBand } from '../../shared/meters.js';
 import type { Weather } from '../../shared/weather.js';
 import type { RulesDefinition, SheetKind, SheetValues } from '../../shared/rulesets.js';
+import type { HexResource } from '../../shared/hexPresentation.js';
 
 export type { MeterBand };
 
@@ -420,3 +421,15 @@ export const tokenSheets = pgTable('token_sheets', {
 export const tokenPortraits = pgTable('token_portraits', {
   id: id(), worldId: worldRef(), name: text('name').notNull(), mime: text('mime').notNull(), bytes: bytea('bytes').notNull(), createdAt: created(),
 }, t=>[index('token_portraits_world_idx').on(t.worldId)]);
+
+export const hexArtwork = pgTable('hex_artwork', {
+  id: id(), worldId: worldRef(), name: text('name').notNull(), mime: text('mime').notNull(),
+  bytes: bytea('bytes').notNull(), createdAt: created(),
+}, t => [index('hex_artwork_world_idx').on(t.worldId)]);
+export const hexPresentations = pgTable('hex_presentations', {
+  hexId: uuid('hex_id').primaryKey().references(() => hexes.id, { onDelete: 'cascade' }),
+  worldId: worldRef(), heroId: uuid('hero_id').references(() => hexArtwork.id, { onDelete: 'set null' }),
+  heroFocus: integer('hero_focus').notNull().default(50), lore: text('lore').notNull().default(''),
+  resources: jsonb('resources').$type<HexResource[]>().notNull().default([]),
+  revision: integer('revision').notNull().default(1), updatedAt: updated(),
+}, t => [index('hex_presentations_world_idx').on(t.worldId)]);

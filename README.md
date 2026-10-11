@@ -177,3 +177,25 @@ Everything below a world carries `world_id` and cascades on delete, so worlds ne
 | `roll_tables` / `roll_table_entries` | weighted tables per faction + meter + band; entries carry `approved` and `source` (gm / ai) |
 | `events` | append-only chronicle; a trigger rejects UPDATE/DELETE (FK cascades excepted) |
 | `wiki_pages` / `wiki_links` | ProseMirror JSON + extracted text + generated `tsvector`; links rebuilt on save for backlinks |
+
+
+## Hex field atlas
+
+Selecting a hex opens a read-first field atlas: a hero illustration, authored lore, terrain and state,
+diamond POI cards, resource cards, pieces present, territory, and linked interiors. **Edit** enables
+name/terrain/state/wiki-link/GM-note fields, image uploads and resource editing; **Save details** commits
+them together and **Cancel** discards the draft. Artwork has adjustable vertical framing and can return
+to the rendered map illustration. No lore, resources or locations are seeded by this feature.
+
+Artwork (PNG/JPEG/WebP/GIF, up to 8 MB and 24 megapixels), lore and resources live in separate world-scoped
+presentation tables, with revision guards and live updates. They do not rewrite canonical hex data.
+Changes to hex properties happen only when the GM explicitly edits those fields. Images persist in
+Railway Postgres and appear under **Uploaded files → Hex artwork** for rename/download/two-step removal.
+Deleting artwork restores the map illustration and retains the lore/resources. GM notes are private;
+players read authored details and art only for explored hexes when their campaign uses fog.
+
+Resources are descriptive entries (name, kind, availability, notes), ready for GM input; gathering,
+yield and economy automation are not added. Territory/fog/POI actions remain available in Edit mode and
+apply immediately; POI creation keeps the hex draft open. `scripts/smoke-hex-dossiers.mjs` verifies the
+read/edit flow, upload/persistence, resources, conflicts/live refresh, POI navigation, desktop/mobile
+and player layouts, and preservation of canonical hex data and the mounted world renderer.

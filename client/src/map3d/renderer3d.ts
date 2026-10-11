@@ -528,6 +528,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     return { x: hex.cx + Math.cos(angle) * radius, y: hex.cy + Math.sin(angle) * radius };
   }
   private miniatureMode() { return this.cam.zoom / this.minZoom() >= 1.45; }
+  private nameplateAlpha() { return 1 - this.overviewAlpha(); }
   private layoutPieces() {
     this.pieceTiles = [];
     const groups = new Map<string, Token[]>();
@@ -555,7 +556,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
         }
         tiles.push({ token, x: foot.x, y: foot.y, foot, radius, modeled, plate: null, modelBottom, modelBounds: extent ? { x:left,y:top,width:right-left,height:bottom-top } : null });
       }
-      for (const tile of tiles.filter(t => !t.modeled && this.miniatureMode())) {
+      for (const tile of tiles.filter(t => !t.modeled && this.nameplateAlpha() > 0)) {
         const size = tokenNameplateSize(ctx, tile.token, false);
         tile.plate = { x:tile.x-size.width/2,y:tile.y+tile.radius+5,...size };
       }
@@ -632,7 +633,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     if (miniature) return this.tokens.find(t => t.id === miniature);
     for (const tile of [...this.pieceTiles].reverse()) {
       const p = tile.plate;
-      if (p && sx >= p.x && sx <= p.x+p.width && sy >= p.y && sy <= p.y+p.height) return tile.token;
+      if (p && this.nameplateAlpha() >= 0.05 && sx >= p.x && sx <= p.x+p.width && sy >= p.y && sy <= p.y+p.height) return tile.token;
     }
     // A small screen-space margin makes thin limbs and small miniatures comfortable to click.
     const near = this.pieceTiles.filter(t => t.modeled && t.modelBounds).map(t => {
@@ -696,10 +697,11 @@ export class HexMapRenderer3D extends HexMapRenderer {
         if (this.selectedTokenId === t.id || this.hoveredTokenId === t.id) { hud.strokeStyle = '#8fe8e2'; hud.lineWidth = 2; hud.beginPath(); hud.arc(tile.x,tile.y,tile.radius+2,0,Math.PI*2); hud.stroke(); }
       }
       const plate = tile.plate; if (!plate) continue;
+      hud.globalAlpha *= this.nameplateAlpha();
       if (tile.modeled) {
         hud.strokeStyle = color; hud.globalAlpha *= 0.45; hud.lineWidth = 1;
         hud.beginPath(); hud.moveTo(tile.foot.x,tile.modelBottom+3); hud.lineTo(plate.x+plate.width/2,plate.y); hud.stroke();
-        hud.globalAlpha = t.visibleToPlayers ? 1 : 0.62;
+        hud.globalAlpha = (t.visibleToPlayers ? 1 : 0.62) * this.nameplateAlpha();
       }
       drawTokenNameplate(hud, t, plate, tile.modeled, color, this.selectedTokenId === t.id || this.hoveredTokenId === t.id);
     }

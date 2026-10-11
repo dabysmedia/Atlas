@@ -77,7 +77,12 @@ export function interiorRoutes(app: FastifyInstance,db: Db) {
       if(!doc||doc.asset?.version!=='2.0'||!Array.isArray(doc.buffers)||!Array.isArray(doc.meshes)||!doc.meshes.length||(doc.images!==undefined&&!Array.isArray(doc.images)))throw badRequest('Use a GLB 2.0 with map geometry.');
       if([...doc.buffers,...(doc.images??[])].some((x:{uri?:string}|null)=>!x||x.uri!==undefined&&(typeof x.uri!=='string'||!x.uri.startsWith('data:'))))throw badRequest('Embed the model’s buffers and textures.');mime='model/gltf-binary';
     }
-    const name=z.string().trim().min(1).max(120).parse(req.headers['x-file-name']??'interior-map');
+    let filename=req.headers['x-file-name']??'interior-map';
+    if(req.headers['x-file-name-encoded']!==undefined) {
+      try { filename=decodeURIComponent(String(req.headers['x-file-name-encoded'])); }
+      catch { throw badRequest('Invalid map filename.'); }
+    }
+    const name=z.string().trim().min(1).max(120).parse(filename);
     const asset=await db.transaction(async tx=>{
       const [updated]=await tx.update(interiors).set({assetVersion:sql`${interiors.assetVersion}+1`,updatedAt:new Date()}).where(eq(interiors.id,id)).returning();
       if(updated.mode!==value.mode)throw conflict('The interior mode changed. Upload again.');

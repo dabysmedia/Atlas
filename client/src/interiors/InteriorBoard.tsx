@@ -4,8 +4,8 @@ import { interiorCell } from '../../../shared/interiors';
 import type { Token } from '../types';
 import { drawPlaceGlyph } from '../map/markers';
 import type { InteriorScene } from './InteriorScene';
-export function InteriorBoard({interior,positions,tokens,selectedTokenId,onCell,onReady,showEntry=false}: {
-  interior:Interior;positions:InteriorPosition[];tokens:Token[];selectedTokenId?:string|null;onCell:(x:number,y:number)=>void;onReady?:()=>void;showEntry?:boolean;
+export function InteriorBoard({interior,positions,tokens,selectedTokenId,onCell,onReady,showEntry=false,assetUrl}: {
+  interior:Interior;positions:InteriorPosition[];tokens:Token[];selectedTokenId?:string|null;onCell:(x:number,y:number)=>void;onReady?:()=>void;showEntry?:boolean;assetUrl?:string;
 }) {
   const host=useRef<HTMLDivElement>(null),gl=useRef<HTMLCanvasElement>(null),hud=useRef<HTMLCanvasElement>(null),scene=useRef<InteriorScene|null>(null);
   const current=useRef({positions,tokens,selectedTokenId,onCell,onReady,showEntry,interior});current.current={positions,tokens,selectedTokenId,onCell,onReady,showEntry,interior};
@@ -17,8 +17,8 @@ export function InteriorBoard({interior,positions,tokens,selectedTokenId,onCell,
     const project=(x:number,y:number)=>engine?engine.project(x,y):{x:w/2+panX+(x-interior.cols*2.5)*scale(),y:h/2+panY+(y-interior.rows*2.5)*scale()};
     const cell=(x:number,y:number)=>engine?engine.cell(x,y):{x:Math.floor(((x-w/2-panX)/scale()+interior.cols*2.5)/5),y:Math.floor(((y-h/2-panY)/scale()+interior.rows*2.5)/5)};
     const ready=()=>{if(!disposed){setLoaded(true);current.current.onReady?.();}};
-    if(interior.mode==='3d')void import('./InteriorScene').then(async({InteriorScene})=>{if(disposed)return;engine=new InteriorScene(gl.current!,canvas,interior);scene.current=engine;engine.resize(w,h);try{await engine.load();}catch(e){if(!disposed)setError(e instanceof Error?e.message:'The 3D map could not load.');}ready();}).catch(e=>{setError(String(e));ready();});
-    else if(interior.asset){image=new Image();image.onload=ready;image.onerror=()=>{setError('The map image could not load.');ready();};image.src=`/api/worlds/${interior.worldId}/interiors/${interior.id}/asset?v=${interior.asset.version}`;}else ready();
+    if(interior.mode==='3d')void import('./InteriorScene').then(async({InteriorScene})=>{if(disposed)return;engine=new InteriorScene(gl.current!,canvas,interior);scene.current=engine;engine.resize(w,h);try{await engine.load(assetUrl);}catch(e){if(!disposed)setError(e instanceof Error?e.message:'The 3D map could not load.');}ready();}).catch(e=>{if(!disposed){setError(String(e));ready();}});
+    else if(interior.asset||assetUrl){image=new Image();image.onload=ready;image.onerror=()=>{setError('The map image could not load.');ready();};image.src=assetUrl??`/api/worlds/${interior.worldId}/interiors/${interior.id}/asset?v=${interior.asset!.version}`;}else ready();
     const resize=()=>{w=Math.max(1,parent.clientWidth);h=Math.max(1,parent.clientHeight);canvas.width=Math.ceil(w*dpr);canvas.height=Math.ceil(h*dpr);engine?.resize(w,h);};const observer=new ResizeObserver(resize);observer.observe(parent);resize();
     let down:{x:number;y:number;button:number;dragging:boolean}|null=null;
     const point=(event:PointerEvent|WheelEvent)=>{const b=canvas.getBoundingClientRect();return{x:event.clientX-b.left,y:event.clientY-b.top};};
@@ -36,6 +36,6 @@ export function InteriorBoard({interior,positions,tokens,selectedTokenId,onCell,
     };raf=requestAnimationFrame(frame);
     const debug={projectCell:(x:number,y:number)=>project(x*5+2.5,y*5+2.5),cell,scene:()=>engine,interior},debugWindow=window as unknown as {__atlasInterior?:unknown};if(!showEntry)debugWindow.__atlasInterior=debug;
     return()=>{disposed=true;if(debugWindow.__atlasInterior===debug)delete debugWindow.__atlasInterior;cancelAnimationFrame(raf);observer.disconnect();engine?.dispose();scene.current=null;if(image){image.onload=null;image.onerror=null;}canvas.removeEventListener('pointerdown',onDown);canvas.removeEventListener('pointermove',onMove);canvas.removeEventListener('pointerup',onUp);canvas.removeEventListener('pointercancel',cancel);canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('contextmenu',menu);};
-  },[interior.id,interior.mode,interior.cols,interior.rows,interior.asset?.version,retry]);
+  },[interior.id,interior.mode,interior.cols,interior.rows,interior.asset?.version,assetUrl,retry]);
   return <div className="interior-board" ref={host}><canvas className="interior-gl" ref={gl} aria-hidden style={{display:interior.mode==='3d'?'block':'none'}}/><canvas ref={hud} className="interior-grid" aria-label="Interior tactical map"/>{!loaded&&<div className="interior-loading" role="status">Preparing the interior…</div>}{error&&<div className="interior-error" role="alert">{error}<button className="btn sm" onClick={()=>setRetry(n=>n+1)}>Retry map</button></div>}</div>;
 }

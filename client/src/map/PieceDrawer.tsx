@@ -1,5 +1,5 @@
 import { motion, useIsPresent } from 'motion/react';
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Flag, Plus, X, Eye, EyeOff, Footprints, Box } from 'lucide-react';
@@ -15,7 +15,7 @@ export const usePlayer = () => useQuery({ queryKey: qk.me, queryFn: () => api<{ 
 export function PieceDrawer({ data, onClose, onSelect, onPlace, onDeployCopy, startHexId, showTrails, onShowTrails }: { startHexId?: string | null; showTrails: boolean; onShowTrails: (v: boolean) => void; data: MapData; onClose: () => void; onSelect: (id: string) => void; onPlace: (t: Token) => void; onDeployCopy: (t: Token) => void }) {
   const present = useIsPresent();
   const drawerRef = useRef<HTMLElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const drawer = drawerRef.current, map = drawer?.closest<HTMLElement>('.mapview'); if (!drawer || !map) return;
     const measure = () => map.style.setProperty('--piece-drawer-height', `${drawer.offsetHeight}px`);
     const observer = new ResizeObserver(measure); observer.observe(drawer); measure();

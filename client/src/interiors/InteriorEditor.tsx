@@ -1,12 +1,17 @@
 import { useState } from 'react';
 import { Map, Box, Upload, Trash2 } from 'lucide-react';
 import { Dialog } from '../components/Dialog';
-import { api, clientHeaders, pendingWrites } from '../api';
+import { api } from '../api';
 import { toastError } from '../components/toast';
 import { InteriorBoard } from './InteriorBoard';
 import type { Interior } from '../../../shared/interiors';
 import { interiorCell } from '../../../shared/interiors';
+import { LocalMapWizard } from './LocalMapWizard';
+import { uploadInteriorMap } from './mapImport';
 export function InteriorEditor({worldId,hexId,initial,onClose,onSaved}: {worldId:string;hexId:string;initial:Interior|null;onClose:()=>void;onSaved:()=>Promise<unknown>}) {
+  return initial ? <InteriorSettings worldId={worldId} hexId={hexId} initial={initial} onClose={onClose} onSaved={onSaved}/> : <LocalMapWizard worldId={worldId} hexId={hexId} onClose={onClose} onSaved={onSaved}/>;
+}
+function InteriorSettings({worldId,hexId,initial,onClose,onSaved}: {worldId:string;hexId:string;initial:Interior;onClose:()=>void;onSaved:()=>Promise<unknown>}) {
   const [value,setValue]=useState<Interior>(initial??{id:'draft',worldId,hexId,name:'',mode:'2d',cols:24,rows:18,entryX:0,entryY:0,visibleToPlayers:false,asset:null});
   const [busy,setBusy]=useState(false),[confirm,setConfirm]=useState<'map'|'interior'|null>(null);
   const path=`/api/worlds/${worldId}/interiors`;
@@ -24,7 +29,7 @@ export function InteriorEditor({worldId,hexId,initial,onClose,onSaved}: {worldId
     <p className="faint">One square = 5 feet. Match the dimensions to your image’s grid; a 3D model fits within this footprint. Click the map to set the party’s entry square.</p>
     <div className="interior-entry-preview"><InteriorBoard interior={value} tokens={[]} positions={[]} showEntry onCell={(x,y)=>{if(!busy)setValue(v=>({...v,entryX:x,entryY:y}));}}/></div>
     <div className="row"><span className="faint grow">Entry: column {value.entryX+1}, row {value.entryY+1}</span><label className="toggle"><input type="checkbox" checked={value.visibleToPlayers} disabled={busy} onChange={e=>setValue(v=>({...v,visibleToPlayers:e.target.checked}))}/>Visible to players</label></div>
-    <label className={`btn ${busy||!value.name.trim()?'disabled':''}`}><Upload size={14}/>{busy?'Saving…':value.asset?'Replace map':'Upload map'}<input type="file" aria-label="Interior map file" hidden disabled={busy||!value.name.trim()} accept={value.mode==='3d'?'.glb':'.png,.jpg,.jpeg,.webp,.gif'} onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(file)void run(async()=>{if(file.size>40*1024*1024)throw Error('Interior maps must be under 40 MB.');const saved=await save();const response=await pendingWrites.track(fetch(`${path}/${saved.id}/asset`,{method:'PUT',headers:{...clientHeaders,'content-type':value.mode==='3d'?'model/gltf-binary':file.type,'x-file-name':file.name},body:file}));const asset=await response.json();if(!response.ok)throw Error(asset.error);setValue(v=>({...v,asset}));await onSaved();});}}/></label>
+    <label className={`btn ${busy?'disabled':''}`}><Upload size={14}/>{busy?'Uploading…':value.asset?'Replace map':'Upload map'}<input type="file" aria-label="Interior map file" hidden disabled={busy} accept={value.mode==='3d'?'.glb':'.png,.jpg,.jpeg,.webp,.gif'} onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(file)void run(async()=>{if(!value.asset)await api(`${path}/${value.id}`,{method:'PATCH',body:{mode:value.mode}});const asset=await uploadInteriorMap(`${path}/${value.id}/asset`,file);setValue(v=>({...v,asset}));await onSaved();});}}/></label>
     {value.asset&&<div className="row"><span className="faint grow">{value.asset.name}</span><button className="btn ghost sm" disabled={busy} onClick={()=>setConfirm('map')}>Remove map</button></div>}
     {confirm&&<div className="interior-confirm" role="alert"><p>{confirm==='map'?'Permanently remove this uploaded map? The interior and party positions remain.':'Delete this interior and its uploaded map? Parties must leave first.'}</p><div className="row"><button className="btn ghost sm" disabled={busy} onClick={()=>setConfirm(null)}>Keep it</button><button className="btn danger-solid sm" disabled={busy} onClick={()=>void run(async()=>{await api(`${path}/${value.id}${confirm==='map'?'/asset':''}?confirm=delete`,{method:'DELETE'});await onSaved();if(confirm==='interior')onClose();else{setValue(v=>({...v,asset:null}));setConfirm(null);}})}>Confirm deletion</button></div></div>}
     <div className="actions">{value.id!=='draft'&&<button className="btn danger ghost" disabled={busy} onClick={()=>setConfirm('interior')}><Trash2 size={14}/>Delete interior</button>}<button className="btn ghost" disabled={busy} onClick={onClose}>Close</button><button className="btn" disabled={busy||!value.name.trim()} onClick={()=>void run(save)}>{value.id==='draft'?'Create interior':'Save changes'}</button></div>

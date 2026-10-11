@@ -29,7 +29,11 @@ try {
   for(const ratio of [1,1.2,1.44,1.46,1.8,3,1.2,1,3]) {
     const state=await inspect(ratio), modeled=ratio>=1.45;assert.equal(state.visible,modeled);assert(state.tiles.every(t=>t.modeled===modeled));
     const labels=await page.evaluate(id=>{const r=window.__atlasMap,t=r.pieceTiles.find(t=>t.token.id===id);r.hoveredTokenId=id;r.selectedTokenId=id;r.pointer={x:t.x,y:t.y};r.layoutPieces();const plates=r.pieceTiles.map(t=>Boolean(t.plate));r.selectedTokenId=null;return plates;},tokens[0].id);
-    assert(labels.every(visible=>visible===modeled),'overview hides names even on hover/selection; exploration shows names');
+    const alpha=await page.evaluate(()=>window.__atlasMap.nameplateAlpha());
+    assert(labels.every(visible=>visible===(alpha>0)),'nameplates remain laid out throughout the overview fade, even on hover/selection');
+    if(ratio===1)assert.equal(alpha,0,'overview hides names');
+    else if(ratio<1.45)assert(alpha>0&&alpha<1,'nameplates fade gradually with zoom');
+    else assert.equal(alpha,1,'exploration shows names fully');
     for(const p of state.positions){assert(p.drift<.001,'one shared world position');assert(p.fit<=40*Math.sqrt(3)/2,'footprint stays in its hex');assert(Math.abs(p.lift-5)<=.61);}
     if(!modeled) for(const tile of state.tiles) for(const other of state.tiles) if(tile.id!==other.id) assert(Math.hypot(tile.x-other.x,tile.y-other.y)>=tile.radius+other.radius,'overview glyphs do not overlap');
     for(const tile of state.tiles){assert(Math.hypot(tile.x-tile.foot.x,tile.y-tile.foot.y)<.001,'2D marker anchor matches terrain');if(modeled)assert(tile.plate.y>=tile.modelBottom+8);}

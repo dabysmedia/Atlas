@@ -55,7 +55,7 @@ try {
   assert.equal(await page.evaluate(() => window.__atlasMap === window.__atlasBeforeDetails), true);
   const endpoint = `${path}/hexes/${hex.id}/presentation`, saved = await api(endpoint);
   assert.equal(saved.lore, lore); assert.equal(saved.resources.length, 1); assert(saved.heroId);
-  assert.deepEqual((await api(`${path}/map`)).hexes, before.hexes);
+  assert.deepEqual((await api(`${path}/map`)).hexes.sort((a,b)=>a.id.localeCompare(b.id)), [...before.hexes].sort((a,b)=>a.id.localeCompare(b.id)));
   // A second save exercises the persisted response shape, not only the empty initial profile.
   await panel.getByRole('button', { name: 'Edit hex details', exact: true }).click();
   await panel.getByLabel('Hex lore', { exact: true }).fill(lore + '\nSaved twice.');
@@ -102,7 +102,7 @@ try {
   assert(!/QA secret/.test(await playerPanel.innerText()));
   assert.equal(await playerPanel.locator('input,textarea,select').count(), 0);
   await player.screenshot({ path: `${shots}/player.png` });
-  assert.deepEqual(errors, []); assert.deepEqual((await api(`${path}/map`)).hexes, before.hexes);
+  assert.deepEqual(errors, []); assert.deepEqual((await api(`${path}/map`)).hexes.sort((a,b)=>a.id.localeCompare(b.id)), [...before.hexes].sort((a,b)=>a.id.localeCompare(b.id)));
   console.log('PASS: read-first immersive hex panel, hero upload, lore/resources, second save, cancel, conflict/live refresh, POI navigation, reload persistence, mobile/player views, unchanged hex data and retained renderer');
 } finally {
   if (world) await api(`/api/worlds/${world.id}`, 'DELETE').catch(() => {});

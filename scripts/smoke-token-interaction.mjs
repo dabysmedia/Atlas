@@ -58,6 +58,8 @@ try {
   await page.mouse.move(start.x,start.y); await page.mouse.down(); await page.mouse.move(end.x,end.y,{steps:15}); await page.mouse.up(); await page.waitForTimeout(700);
   state=await api(`${path}/map`); assert.equal(state.tokens.find(t=>t.id===token.id).hexId,third.id,'invalid drag stays home');
   assert.deepEqual(state.tokens.find(t=>t.id===token.id).trail.map(v=>v.hexId),[origin.id,next.id,third.id]);
+  await page.mouse.move(80,50);
+  await page.screenshot({path:'shots/token-interaction/rounded-trail.png'});
   assert.deepEqual(state.hexes,before.hexes); assert.deepEqual(errors,[]);
   console.log('PASS: idle bob/sway, actual model hover growth/border without material tint, six destinations, click move, drag move, invalid drop, saved trail, unchanged hex data');
 } finally { if(world) await api(`/api/worlds/${world.id}`,'DELETE').catch(()=>{}); await browser.close(); }

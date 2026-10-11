@@ -19,6 +19,7 @@
  */
 import * as THREE from 'three';
 import { recentTokenTrail } from '../../../shared/tokenTrail';
+import { trailStrokes } from './tokenTrail';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { HexMapRenderer, HEX_SIZE, MAX_ZOOM, clamp, type Camera, type RenderInput } from '../map/renderer';
@@ -663,16 +664,28 @@ export class HexMapRenderer3D extends HexMapRenderer {
       const color = new THREE.Color(token.color ?? this.factionColor.get(token.factionId ?? '') ?? '#d6b06a');
       const css = color.getStyle();
       const rgba = (alpha: number) => css.replace('rgb(', 'rgba(').replace(')', `,${alpha})`);
-      hud.lineWidth = 2.5; hud.globalAlpha = token.visibleToPlayers ? 1 : 0.62; hud.setLineDash([5, 4]);
+      hud.lineWidth = 2.5; hud.lineCap = 'round'; hud.lineJoin = 'round';
+      hud.globalAlpha = token.visibleToPlayers ? 1 : 0.62; hud.setLineDash([5, 4]);
+      const strokes = trailStrokes(visits.map(v => ({ x:v.point.cx,y:v.point.cy })), token.id);
+      let inkLength = 0;
       for (let i = 1; i < visits.length; i++) {
         const from = visits[i - 1], to = visits[i];
         const a = this.worldToScreen(from.point.cx, from.point.cy), b = this.worldToScreen(to.point.cx, to.point.cy);
         if (Math.hypot(b.x - a.x, b.y - a.y) < 0.01) continue;
         const fade = hud.createLinearGradient(a.x, a.y, b.x, b.y);
         fade.addColorStop(0, rgba(from.opacity)); fade.addColorStop(1, rgba(to.opacity));
-        hud.strokeStyle = fade; hud.beginPath(); hud.moveTo(a.x, a.y); hud.lineTo(b.x, b.y); hud.stroke();
+        hud.strokeStyle = fade; hud.lineDashOffset = -inkLength;
+        hud.beginPath(); hud.moveTo(a.x, a.y);
+        let previous = a;
+        for (const point of strokes[i - 1].slice(1)) {
+          const projected = this.worldToScreen(point.x, point.y);
+          hud.lineTo(projected.x, projected.y);
+          inkLength += Math.hypot(projected.x - previous.x, projected.y - previous.y);
+          previous = projected;
+        }
+        hud.stroke();
       }
-      hud.setLineDash([]);
+      hud.setLineDash([]); hud.lineDashOffset = 0;
     }
     for (const tile of this.pieceTiles) {
       const t = tile.token, color = this.factionColor.get(t.factionId ?? '') ?? t.color ?? '#d6b06a';

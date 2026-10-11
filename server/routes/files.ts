@@ -5,9 +5,10 @@ import type { Db, DbOrTx } from '../db/index.js';
 import { badRequest, logEvent, notFound } from '../history.js';
 import { getWorld, Uuid } from './worlds.js';
 
-const Kind = z.enum(['miniature', 'wiki-image', 'map-art', 'terrain', 'terrain-archive']);
+const Kind = z.enum(['miniature', 'wiki-image', 'map-art', 'terrain', 'terrain-archive','interior']);
 type Kind = z.infer<typeof Kind>;
 const specs = {
+  interior: ['interior_assets','id',true],
   miniature: ['token_models', 'id', true], 'wiki-image': ['wiki_images', 'id', true],
   'map-art': ['map_art', 'map_id', false], terrain: ['map_model', 'map_id', false],
   'terrain-archive': ['map_model_archive', 'id', false],
@@ -32,6 +33,7 @@ export async function listFiles(db: DbOrTx, world: string) {
     union all select a.map_id, a.name, octet_length(a.bytes), 'map-art', a.mime, a.updated_at from map_art a join maps m on m.id = a.map_id where m.world_id = ${world}
     union all select a.map_id, a.name, octet_length(a.bytes), 'terrain', 'model/gltf-binary', a.updated_at from map_model a join maps m on m.id = a.map_id where m.world_id = ${world}
     union all select a.id, a.name, octet_length(a.bytes), 'terrain-archive', 'model/gltf-binary', a.archived_at from map_model_archive a join maps m on m.id = a.map_id where m.world_id = ${world}
+    union all select a.id, a.name, octet_length(a.bytes), 'interior', a.mime, a.updated_at from interior_assets a where a.world_id = ${world}
     order by date desc, id`);
   const pieces = await db.execute(sql`select model_id, name from tokens where world_id = ${world} and model_id is not null`);
   const pages = await db.execute(sql`select title, content from wiki_pages where world_id = ${world}`);
@@ -78,7 +80,7 @@ export function fileRoutes(app: FastifyInstance, db: Db) {
   app.get('/api/worlds/:w/files/:kind/:id/content', async (req, reply) => {
     const p = req.params as { w: string; kind: string; id: string }, world = (await getWorld(db, p.w)).id;
     const kind = Kind.parse(p.kind), src = source(kind, world, Uuid.parse(p.id));
-    const result = await db.execute(sql`select name, bytes, ${kind === 'wiki-image' || kind === 'map-art' ? sql`mime` : sql`'model/gltf-binary' as mime`} from ${src.table} where ${src.where}`);
+    const result = await db.execute(sql`select name, bytes, ${kind === 'wiki-image' || kind === 'map-art' || kind === 'interior' ? sql`mime` : sql`'model/gltf-binary' as mime`} from ${src.table} where ${src.where}`);
     const file = result.rows[0]; if (!file) throw notFound('File');
     return reply.header('cache-control', 'private, no-store').header('x-content-type-options', 'nosniff')
       .header('content-disposition', `attachment; filename*=UTF-8''${encodeURIComponent(String(file.name)).replace(/['()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`).type(String(file.mime)).send(file.bytes);

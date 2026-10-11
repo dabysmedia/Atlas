@@ -54,6 +54,99 @@ afterAll(async () => { await app?.close(); });
 const pastMidnight = (id: string) =>
   db.update(worlds).set({ daylight: { hour: 23.9, speed: 'fast', at: new Date(Date.now() - 1000).toISOString() } }).where(eq(worlds.id, id));
 
+describe('hex interiors', () => {
+  it('persists maps and tactical positions, guards concurrent movement, and leaves hex data and world trails unchanged', async () => {
+    const w=(await call('POST','/api/worlds',{name:'Interior test',cols:4,rows:4})).body;
+    const other=(await call('POST','/api/worlds',{name:'Interior isolation',cols:4,rows:4})).body;
+    const path=`/api/worlds/${w.id}`,before=(await call('GET',`${path}/map`)).body,hexId=before.hexes[0].id;
+    const faction=(await call('POST',`${path}/factions`,{name:'Test party',isParty:true})).body;
+    const token=(await call('POST',`${path}/tokens`,{name:'Test party',kind:'party',mainParty:true,factionId:faction.id,hexId})).body;
+    const settings={hexId,name:'Test room',mode:'2d',cols:12,rows:10,entryX:3,entryY:4,visibleToPlayers:true};
+    expect((await call('POST',`/api/worlds/${other.id}/interiors`,settings)).status).toBe(400);
+    expect((await call('POST',`${path}/interiors`,{...settings,entryX:12})).status).toBe(400);
+    const i=(await call('POST',`${path}/interiors`,settings)).body,endpoint=`${path}/interiors/${i.id}`,bytes=png(240,200);
+    const upload=await app.inject({method:'PUT',url:`${endpoint}/asset`,headers:{cookie,'content-type':'image/png','x-file-name':'Room.png'},payload:bytes});
+    expect(upload.statusCode).toBe(200);expect(upload.json().version).toBe(1);
+    expect((await call('PATCH',endpoint,{mode:'3d'})).status).toBe(400);
+    expect((await app.inject({method:'GET',url:`/api/worlds/${other.id}/interiors/${i.id}/asset`,headers:{cookie}})).statusCode).toBe(404);
+    expect((await call('PATCH',`${path}/files/interior/${i.id}`,{name:'Renamed room.png'})).status).toBe(200);
+    expect((await call('GET',`${path}/interiors`)).body.interiors[0].asset.name).toBe('Renamed room.png');
+    const entered=await call('POST',`${endpoint}/enter`,{tokenId:token.id});
+    expect(entered.status).toBe(200);expect(entered.body).toMatchObject({x:3,y:4,revision:1});
+    expect((await call('POST',`${endpoint}/enter`,{tokenId:token.id})).status).toBe(409);
+    expect((await call('DELETE',`${endpoint}?confirm=delete`)).status).toBe(409);
+    expect((await call('PATCH',endpoint,{cols:3,entryX:1})).status).toBe(409);
+    expect((await call('PATCH',`${path}/tokens/${token.id}`,{hexId:before.hexes[1].id})).status).toBe(400);
+    expect((await call('POST',`${path}/tokens/${token.id}/move`,{path:[before.hexes[1].id],from:hexId})).body.error).toBe('Leave the interior before moving on the world map.');
+    expect((await call('POST',`${endpoint}/move`,{tokenId:token.id,x:12,y:0,revision:1})).status).toBe(400);
+    const movements=await Promise.all([call('POST',`${endpoint}/move`,{tokenId:token.id,x:5,y:6,revision:1}),call('POST',`${endpoint}/move`,{tokenId:token.id,x:7,y:8,revision:1})]);
+    expect(movements.map(r=>r.status).sort()).toEqual([200,409]);
+    const moved=movements.find(r=>r.status===200)!.body;
+    await app.close();const restarted=await boot();app=restarted.app;db=restarted.db;
+    const persisted=(await call('GET',`${path}/interiors`)).body;
+    expect(persisted.positions).toEqual([moved]);expect(persisted.interiors[0].asset.name).toBe('Renamed room.png');
+    expect((await app.inject({method:'GET',url:`${endpoint}/asset`,headers:{cookie}})).rawPayload).toEqual(bytes);
+    expect((await call('POST',`${endpoint}/leave`,{tokenId:token.id,revision:1})).status).toBe(409);
+    expect((await call('POST',`${endpoint}/leave`,{tokenId:token.id,revision:2})).status).toBe(200);
+    expect((await call('GET',`${path}/interiors`)).body.positions).toEqual([]);
+    const after=(await call('GET',`${path}/map`)).body;
+    expect(after.hexes).toEqual(before.hexes);expect(after.tokens.find((t:{id:string})=>t.id===token.id)).toMatchObject({hexId,trail:token.trail});
+    expect((await call('GET',`${path}/events`)).body.filter((e:{kind:string})=>e.kind.startsWith('interior.')).map((e:{kind:string})=>e.kind).sort()).toEqual(['interior.entered','interior.left','interior.moved']);
+    expect((await call('DELETE',endpoint)).status).toBe(400);
+    expect((await call('DELETE',`${endpoint}?confirm=delete`)).status).toBe(200);
+    expect((await call('GET',`${path}/files`)).body).toEqual([]);
+    await call('DELETE',path);await call('DELETE',`/api/worlds/${other.id}`);
+  });
+  it('restricts hidden interiors, assets and other parties while allowing a player to move and leave their own party',async()=>{
+    const w=(await call('POST','/api/worlds',{name:'Interior permission test',cols:4,rows:4})).body,path=`/api/worlds/${w.id}`;
+    const map=(await call('GET',`${path}/map`)).body,hexId=map.hexes[0].id;
+    const faction=(await call('POST',`${path}/factions`,{name:'Test players',isParty:true})).body,enemy=(await call('POST',`${path}/factions`,{name:'Test other party',isParty:true})).body;
+    const campaign=(await call('POST',`${path}/campaigns`,{name:'Interior test campaign'})).body;
+    const token=(await call('POST',`${path}/tokens`,{name:'Own party',kind:'party',mainParty:true,factionId:faction.id,hexId,campaignId:campaign.id})).body;
+    const other=(await call('POST',`${path}/tokens`,{name:'Other party',kind:'party',mainParty:true,factionId:enemy.id,hexId})).body;
+    await call('POST',`${path}/players`,{username:'test-interior-player',password:'test-player-123',factionId:faction.id,campaignId:campaign.id});
+    const login=await app.inject({method:'POST',url:'/api/auth/login',payload:{username:'test-interior-player',password:'test-player-123'}}),pc=String(login.headers['set-cookie']).split(';')[0];
+    const asPlayer=(method:string,url:string,payload?:unknown)=>app.inject({method:method as 'GET',url,headers:{cookie:pc},...(payload===undefined?{}:{payload:payload as object})});
+    const i=(await call('POST',`${path}/interiors`,{hexId,name:'Hidden room',mode:'2d',cols:8,rows:8,entryX:1,entryY:2,visibleToPlayers:false})).body,ep=`${path}/interiors/${i.id}`;
+    const unexplored=(await call('POST',`${path}/interiors`,{hexId:map.hexes[15].id,name:'Unexplored room',mode:'2d',cols:8,rows:8,entryX:0,entryY:0,visibleToPlayers:true})).body;
+    await app.inject({method:'PUT',url:`${ep}/asset`,headers:{cookie,'content-type':'image/png'},payload:png(64,64)});
+    expect((await asPlayer('GET',`${path}/interiors`)).json().interiors).toEqual([]);
+    expect((await asPlayer('POST',`${path}/interiors/${unexplored.id}/enter`,{tokenId:token.id})).statusCode).toBe(403);
+    expect((await asPlayer('GET',`${ep}/asset`)).statusCode).toBe(403);
+    expect((await asPlayer('POST',`${ep}/enter`,{tokenId:token.id})).statusCode).toBe(403);
+    expect((await asPlayer('PATCH',ep,{visibleToPlayers:true})).statusCode).toBe(403);
+    await call('PATCH',ep,{visibleToPlayers:true});
+    expect((await asPlayer('POST',`${ep}/enter`,{tokenId:other.id})).statusCode).toBe(403);
+    expect((await asPlayer('POST',`${ep}/enter`,{tokenId:token.id})).json()).toMatchObject({x:1,y:2});
+    await call('POST',`${ep}/enter`,{tokenId:other.id});
+    expect((await asPlayer('GET',`${path}/interiors`)).json().positions.map((p:{tokenId:string})=>p.tokenId)).toEqual([token.id]);
+    expect((await asPlayer('POST',`${ep}/move`,{tokenId:other.id,x:2,y:3,revision:1})).statusCode).toBe(403);
+    await call('PATCH',ep,{visibleToPlayers:false}); // A party already inside must still be able to see the map and leave.
+    expect((await asPlayer('GET',`${ep}/asset`)).statusCode).toBe(200);
+    expect((await asPlayer('POST',`${ep}/move`,{tokenId:token.id,x:4,y:5,revision:1})).statusCode).toBe(200);
+    expect((await asPlayer('POST',`${ep}/leave`,{tokenId:token.id,revision:2})).statusCode).toBe(200);
+    expect((await asPlayer('GET',`${ep}/asset`)).statusCode).toBe(403);
+    await call('DELETE',path); // World deletion cascades even with another party still inside.
+  });
+  it('validates 3D assets and versions replacements monotonically even after removal',async()=>{
+    const w=(await call('POST','/api/worlds',{name:'Interior asset test',cols:4,rows:4})).body,path=`/api/worlds/${w.id}`,map=(await call('GET',`${path}/map`)).body;
+    const i=(await call('POST',`${path}/interiors`,{hexId:map.hexes[0].id,name:'Test model room',mode:'3d',cols:10,rows:10,entryX:0,entryY:0,visibleToPlayers:false})).body,ep=`${path}/interiors/${i.id}/asset`;
+    const glb=(doc:object)=>{let json=JSON.stringify(doc);json=json.padEnd(Math.ceil(json.length/4)*4,' ');const text=Buffer.from(json),out=Buffer.alloc(20+text.length);out.write('glTF');out.writeUInt32LE(2,4);out.writeUInt32LE(out.length,8);out.writeUInt32LE(text.length,12);out.writeUInt32LE(0x4e4f534a,16);text.copy(out,20);return out;};
+    const put=(payload:Buffer)=>app.inject({method:'PUT',url:ep,headers:{cookie,'content-type':'model/gltf-binary'},payload});
+    const doc={asset:{version:'2.0'},buffers:[],meshes:[{primitives:[]}]};
+    expect((await put(Buffer.from('bad model'))).statusCode).toBe(400);
+    expect((await put(glb({...doc,buffers:{}}))).statusCode).toBe(400);
+    expect((await put(glb({...doc,buffers:[{uri:'https://example.com/external.bin'}]}))).statusCode).toBe(400);
+    const bytes=glb(doc);expect((await put(bytes)).json().version).toBe(1);
+    expect((await call('DELETE',ep)).status).toBe(400);
+    expect((await call('DELETE',`${path}/files/interior/${i.id}?confirm=delete`)).status).toBe(200);
+    expect((await call('GET',`${path}/interiors`)).body.interiors[0].asset).toBeNull();
+    expect((await put(bytes)).json().version).toBe(2);
+    expect((await app.inject({method:'GET',url:ep,headers:{cookie}})).rawPayload).toEqual(bytes);
+    await call('DELETE',path);
+  });
+});
+
 describe('auth', () => {
   it('rejects anonymous API calls and bad passwords', async () => {
     const anon = await app.inject({ method: 'GET', url: '/api/worlds' });

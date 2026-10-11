@@ -8,7 +8,7 @@ import { TokenPreview } from '../map/TokenPreview';
 import { Dialog } from './Dialog';
 import { toastError } from './toast';
 export type UploadedFile = { id: string; name: string; size: number; kind: string; mime: string; date: string; uses: string[]; blocked: string | null };
-const kinds: Record<string, string> = { miniature: 'Miniatures', 'wiki-image': 'Wiki images', 'map-art': 'Map art', terrain: 'Terrain', 'terrain-archive': 'Archived terrain' };
+const kinds: Record<string, string> = { interior: 'Interior maps', miniature: 'Miniatures', 'wiki-image': 'Wiki images', 'map-art': 'Map art', terrain: 'Terrain', 'terrain-archive': 'Archived terrain' };
 const sizeLabel = (size: number) => size < 1024 * 1024 ? `${(size / 1024).toFixed(1)} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
 export function FileManager() {
   const world = useWorld(), qc = useQueryClient(), location = useLocation(), section = useRef<HTMLElement>(null);
@@ -26,7 +26,7 @@ export function FileManager() {
     try {
       await api(path(f) + (deleting ? '?confirm=delete' : ''), { method: deleting ? 'DELETE' : 'PATCH', ...(!deleting && { body: { name } }) });
       setRename(null); setRemove(null);
-      await Promise.all([qc.invalidateQueries({ queryKey: key }), qc.invalidateQueries({ queryKey: qk.map(world.id) }), qc.invalidateQueries({ queryKey: ['w', world.id, 'tokenModels'] }), qc.invalidateQueries({ queryKey: ['modelArchive', world.id] })]);
+      await Promise.all([qc.invalidateQueries({ queryKey: key }), qc.invalidateQueries({ queryKey: qk.map(world.id) }), qc.invalidateQueries({ queryKey: ['w', world.id, 'tokenModels'] }), qc.invalidateQueries({ queryKey: ['w', world.id, 'interiors'] }), qc.invalidateQueries({ queryKey: ['modelArchive', world.id] })]);
     } catch (error) { toastError(error); } finally { setBusy(false); }
   };
   if (me.data?.role !== 'gm') return null;

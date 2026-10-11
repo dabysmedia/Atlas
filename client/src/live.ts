@@ -12,7 +12,7 @@ import { daySweep } from './daylight';
 
 /** Who is looking at a world: one entry per open screen. */
 export type Viewer = { conn: string; name: string; role: 'gm' | 'player'; since: number };
-type Scope = 'worlds' | 'world' | 'map' | 'pages' | 'page' | 'search' | 'factions' | 'meters' | 'mh' | 'rolls' | 'campaigns' | 'events' | 'fog' | 'modelArchive' | 'files' | 'tokenModels';
+type Scope = 'worlds' | 'world' | 'map' | 'pages' | 'page' | 'search' | 'factions' | 'meters' | 'mh' | 'rolls' | 'campaigns' | 'events' | 'fog' | 'modelArchive' | 'files' | 'tokenModels' | 'interiors';
 type Patch =
   | { op: 'hexes'; ids: string[]; set: Partial<Pick<Hex, 'terrain' | 'state'>> }
   | { op: 'hex'; hex: Hex }

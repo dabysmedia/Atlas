@@ -24,6 +24,7 @@ import { live } from '../live';
 import type { Weather } from '../../../shared/weather';
 import { PieceControls, PieceDrawer, usePlayer } from './PieceDrawer';
 import { isNotableKind } from '../../../shared/markers';
+import { useInteriorLayer } from '../interiors/useInteriorLayer';
 import { canMoveToken, tokenDestinations } from './tokenMovement';
 
 const HAS_WEBGL2 = typeof document !== 'undefined' && webgl2Available();
@@ -83,6 +84,7 @@ export function MapView() {
   const data = mapQ.data;
   const dataRef = useRef(data); dataRef.current = data;
   // Default the fog campaign to the first campaign the first time.
+  const interiors = useInteriorLayer(data, setFocus, r3);
   const fogCamp = campaignId === undefined ? data?.campaigns[0]?.id ?? null : campaignId;
   const fogQ = useQuery({
     queryKey: qk.fog(world.id, fogCamp ?? ''), enabled: !!fogCamp,
@@ -649,6 +651,7 @@ export function MapView() {
     };
     const onLeave = () => { setHover(null); if (rendererRef.current) { if (is3d(r())) (r() as HexMapRenderer3D).pointer = null; r().hoverId = null; r().hoveredTokenId = null; r().brushIds = new Set(); r().invalidate(); } };
     const onKey = (e: KeyboardEvent) => {
+      if(wrapRef.current?.classList.contains('interior-active'))return;
       if (e.code === 'Space' && e.type === 'keyup') { space = false; canvas.style.cursor = ''; }
       if ((e.target as HTMLElement)?.closest('.world-module, input, textarea, select, [contenteditable="true"]') || !rendererRef.current) return;
       if (e.code === 'Space') { space = e.type === 'keydown'; canvas.style.cursor = space ? 'grab' : ''; if (space) e.preventDefault(); return; }
@@ -754,7 +757,7 @@ export function MapView() {
   };
 
   return (
-    <div className={`mapview ${align ? 'aligning' : ''} mode-${mode}`} ref={wrapRef} data-map-mode={mode}>
+    <div className={`mapview ${align ? 'aligning' : ''} mode-${mode} ${interiors.active?'interior-active':''} ${interiors.diving?'interior-diving':''}`} style={{'--interior-origin':`${interiors.origin.x}px ${interiors.origin.y}px`} as React.CSSProperties} ref={wrapRef} data-map-mode={mode}>
       {mode === '3d' && <canvas key="gl" ref={glRef} className="map map-gl" aria-hidden />}
       <canvas key={`hud-${mode}`} ref={canvasRef} className="map" aria-label="Hex map" />
       {!data && <div className="map-loading"><span>Unrolling the map…</span></div>}
@@ -1002,11 +1005,11 @@ export function MapView() {
 
       <AnimatePresence>
         {placing && <div className="piece-place-hint panel" role="status">{placing.deployCopy ? `Choose a hex for another ${placing.name}` : placing.hexId ? `Choose the next adjacent hex for ${placing.name}` : `Choose a hex to deploy ${placing.name}`}<button className="iconbtn" aria-label="Cancel token placement" onClick={() => setPlacing(null)}><X size={14} /></button></div>}
-        {data && focusHex && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusHex.name || 'Hex'}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div>{data.tokens.filter(t => t.hexId === focusHex.id).map(t => <button className="poi" key={t.id} onClick={() => setFocus({ kind: 'token', id: t.id })}>{t.name}</button>)}</aside>}
+        {data && focusHex && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusHex.name || 'Hex'}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div>{data.tokens.filter(t => t.hexId === focusHex.id).map(t => <button className="poi" key={t.id} onClick={() => setFocus({ kind: 'token', id: t.id })}>{t.name}</button>)}{interiors.sidebar(focusHex.id)}</aside>}
         {data && focusToken && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusToken.name}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div><PieceControls token={focusToken} data={data} onMove={() => { setPlacing(focusToken); setDrawerOpen(false); }} /></aside>}
         {data && focusHex && !align && !player && !placing && (
           <HexPanel key={`hex-${focusHex.id}`} hex={focusHex} data={data} fogCampaignId={fogCamp} explored={fogQ.data?.includes(focusHex.id) ?? false}
-            label={r?.label(focusHex) ?? ''} onClose={() => setFocus(null)} onFocus={setFocus}
+            interiorFooter={interiors.sidebar(focusHex.id)} label={r?.label(focusHex) ?? ''} onClose={() => setFocus(null)} onFocus={setFocus}
             snap={(() => { const h = r?.hexById(focusHex.id); return h ? snapAt(h.cx, h.cy, 2.1) : () => null; })()} />
         )}
         {data && focusToken && !align && !player && !placing && (
@@ -1028,6 +1031,7 @@ export function MapView() {
         <p className="muted" style={{ marginTop: 0 }}>The hexes, borders and markers stay exactly as they are. The map falls back to painted terrain.</p>
         <div className="actions"><button className="btn ghost" onClick={() => setConfirmArt(null)}>Keep it</button><button className="btn danger-solid" onClick={() => { setConfirmArt(null); void removeArt(); }}>Remove art</button></div>
       </Dialog>
+      {interiors.layer}
       <span hidden data-art-loaded={artLoaded} />
     </div>
   );

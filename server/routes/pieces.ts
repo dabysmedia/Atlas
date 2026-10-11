@@ -2,7 +2,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Db } from '../db/index.js';
-import { campaigns, campaignFog, factions, hexes, playerAccess, tokenModels, tokens, users, wikiPages } from '../db/schema.js';
+import { campaigns, campaignFog, interiorPositions, factions, hexes, playerAccess, tokenModels, tokens, users, wikiPages } from '../db/schema.js';
 import { hashPassword } from '../auth.js';
 import { badRequest, logEvent, notFound, worldDay } from '../history.js';
 import { changed } from '../live.js';
@@ -106,6 +106,7 @@ export function pieceRoutes(app: FastifyInstance, db: Db) {
     return db.transaction(async tx => {
       const [tok] = await tx.select().from(tokens).where(and(eq(tokens.worldId, w), eq(tokens.id, Uuid.parse(id)))).for('update');
       if (!tok) throw notFound('Token');
+      if (await tx.query.interiorPositions.findFirst({where:eq(interiorPositions.tokenId,tok.id)})) throw badRequest('Leave the interior before moving on the world map.');
       if (req.userRole === 'player') {
         const access = await accessFor(db, req.userId!, w);
         if (!access || tok.factionId !== access.factionId || !tok.visibleToPlayers || !['party', 'unit', 'character', 'marker'].includes(tok.kind)) throw forbidden();

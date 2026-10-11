@@ -1037,13 +1037,15 @@ export class HexMapRenderer3D extends HexMapRenderer {
     }
   }
 
+  /** Keep the island resources warm while the tactical view is open. */
+  suspended = false;
   // ---------------------------------------------------------------- frame
   protected loop(now: number) {
     this.raf = requestAnimationFrame(this.loop);
     const raw = now - this.last;
     const dt = Math.min(0.25, raw / 1000);
     this.last = now;
-    if (!this.w || !this.h) return;
+    if (this.suspended || !this.w || !this.h) return;
     this.watchPace(raw);
     const moving = this.step(dt);
     const gliding = this.stepGlides(dt, now);

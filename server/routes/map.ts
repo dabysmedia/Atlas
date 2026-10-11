@@ -2,7 +2,7 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Db } from '../db/index.js';
-import { campaignFog, campaigns, claims, factions, hexes, mapArt, mapModel, maps, settlements, tokens, type ArtPlacement } from '../db/schema.js';
+import { campaignFog, campaigns, interiorPositions, claims, factions, hexes, mapArt, mapModel, maps, settlements, tokens, type ArtPlacement } from '../db/schema.js';
 import { badRequest, logEvent, notFound, worldDay } from '../history.js';
 import { getWorld, Uuid } from './worlds.js';
 import { gridBounds, hexLabel, type Orientation } from '../../shared/hex.js';
@@ -280,7 +280,11 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     if (body.hexId) await worldHexes(db, w.id, [body.hexId]);
     // Direct GM repositioning is recorded as a break, never an invented path.
     const trail = body.hexId !== undefined && body.hexId !== tok.hexId ? [...tok.trail, { hexId: null, day: w.currentDay, at: new Date().toISOString() }, ...(body.hexId ? [{ hexId: body.hexId, day: w.currentDay, at: new Date().toISOString() }] : [])] : tok.trail;
-    const [row] = await db.update(tokens).set({ ...body, trail, updatedAt: new Date() }).where(eq(tokens.id, tok.id)).returning();
+    const row = await db.transaction(async tx => {
+      await tx.select().from(tokens).where(eq(tokens.id,tok.id)).for('update');
+      if(body.hexId !== undefined && body.hexId !== tok.hexId && await tx.query.interiorPositions.findFirst({where:eq(interiorPositions.tokenId,tok.id)})) throw badRequest('Leave the interior before moving on the world map.');
+      const [updated]=await tx.update(tokens).set({ ...body, trail, updatedAt: new Date() }).where(eq(tokens.id,tok.id)).returning();return updated;
+    });
     if (body.hexId !== undefined && body.hexId !== tok.hexId) {
       const [from, to] = await Promise.all([tok.hexId, body.hexId].map(async (h) => (h ? (await worldHexes(db, w.id, [h]))[0] : undefined)));
       await logEvent(db, {

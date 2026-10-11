@@ -59,7 +59,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected hudCtx: CanvasRenderingContext2D;
   protected scene = new THREE.Scene();
   readonly miniatures = new Miniatures();
-  protected pieceTiles: { token: Token; x: number; y: number; foot: { x: number; y: number } }[] = [];
+  protected pieceTiles: { token: Token; x: number; y: number; foot: { x: number; y: number }; radius: number; modeled: boolean; plate: { x: number; y: number; width: number; height: number } | null; modelBottom: number; modelBounds: { x: number; y: number; width: number; height: number } | null }[] = [];
   protected camera = new THREE.PerspectiveCamera(FOV, 1, 1, 1e5);
   protected key = new THREE.DirectionalLight(0xffffff, 2);
   protected hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
@@ -514,22 +514,77 @@ export class HexMapRenderer3D extends HexMapRenderer {
 
   protected tokenLift(kind: TokenKind, r: number) { return r * (kind === 'city' || kind === 'outpost' ? 1.15 : 1.35); }
   protected floatingPlace(_token: Token) { return true; }
+  /** Both HUD indicators and miniatures use the same positions within their hex. */
+  protected slotPos(token: Token) {
+    if (isNotableKind(token.kind)) return super.slotPos(token);
+    if (!token.hexId) return null;
+    const hex = this.byId.get(token.hexId); if (!hex) return null;
+    const peers = this.tokens.filter(t => t.hexId === token.hexId && !isNotableKind(t.kind) && t.id !== this.dragToken?.token.id).sort((a,b) => a.id.localeCompare(b.id));
+    const i = peers.findIndex(t => t.id === token.id), angle = -Math.PI / 2 + Math.max(0,i) / Math.max(1,peers.length) * Math.PI * 2;
+    const radius = peers.length > 1 ? HEX_SIZE * 0.38 : 0;
+    return { x: hex.cx + Math.cos(angle) * radius, y: hex.cy + Math.sin(angle) * radius };
+  }
+  private miniatureMode() { return this.cam.zoom / this.minZoom() >= 1.45; }
   private layoutPieces() {
     this.pieceTiles = [];
     const groups = new Map<string, Token[]>();
     for (const token of this.tokens) if (!isNotableKind(token.kind) && token.hexId) { const key = this.dragToken?.token.id === token.id ? token.id : token.hexId; const group = groups.get(key) ?? []; group.push(token); groups.set(key, group); }
+    const ctx = this.hudCtx; ctx.save(); ctx.font = '600 12px Inter, sans-serif';
     for (const group of groups.values()) {
       group.sort((a, b) => a.id.localeCompare(b.id));
-      const first = group[0], hex = this.byId.get(first.hexId!), drag = this.dragToken?.token.id === first.id ? this.dragToken : null;
-      if (!hex) continue;
-      const moving = group.length === 1 ? this.tokenPos(first) : null;
-      const anchor = this.worldToScreen(drag?.x ?? moving?.x ?? hex.cx, drag?.y ?? moving?.y ?? hex.cy);
-      group.forEach((token, i) => {
-        const p = this.tokenPos(token); if (!p) return;
-        const col = i % 3, count = Math.min(3, group.length - Math.floor(i / 3) * 3);
-        this.pieceTiles.push({ token, x: anchor.x + (col - (count - 1) / 2) * 82, y: anchor.y - 30 - Math.floor(i / 3) * 49, foot: this.worldToScreen(p.x, p.y) });
-      });
+      const tiles: typeof this.pieceTiles = [];
+      for (const token of group) {
+        const p = this.tokenPos(token); if (!p) continue;
+        const foot = this.worldToScreen(p.x,p.y);
+        // Actual projection accounts for perspective, terrain height, and the current camera angle.
+        const edges = [this.worldToScreen(p.x + HEX_SIZE * 0.82,p.y), this.worldToScreen(p.x,p.y + HEX_SIZE * 0.82)];
+        const hexRadius = Math.min(...edges.map(e => Math.hypot(e.x-foot.x,e.y-foot.y)));
+        const slotFit = group.length > 1 ? 0.38 * 0.9 * Math.sin(Math.PI / group.length) / 0.82 : 0.8;
+        const radius = Math.max(1,Math.min(18,hexRadius * slotFit));
+        const modeled = this.miniatureMode() && this.miniatures.has(token.id);
+        let modelBottom = foot.y;
+        let left=Infinity,top=Infinity,right=-Infinity,bottom=-Infinity;
+        const extent = modeled ? this.miniatures.extent(token.id) : null;
+        if (extent) for (const dx of [-0.5,0.5]) for (const dy of [-0.5,0.5]) for (const dz of [0,1]) {
+          const point = this.projectPoint(extent.x + dx * extent.width,extent.y + dy * extent.depth,extent.foot + dz * extent.height);
+          left=Math.min(left,point.x); right=Math.max(right,point.x); top=Math.min(top,point.y); bottom=Math.max(bottom,point.y);
+          modelBottom = Math.max(modelBottom,point.y);
+        }
+        tiles.push({ token, x: foot.x, y: foot.y, foot, radius, modeled, plate: null, modelBottom, modelBounds: extent ? { x:left,y:top,width:right-left,height:bottom-top } : null });
+      }
+      for (const tile of tiles.filter(t => !t.modeled)) {
+        const hovering = this.pointer && Math.hypot(this.pointer.x-tile.x,this.pointer.y-tile.y) <= Math.max(8,tile.radius+3);
+        // In a dense overview, names appear on hover/selection rather than covering adjacent hexes.
+        if (this.miniatureMode() || tile.radius >= 14 || tile.token.id === this.selectedTokenId || hovering) tile.plate = { x: tile.x-38,y: tile.y+tile.radius+4,width:76,height:18 };
+      }
+      const flat = tiles.filter(t => !t.modeled && t.plate);
+      if (flat.some((tile,i) => flat.slice(i+1).some(other => { const a=tile.plate!,b=other.plate!; return a.x < b.x+b.width+4 && a.x+a.width+4 > b.x && a.y < b.y+b.height+4 && a.y+a.height+4 > b.y; }))) {
+        const center = flat.reduce((sum,t) => sum+t.x,0)/flat.length;
+        let y = Math.max(...tiles.map(t => t.modeled ? t.modelBottom : t.y+t.radius))+6;
+        for (const tile of flat) { tile.plate = { x:center-38,y,width:76,height:18 }; y += 22; }
+      }
+      const modeled = tiles.filter(t => t.modeled);
+      if (modeled.length) {
+        const center = modeled.reduce((sum,t) => sum+t.x,0) / modeled.length;
+        let y = Math.max(...tiles.map(t => t.modeled ? t.modelBottom : (t.plate ? t.plate.y+t.plate.height : t.y+t.radius))) + 10;
+        for (const tile of modeled) {
+          const width = clamp(ctx.measureText(tile.token.name).width + 44,112,164);
+          tile.plate = { x: center-width/2, y, width, height: 30 }; y += 34;
+        }
+      }
+      this.pieceTiles.push(...tiles);
     }
+    // Neighboring hexes can be close in screen space; keep plates out of every silhouette and each other.
+    const silhouettes = this.pieceTiles.map(t => t.modelBounds ?? { x:t.x-t.radius,y:t.y-t.radius,width:t.radius*2,height:t.radius*2 });
+    const occupied: { x:number; y:number; width:number; height:number }[] = [];
+    const overlaps = (a:typeof occupied[number],b:typeof occupied[number]) => a.x < b.x+b.width+4 && a.x+a.width+4 > b.x && a.y < b.y+b.height+4 && a.y+a.height+4 > b.y;
+    for (const tile of [...this.pieceTiles].filter(t => t.plate).sort((a,b) => a.plate!.y-b.plate!.y || a.token.id.localeCompare(b.token.id))) {
+      const plate=tile.plate!;
+      const blocking=[...silhouettes,...occupied].filter(rect => plate.x < rect.x+rect.width+4 && plate.x+plate.width+4 > rect.x).sort((a,b) => a.y-b.y);
+      for (const rect of blocking) if (overlaps(plate,rect)) plate.y=rect.y+rect.height+6;
+      occupied.push(plate);
+    }
+    ctx.restore();
   }
   protected placeTiles: PlaceTile[] = [];
 
@@ -588,7 +643,12 @@ export class HexMapRenderer3D extends HexMapRenderer {
 
   tokenAt(sx: number, sy: number): Token | undefined {
     this.layoutPieces();
-    for (const tile of [...this.pieceTiles].reverse()) if (Math.abs(sx - tile.x) <= (this.miniatures.has(tile.token.id) ? 41 : 38) && sy >= tile.y - 19 && sy <= tile.y + 35) return tile.token;
+    for (const tile of [...this.pieceTiles].reverse()) {
+      const p = tile.plate;
+      if (p && sx >= p.x && sx <= p.x+p.width && sy >= p.y && sy <= p.y+p.height) return tile.token;
+    }
+    const flat = this.pieceTiles.filter(t => !t.modeled && Math.hypot(sx-t.x,sy-t.y) <= t.radius+3).sort((a,b) => Math.hypot(sx-a.x,sy-a.y)-Math.hypot(sx-b.x,sy-b.y));
+    if (flat.length) return flat[0].token;
     const miniature = this.miniatures.hit(sx, sy, this.w, this.h, this.camera);
     if (miniature) return this.tokens.find(t => t.id === miniature);
     this.layoutPlaces();
@@ -619,19 +679,25 @@ export class HexMapRenderer3D extends HexMapRenderer {
     for (const tile of this.pieceTiles) {
       const t = tile.token, color = t.color ?? this.factionColor.get(t.factionId ?? '') ?? '#d6b06a';
       hud.globalAlpha = t.visibleToPlayers ? 1 : 0.62;
-      hud.strokeStyle = color; hud.lineWidth = 1; hud.beginPath(); hud.moveTo(tile.foot.x, tile.foot.y); hud.lineTo(tile.x, tile.y + 17); hud.stroke();
-      const modeled = this.miniatures.has(t.id);
-      const radius = modeled ? 12 : 18;
-      if (!modeled) { const sprite = markerSprite(t.kind, color, radius, this.dpr); const size = sprite.canvas.width / this.dpr; hud.drawImage(sprite.canvas, tile.x - size / 2, tile.y - size / 2, size, size); }
-      if (!modeled && this.selectedTokenId === t.id) { hud.strokeStyle = '#8fe8e2'; hud.lineWidth = 2; hud.beginPath(); hud.arc(tile.x, tile.y, radius + 3, 0, Math.PI * 2); hud.stroke(); }
-      hud.font = '600 10px Inter, sans-serif'; hud.textAlign = 'center'; hud.textBaseline = 'middle';
-      const plateWidth = modeled ? 82 : 76, plateY = tile.y + 17;
-      hud.fillStyle = 'rgba(6,12,17,.92)'; hud.beginPath(); hud.roundRect(tile.x - plateWidth / 2, plateY, plateWidth, 18, 5); hud.fill();
+      if (!tile.modeled) {
+        const sprite = markerSprite(t.kind,color,tile.radius,this.dpr), size = sprite.canvas.width/this.dpr;
+        hud.drawImage(sprite.canvas,tile.x-size/2,tile.y-size/2,size,size);
+        if (this.selectedTokenId === t.id) { hud.strokeStyle = '#8fe8e2'; hud.lineWidth = 2; hud.beginPath(); hud.arc(tile.x,tile.y,tile.radius+2,0,Math.PI*2); hud.stroke(); }
+      }
+      const plate = tile.plate; if (!plate) continue;
+      if (tile.modeled) {
+        hud.strokeStyle = color; hud.globalAlpha *= 0.45; hud.lineWidth = 1;
+        hud.beginPath(); hud.moveTo(tile.foot.x,tile.modelBottom+3); hud.lineTo(plate.x+plate.width/2,plate.y); hud.stroke();
+        hud.globalAlpha = t.visibleToPlayers ? 1 : 0.62;
+      }
+      hud.fillStyle = 'rgba(6,12,17,.92)'; hud.beginPath(); hud.roundRect(plate.x,plate.y,plate.width,plate.height,tile.modeled ? 8 : 5); hud.fill();
       hud.strokeStyle = this.selectedTokenId === t.id ? '#8fe8e2' : color; hud.lineWidth = this.selectedTokenId === t.id ? 2 : 1; hud.stroke();
-      if (modeled) { const icon = markerSprite(t.kind, color, 6, this.dpr), size = icon.canvas.width / this.dpr; hud.drawImage(icon.canvas, tile.x - plateWidth / 2 + 9 - size / 2, plateY + 9 - size / 2, size, size); }
-      hud.fillStyle = '#f4ead4';
-      let name = `${!t.visibleToPlayers ? '◌ ' : ''}${t.name}`; const available = modeled ? 59 : 70;
-      while (hud.measureText(name).width > available && name.length > 2) name = name.slice(0, -2) + '…'; hud.fillText(name, tile.x + (modeled ? 8 : 0), plateY + 9);
+      if (tile.modeled) drawPlaceGlyph(hud,t.kind,false,plate.x+16,plate.y+15,20,color);
+      hud.font = tile.modeled ? '600 12px Inter, sans-serif' : '600 10px Inter, sans-serif';
+      hud.textAlign = tile.modeled ? 'left' : 'center'; hud.textBaseline = 'middle'; hud.fillStyle = '#f4ead4';
+      let name = `${!t.visibleToPlayers ? '◌ ' : ''}${t.name}`; const available = plate.width-(tile.modeled ? 42 : 6);
+      while (hud.measureText(name).width > available && name.length > 2) name = name.slice(0,-2)+'…';
+      hud.fillText(name,tile.modeled ? plate.x+32 : plate.x+plate.width/2,plate.y+plate.height/2);
     }
     hud.restore();
     this.layoutPlaces();
@@ -1038,6 +1104,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.sky.mesh.position.copy(this.camera.position);
     this.sky.mesh.scale.setScalar(this.camera.far * 0.9);
     this.water.update(this.gl, now / 1000, this.camera, this.light);
+    this.miniatures.group.visible = this.miniatureMode();
     this.miniatures.update(this.tokens, t => this.tokenPos(t), (x, y) => this.groundAt(x, y), () => this.invalidate());
     this.gl.render(this.scene, this.camera);
     this.layoutLabels(now);

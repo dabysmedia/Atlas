@@ -5,6 +5,8 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 import { miniatureStatus, reportMiniature } from './modelStatus';
 import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { HEX_SIZE } from '../../../shared/hex';
+import { isNotableKind } from '../../../shared/markers';
 import type { Token } from '../types';
 export class Miniatures {
   readonly group = new THREE.Group();
@@ -39,24 +41,28 @@ export class Miniatures {
       let piece = this.pieces.get(token.id);
       if (!piece) {
         const object = new THREE.Group(), model = clone(asset), box = new THREE.Box3().setFromObject(model), size = box.getSize(new THREE.Vector3());
-        const scale = Math.min(46 / Math.max(size.y, 0.001), 56 / Math.max(size.x, size.z, 0.001));
+        const scale = Math.min(46 / Math.max(size.y, 0.001), HEX_SIZE * 1.64 / Math.max(Math.hypot(size.x, size.z), 0.001));
         model.scale.setScalar(scale); model.position.set(-(box.min.x + box.max.x) * scale / 2, -box.min.y * scale, -(box.min.z + box.max.z) * scale / 2);
-        object.add(model); object.userData.footprint = Math.max(size.x, size.z) * scale; object.userData.tokenId = token.id; object.traverse(o => { o.userData.tokenId = token.id; if ((o as THREE.Mesh).isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+        object.add(model); object.userData.footprint = Math.hypot(size.x, size.z) * scale; object.userData.extent = { width: size.x * scale, depth: size.z * scale, height: size.y * scale }; object.userData.tokenId = token.id; object.traverse(o => { o.userData.tokenId = token.id; if ((o as THREE.Mesh).isMesh) { o.castShadow = true; o.receiveShadow = true; } });
         piece = { modelId: token.modelId, object }; this.pieces.set(token.id, piece); this.group.add(object);
       }
       const p = pos(token);
       if (p) {
-        const peers = tokens.filter(t => t.hexId === token.hexId).sort((a, b) => a.id.localeCompare(b.id));
-        const index = peers.findIndex(t => t.id === token.id);
-        const maxFootprint = peers.length > 1 ? 36 * Math.sin(Math.PI / peers.length) : 56;
+        const peers = tokens.filter(t => t.hexId === token.hexId && isNotableKind(t.kind) === isNotableKind(token.kind));
+        const radius = peers.length > 1 ? HEX_SIZE * 0.38 : 0;
+        const maxFootprint = peers.length > 1 ? Math.min(HEX_SIZE * 1.64 - radius * 2, radius * 3.6 * Math.sin(Math.PI / peers.length)) : HEX_SIZE * 1.64;
         piece.object.scale.setScalar(Math.min(1, maxFootprint / Math.max(piece.object.userData.footprint, 0.001)));
-        const angle = index / peers.length * Math.PI * 2, radius = peers.length > 1 ? 20 : 0;
-        const x = p.x + Math.cos(angle) * radius, y = p.y + Math.sin(angle) * radius;
-        piece.object.position.set(x, ground(x, y) + 5, y);
+        // tokenPos already includes the shared-hex slot and any movement interpolation.
+        piece.object.position.set(p.x, ground(p.x, p.y) + 5, p.y);
       }
     }
   }
   has(id: string) { return this.pieces.has(id); }
-  hit(x: number, y: number, w: number, h: number, camera: THREE.Camera) { this.ndc.set(x / w * 2 - 1, 1 - y / h * 2); this.ray.setFromCamera(this.ndc, camera); return this.ray.intersectObjects(this.group.children, true)[0]?.object.userData.tokenId as string | undefined; }
+  extent(id: string) {
+    const object = this.pieces.get(id)?.object; if (!object) return null;
+    const e = object.userData.extent as { width: number; depth: number; height: number };
+    return { x: object.position.x, y: object.position.z, foot: object.position.y, width: e.width * object.scale.x, depth: e.depth * object.scale.z, height: e.height * object.scale.y };
+  }
+  hit(x: number, y: number, w: number, h: number, camera: THREE.Camera) { if (!this.group.visible) return undefined; this.ndc.set(x / w * 2 - 1, 1 - y / h * 2); this.ray.setFromCamera(this.ndc, camera); return this.ray.intersectObjects(this.group.children, true)[0]?.object.userData.tokenId as string | undefined; }
   dispose() { this.disposed = true; this.draco.dispose(); this.ktx?.dispose(); for (const asset of this.assets.values()) this.release(asset); this.assets.clear(); this.pieces.clear(); this.group.clear(); }
 }

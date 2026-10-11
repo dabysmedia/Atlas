@@ -119,8 +119,8 @@ try {
   await dm.waitForFunction(name => { const panels = document.querySelectorAll('.token-panel'); return panels.length === 1 && panels[0].querySelector('input[aria-label="Marker name"]')?.value === name; }, main.name);
   await until(async () => (await api(dm, `${path}/map`)).tokens.find(t => t.id === main.id).hexId === route[0]);
   await dm.evaluate(() => window.__atlasMap.frame(performance.now(), false));
-  const picks = await dm.evaluate(ids => { const r = window.__atlasMap; r.layoutPieces(); return r.pieceTiles.filter(t => ids.includes(t.token.id)).map(t => ({ id: t.token.id, x: t.x, y: t.y, picked: r.tokenAt(t.x,t.y)?.id })); }, [main.id, scout.id]);
-  assert.equal(picks.length, 2); assert(picks.every(t => t.id === t.picked)); assert(Math.abs(picks[0].x - picks[1].x) >= 80);
+  const picks = await dm.evaluate(ids => { const r = window.__atlasMap; r.layoutPieces(); return r.pieceTiles.filter(t => ids.includes(t.token.id)).map(t => { const x=t.plate ? t.plate.x+t.plate.width/2 : t.x, y=t.plate ? t.plate.y+t.plate.height/2 : t.y; return {id:t.token.id,x,y,picked:r.tokenAt(x,y)?.id}; }); }, [main.id, scout.id]);
+  assert.equal(picks.length, 2); assert(picks.every(t => t.id === t.picked)); assert(Math.hypot(picks[0].x-picks[1].x,picks[0].y-picks[1].y) > 20);
   const cards = await dm.locator('.piece-row').evaluateAll(rows => rows.map(r => { const b = r.getBoundingClientRect(); return { x: b.x, y: b.y }; }));
   assert.equal(cards.length, 2); assert(Math.abs(cards[0].y - cards[1].y) < 1 && cards[1].x > cards[0].x);
   assert.equal(await dm.getByRole('button', { name: 'Return to drawer', exact: true }).count(), 0);

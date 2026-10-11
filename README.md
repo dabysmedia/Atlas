@@ -49,7 +49,11 @@ Create factions in the Factions module; **Designate as player party** creates th
 
 Token details allow a self-contained **GLB miniature** (10 MB limit), a model from the world's existing library,
 or a faction-colored 2D indicator. Models float slightly above sampled terrain. HUD indicators and names remain readable at
-every zoom; pieces sharing a hex get separate slots and can also be selected from the hex's contents or drawer.
+every zoom; pieces sharing a hex get separate slots and can also be selected from the hex's contents or drawer. Overview uses 2D indicators sized to their projected hex; exploration restores assigned
+miniatures. Both use the same world slots, with model footprints fitted inside the hex. Exploration nameplates sit
+below model silhouettes, with a 20px icon and collision spacing. Dense overview names appear on hover or selection.
+`scripts/smoke-token-zoom.mjs` checks zoom-mode switching, terrain anchors, shared-hex selection, and label clearance.
+
 
 Use **Move to next hex** or drag a moving piece to an adjacent hex. The server stores ordered visits and appends
 each movement to the chronicle atomically. Main-party trails draw on the map and reveal their campaign's visited

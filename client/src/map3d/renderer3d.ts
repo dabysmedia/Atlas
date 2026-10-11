@@ -559,33 +559,14 @@ export class HexMapRenderer3D extends HexMapRenderer {
         // In a dense overview, names appear on hover/selection rather than covering adjacent hexes.
         if (this.miniatureMode() || tile.radius >= 14 || tile.token.id === this.selectedTokenId || tile.token.id === this.hoveredTokenId || hovering) { const size = tokenNameplateSize(ctx, tile.token, false); tile.plate = { x:tile.x-size.width/2,y:tile.y+tile.radius+5,...size }; }
       }
-      const flat = tiles.filter(t => !t.modeled && t.plate);
-      if (flat.some((tile,i) => flat.slice(i+1).some(other => { const a=tile.plate!,b=other.plate!; return a.x < b.x+b.width+4 && a.x+a.width+4 > b.x && a.y < b.y+b.height+4 && a.y+a.height+4 > b.y; }))) {
-        const center = flat.reduce((sum,t) => sum+t.x,0)/flat.length;
-        let y = Math.max(...tiles.map(t => t.modeled ? t.modelBottom : t.y+t.radius))+6;
-        for (const tile of flat) { const size = tokenNameplateSize(ctx, tile.token, false); tile.plate = { x:center-size.width/2,y,...size }; y += size.height + 5; }
-      }
-      const modeled = tiles.filter(t => t.modeled);
-      if (modeled.length) {
-        const center = modeled.reduce((sum,t) => sum+t.x,0) / modeled.length;
-        let y = Math.max(...tiles.map(t => t.modeled ? t.modelBottom : (t.plate ? t.plate.y+t.plate.height : t.y+t.radius))) + 10;
-        for (const tile of modeled) {
-          const size = tokenNameplateSize(ctx, tile.token, true);
-          tile.plate = { x:center-size.width/2,y,...size }; y += size.height + 6;
-        }
+      for (const tile of tiles.filter(t => t.modeled)) {
+        const size = tokenNameplateSize(ctx, tile.token, true);
+        tile.plate = { x:tile.x-size.width/2,y:tile.modelBottom+10,...size };
       }
       this.pieceTiles.push(...tiles);
     }
-    // Neighboring hexes can be close in screen space; keep plates out of every silhouette and each other.
-    const silhouettes = this.pieceTiles.map(t => t.modelBounds ?? { x:t.x-t.radius,y:t.y-t.radius,width:t.radius*2,height:t.radius*2 });
-    const occupied: { x:number; y:number; width:number; height:number }[] = [];
-    const overlaps = (a:typeof occupied[number],b:typeof occupied[number]) => a.x < b.x+b.width+4 && a.x+a.width+4 > b.x && a.y < b.y+b.height+4 && a.y+a.height+4 > b.y;
-    for (const tile of [...this.pieceTiles].filter(t => t.plate).sort((a,b) => a.plate!.y-b.plate!.y || a.token.id.localeCompare(b.token.id))) {
-      const plate=tile.plate!;
-      const blocking=[...silhouettes,...occupied].filter(rect => plate.x < rect.x+rect.width+4 && plate.x+plate.width+4 > rect.x).sort((a,b) => a.y-b.y);
-      for (const rect of blocking) if (overlaps(plate,rect)) plate.y=rect.y+rect.height+6;
-      occupied.push(plate);
-    }
+    // Keep each icon and plate together; hovered pieces paint last without moving either anchor.
+    this.pieceTiles.sort((a,b) => Number(a.token.id === this.hoveredTokenId)-Number(b.token.id === this.hoveredTokenId));
     ctx.restore();
   }
   protected placeTiles: PlaceTile[] = [];
@@ -645,14 +626,14 @@ export class HexMapRenderer3D extends HexMapRenderer {
 
   tokenAt(sx: number, sy: number): Token | undefined {
     this.layoutPieces();
-    for (const tile of [...this.pieceTiles].reverse()) {
-      const p = tile.plate;
-      if (p && sx >= p.x && sx <= p.x+p.width && sy >= p.y && sy <= p.y+p.height) return tile.token;
-    }
     const flat = this.pieceTiles.filter(t => !t.modeled && Math.hypot(sx-t.x,sy-t.y) <= t.radius+3).sort((a,b) => Math.hypot(sx-a.x,sy-a.y)-Math.hypot(sx-b.x,sy-b.y));
     if (flat.length) return flat[0].token;
     const miniature = this.miniatures.hit(sx, sy, this.w, this.h, this.camera);
     if (miniature) return this.tokens.find(t => t.id === miniature);
+    for (const tile of [...this.pieceTiles].reverse()) {
+      const p = tile.plate;
+      if (p && sx >= p.x && sx <= p.x+p.width && sy >= p.y && sy <= p.y+p.height) return tile.token;
+    }
     this.layoutPlaces();
     for (const tile of [...this.placeTiles].reverse()) {
       if (tile.alpha < 0.05) continue;

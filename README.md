@@ -73,7 +73,8 @@ Token details allow a self-contained **GLB miniature** (10 MB limit), a model fr
 or a faction-colored 2D indicator. Models float slightly above sampled terrain. HUD indicators and names remain readable at
 every zoom; pieces sharing a hex get separate slots and can also be selected from the hex's contents or drawer. Overview uses 2D indicators sized to their projected hex; exploration restores assigned
 miniatures. Both use the same world slots, with model footprints fitted inside the hex. Exploration nameplates sit
-below model silhouettes, with a 20px icon and collision spacing. Dense overview names appear on hover or selection.
+below their own model silhouettes, with a 20px icon. Names remain pinned to their markers; overlaps are allowed,
+and hovering brings that token and its nameplate to the front. Dense overview names appear on hover or selection.
 `scripts/smoke-token-zoom.mjs` checks zoom-mode switching, terrain anchors, shared-hex selection, and label clearance.
 
 

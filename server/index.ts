@@ -20,6 +20,7 @@ import { chronicleRoutes } from './routes/chronicle.js';
 import { seedDemoWorld, upgradeDemo } from './worlds.js';
 import { recoverRemovedIsland, seedNewWorldOnce, upgradeNewWorldIsland } from './lore/newworld.js';
 import { worlds } from './db/schema.js';
+import { fileRoutes } from './routes/files.js';
 import { pieceRoutes } from './routes/pieces.js';
 import { accessFor, forbidden } from './tokenAccess.js';
 
@@ -80,6 +81,7 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
     mapRoutes(api, db);
     modelRoutes(api, db);
     pieceRoutes(api, db);
+    fileRoutes(api, db);
     factionRoutes(api, db);
     chronicleRoutes(api, db);
   });

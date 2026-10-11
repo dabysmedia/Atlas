@@ -1,6 +1,6 @@
 /**
- * 3D models are never thrown away: removing or replacing one moves it to `map_model_archive`, and
- * an archived model can be put back. Versions only ever grow per map, so the browser's cached copy
+ * Removing or replacing 3D terrain moves it to `map_model_archive`; the GM file manager can purge archives.
+ * Archived models can be put back. Versions only ever grow per map, so the browser's cached copy
  * of one model is never mistaken for another.
  */
 import { and, desc, eq, sql } from 'drizzle-orm';
@@ -23,11 +23,11 @@ export async function archiveModel(tx: DbOrTx, mapId: string, reason: 'removed' 
 
 /** One past the highest version this map has ever had, live or archived. */
 export async function nextModelVersion(tx: DbOrTx, mapId: string) {
-  const res = await tx.execute(sql`select greatest(
+  const res = await tx.execute(sql`update maps set model_version = greatest(model_version,
     coalesce((select max(version) from map_model where map_id = ${mapId}), 0),
-    coalesce((select max(version) from map_model_archive where map_id = ${mapId}), 0))::int as v`);
+    coalesce((select max(version) from map_model_archive where map_id = ${mapId}), 0)) + 1 where id = ${mapId} returning model_version as v`);
   const v = Number((res.rows[0] as { v: number }).v);
-  return v + 1;
+  return v;
 }
 
 /** Put a model on the map, archiving whatever was there. */

@@ -64,6 +64,20 @@
       "when": 1791679666374,
       "tag": "0008_faction_pieces",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791685013024,
+      "tag": "0009_file_names",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791685401341,
+      "tag": "0010_asset_versions",
+      "breakpoints": true
     }
   ]
 }

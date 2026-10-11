@@ -55,7 +55,7 @@ export function PieceDrawer({ data, onClose, onSelect, onPlace, onDeployCopy, st
           <input className="input" aria-label="Player password" type="password" placeholder="Password (10+ characters)" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" />
           <button className="btn" disabled={busy || !username.trim() || password.length < 10} onClick={() => run(async () => { await api(`/api/worlds/${world.id}/players`, { body: { username, password, factionId, campaignId: campaign || null } }); setUsername(''); setPassword(''); })}>Create player account</button>
           <PlayerList />
-        </div></details></div>
+        </div></details><Link className="btn ghost sm" to={`/w/${world.id}/settings#files`} onClick={onClose}>Manage files</Link></div>
       </>}
     </>}
   </motion.aside>;

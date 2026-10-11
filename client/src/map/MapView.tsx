@@ -397,7 +397,7 @@ export function MapView() {
     if (!file.type.startsWith('image/')) { toast('That file is not an image.'); return; }
     if (file.size > 25 * 1024 * 1024) { toast('Images up to 25 MB, please.'); return; }
     try {
-      const res = await pendingWrites.track(fetch(`/api/worlds/${world.id}/map/art`, { method: 'PUT', body: file, headers: { ...clientHeaders, 'content-type': file.type }, credentials: 'same-origin' }));
+      const res = await pendingWrites.track(fetch(`/api/worlds/${world.id}/map/art`, { method: 'PUT', body: file, headers: { ...clientHeaders, 'content-type': file.type, 'x-file-name': file.name.slice(0, 120) }, credentials: 'same-origin' }));
       const body = await res.json();
       if (!res.ok) throw new ApiError(res.status, body?.error ?? res.statusText);
       const meta = body as MapArt;

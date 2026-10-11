@@ -103,7 +103,7 @@ export const wikiPages = pgTable('wiki_pages', {
 
 /** Wiki images belong to the world, so copying one between pages keeps it intact. */
 export const wikiImages = pgTable('wiki_images', {
-  id: id(), worldId: worldRef(), mime: text('mime').notNull(), bytes: bytea('bytes').notNull(),
+  id: id(), worldId: worldRef(), name: text('name').notNull().default('wiki-image'), mime: text('mime').notNull(), bytes: bytea('bytes').notNull(),
   width: integer('width').notNull(), height: integer('height').notNull(), createdAt: created(),
 }, (t) => [index('wiki_images_world_idx').on(t.worldId)]);
 
@@ -121,6 +121,8 @@ export type MapLayout = { orientation: 'flat' | 'pointy'; cols: number; rows: nu
  * levels (inside-a-hex, boots-on-the-ground) hang child maps off a hex here.
  */
 export const maps = pgTable('maps', {
+  modelVersion: integer('model_version').notNull().default(0),
+  artVersion: integer('art_version').notNull().default(0),
   id: id(),
   worldId: worldRef(),
   name: text('name').notNull(),
@@ -137,6 +139,7 @@ export type ArtPlacement = { x: number; y: number; w: number; h: number; opacity
  * without a volume; `version` busts caches when the image is replaced.
  */
 export const mapArt = pgTable('map_art', {
+  name: text('name').notNull().default('map-art'),
   mapId: uuid('map_id').primaryKey().references(() => maps.id, { onDelete: 'cascade' }),
   mime: text('mime').notNull(),
   bytes: bytea('bytes').notNull(),

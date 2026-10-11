@@ -810,3 +810,84 @@ describe('history', () => {
     await c.end();
   });
 });
+
+
+describe('uploaded file manager', () => {
+  const glb = () => {
+    const json = Buffer.from(JSON.stringify({ asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [] }] }).padEnd(96, ' '));
+    const bytes = Buffer.alloc(20+json.length); bytes.write('glTF'); bytes.writeUInt32LE(2,4); bytes.writeUInt32LE(bytes.length,8); bytes.writeUInt32LE(json.length,12); bytes.writeUInt32LE(0x4e4f534a,16); json.copy(bytes,20); return bytes;
+  };
+  it('keeps renamed bytes across restarts, isolates worlds, and removes miniature assignments without moving pieces', async () => {
+    const w = (await call('POST','/api/worlds',{name:'File manager QA',cols:4,rows:4})).body;
+    const other = (await call('POST','/api/worlds',{name:'Other files QA',cols:4,rows:4})).body;
+    const path = `/api/worlds/${w.id}`, bytes = glb();
+    const model = (await app.inject({method:'POST',url:`${path}/token-models?name=accidental.glb`,headers:{cookie,'content-type':'model/gltf-binary'},payload:bytes})).json();
+    const before = (await call('GET',`${path}/map`)).body;
+    const piece = (await call('POST',`${path}/tokens`,{name:'Test piece',kind:'unit',hexId:before.hexes[0].id,modelId:model.id})).body;
+    const endpoint = `${path}/files/miniature/${model.id}`;
+    expect((await call('GET',`${path}/files`)).body).toContainEqual(expect.objectContaining({id:model.id,name:'accidental.glb',uses:['Test piece']}));
+    expect((await call('PATCH',`/api/worlds/${other.id}/files/miniature/${model.id}`,{name:'foreign.glb'})).status).toBe(404);
+    expect((await call('DELETE',`/api/worlds/${other.id}/files/miniature/${model.id}?confirm=delete`)).status).toBe(404);
+    expect((await call('PATCH',endpoint,{name:'../invalid'})).status).toBe(400);
+    expect((await call('PATCH',endpoint,{name:'Renamed scout.glb'})).status).toBe(200);
+    await app.close(); const restarted = await boot(); app = restarted.app; db = restarted.db;
+    const download = await app.inject({method:'GET',url:`${endpoint}/content`,headers:{cookie}});
+    expect(download.rawPayload).toEqual(bytes); expect(download.headers['content-disposition']).toContain('Renamed%20scout.glb');
+    expect((await call('GET',`${path}/files`)).body[0].name).toBe('Renamed scout.glb');
+    expect((await call('DELETE',endpoint)).status).toBe(400);
+    expect((await call('DELETE',`${endpoint}?confirm=delete`)).status).toBe(200);
+    const after = (await call('GET',`${path}/map`)).body;
+    expect(after.tokens.find((t:{id:string}) => t.id===piece.id)).toMatchObject({modelId:null,hexId:piece.hexId,trail:piece.trail,data:piece.data});
+    expect(after.hexes.sort((a:{id:string},b:{id:string})=>a.id.localeCompare(b.id))).toEqual(before.hexes.sort((a:{id:string},b:{id:string})=>a.id.localeCompare(b.id)));
+    expect((await app.inject({method:'GET',url:`${path}/token-models/${model.id}`,headers:{cookie}})).statusCode).toBe(404);
+    await call('DELETE',path); await call('DELETE',`/api/worlds/${other.id}`);
+  });
+  it('protects referenced wiki images and active terrain while allowing unused files and archives to be deleted', async () => {
+    const w = (await call('POST','/api/worlds',{name:'File usage QA',cols:4,rows:4})).body, path = `/api/worlds/${w.id}`;
+    const image = (await app.inject({method:'POST',url:`${path}/wiki-images?name=reference.png`,headers:{cookie,'content-type':'image/png'},payload:png(64,64)})).json();
+    const page = (await call('POST',`${path}/pages`,{title:'Image reference',content:{type:'doc',content:[{type:'paragraph',content:[{type:'image',attrs:{src:image.src}}]}]}})).body;
+    let files = (await call('GET',`${path}/files`)).body;
+    expect(files.find((f:{id:string})=>f.id===image.id)).toMatchObject({name:'reference.png',uses:['Image reference'],blocked:expect.any(String)});
+    const imgPath = `${path}/files/wiki-image/${image.id}`;
+    expect((await call('PATCH',imgPath,{name:'New image.png'})).status).toBe(200);
+    expect((await call('DELETE',`${imgPath}?confirm=delete`)).status).toBe(409);
+    expect((await app.inject({method:'GET',url:image.src,headers:{cookie}})).statusCode).toBe(200);
+    await call('PATCH',`${path}/pages/${page.id}`,{content:{type:'doc',content:[{type:'paragraph'}]}});
+    expect((await call('DELETE',`${imgPath}?confirm=delete`)).status).toBe(200);
+    await app.inject({method:'PUT',url:`${path}/map/model`,headers:{cookie,'content-type':'model/gltf-binary','x-file-name':'terrain.glb'},payload:glb()});
+    files=(await call('GET',`${path}/files`)).body;
+    const terrain=files.find((f:{kind:string})=>f.kind==='terrain');
+    expect((await call('DELETE',`${path}/files/terrain/${terrain.id}?confirm=delete`)).status).toBe(409);
+    await call('DELETE',`${path}/map/model`);
+    const archive=(await call('GET',`${path}/files`)).body.find((f:{kind:string})=>f.kind==='terrain-archive');
+    expect((await call('PATCH',`${path}/files/terrain-archive/${archive.id}`,{name:'Old terrain.glb'})).status).toBe(200);
+    expect((await app.inject({method:'GET',url:`${path}/files/terrain-archive/${archive.id}/content`,headers:{cookie}})).rawPayload).toEqual(glb());
+    expect((await call('DELETE',`${path}/files/terrain-archive/${archive.id}?confirm=delete`)).status).toBe(200);
+    await app.inject({method:'PUT',url:`${path}/map/model`,headers:{cookie,'content-type':'model/gltf-binary'},payload:glb()});
+    expect((await call('GET',`${path}/map`)).body.map.model.version).toBeGreaterThan(1);
+    await call('DELETE',`${path}/map/model`);
+    const newerArchive=(await call('GET',`${path}/files`)).body.find((f:{kind:string})=>f.kind==='terrain-archive');
+    await call('DELETE',`${path}/files/terrain-archive/${newerArchive.id}?confirm=delete`);
+    await app.inject({method:'PUT',url:`${path}/map/art`,headers:{cookie,'content-type':'image/png','x-file-name':'Background.png'},payload:png(64,64)});
+    const art=(await call('GET',`${path}/files`)).body.find((f:{kind:string})=>f.kind==='map-art');
+    expect(art.name).toBe('Background.png');
+    expect((await call('PATCH',`${path}/files/map-art/${art.id}`,{name:'Island art.png'})).status).toBe(200);
+    expect((await call('DELETE',`${path}/files/map-art/${art.id}?confirm=delete`)).status).toBe(200);
+    expect((await call('GET',`${path}/files`)).body).toEqual([]);
+    await app.inject({method:'PUT',url:`${path}/map/art`,headers:{cookie,'content-type':'image/png'},payload:png(64,64)});
+    expect((await call('GET',`${path}/map`)).body.map.art.version).toBeGreaterThan(1);
+    await call('DELETE',path);
+  });
+  it('rejects player and anonymous browsing, downloads, renames, and deletion', async () => {
+    const w = (await call('POST','/api/worlds',{name:'Private files QA',cols:4,rows:4})).body, path=`/api/worlds/${w.id}`;
+    const faction=(await call('POST',`${path}/factions`,{name:'Test party'})).body;
+    await call('POST',`${path}/players`,{username:'file-test-player',password:'test-player-123',factionId:faction.id});
+    const login=await app.inject({method:'POST',url:'/api/auth/login',payload:{username:'file-test-player',password:'test-player-123'}});
+    const playerCookie=String(login.headers['set-cookie']).split(';')[0];
+    for (const [method,url] of [['GET',`${path}/files`],['GET',`${path}/files/miniature/${w.id}/content`],['PATCH',`${path}/files/miniature/${w.id}`],['DELETE',`${path}/files/miniature/${w.id}?confirm=delete`]]) {
+      expect((await app.inject({method:method as 'GET',url,headers:{cookie:playerCookie},...(method==='PATCH'?{payload:{name:'No'}}:{})})).statusCode).toBe(403);
+      expect((await app.inject({method:method as 'GET',url,...(method==='PATCH'?{payload:{name:'No'}}:{})})).statusCode).toBe(401);
+    }
+    await call('DELETE',path);
+  });
+});

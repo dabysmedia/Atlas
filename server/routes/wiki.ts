@@ -60,7 +60,7 @@ export function wikiRoutes(app: FastifyInstance, db: Db) {
     const bytes = req.body;
     const info = Buffer.isBuffer(bytes) && imageSize(bytes);
     if (!info || !info.width || !info.height || info.width * info.height > 40_000_000) throw invalid('Use a PNG, JPEG, WebP or GIF up to 10 MB and 40 megapixels.');
-    const [image] = await db.insert(wikiImages).values({ worldId: w.id, bytes: bytes as Buffer, ...info }).returning({ id: wikiImages.id, width: wikiImages.width, height: wikiImages.height });
+    const [image] = await db.insert(wikiImages).values({ worldId: w.id, name: z.string().trim().min(1).max(120).parse((req.query as { name?: string }).name ?? 'wiki-image'), bytes: bytes as Buffer, ...info }).returning({ id: wikiImages.id, width: wikiImages.width, height: wikiImages.height });
     return { ...image, src: `/api/worlds/${w.id}/wiki-images/${image.id}` };
   });
   app.get('/api/worlds/:w/wiki-images/:id', async (req, reply) => {

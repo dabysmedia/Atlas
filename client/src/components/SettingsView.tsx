@@ -1,3 +1,4 @@
+import { FileManager } from './FileManager';
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Check, Plus, X } from 'lucide-react';
@@ -53,6 +54,8 @@ export function SettingsView() {
             <div className="field"><label className="label">Accent</label><input type="color" value={accent} onChange={(e) => setAccent(e.target.value)} style={{ width: 60, height: 40, border: 0, background: 'none' }} /></div>
           </div>
         </div></div>
+
+        <FileManager />
 
         <h3 className="display" style={{ margin: '28px 0 6px' }}>Terrain types</h3>
         <p className="muted" style={{ marginTop: 0 }}>Hexes store the key; renaming or recoloring a type updates every hex that uses it.</p>

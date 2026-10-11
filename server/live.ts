@@ -16,7 +16,7 @@ import { z } from 'zod';
 
 /** Parts of a screen's cache a change can make stale. The client maps each onto its query keys (client/src/live.ts). */
 export const SCOPES = [
-  'worlds', 'world', 'map', 'pages', 'page', 'search', 'factions', 'meters', 'mh', 'rolls', 'campaigns', 'events', 'fog', 'modelArchive',
+  'worlds', 'world', 'map', 'pages', 'page', 'search', 'factions', 'meters', 'mh', 'rolls', 'campaigns', 'events', 'fog', 'modelArchive', 'files', 'tokenModels',
 ] as const;
 export type Scope = (typeof SCOPES)[number];
 
@@ -100,11 +100,11 @@ export const ROUTE_SCOPES: Record<string, Scope[]> = {
   'POST /api/worlds/:w/weather/roll': ['events'],
   'POST /api/worlds/:w/day': ['worlds', 'events'],
   // wiki
-  'POST /api/worlds/:w/pages': ['pages', 'page', 'search', 'events'],
+  'POST /api/worlds/:w/pages': ['pages', 'page', 'search', 'events', 'files'],
   'POST /api/worlds/:w/pages/reorder': ['pages', 'page'],
-  'POST /api/worlds/:w/wiki-images': [],
-  'PATCH /api/worlds/:w/pages/:id': ['pages', 'page', 'search'],
-  'DELETE /api/worlds/:w/pages/:id': ['pages', 'page', 'search', 'events', 'map', 'factions'],
+  'POST /api/worlds/:w/wiki-images': ['files'],
+  'PATCH /api/worlds/:w/pages/:id': ['pages', 'page', 'search', 'files'],
+  'DELETE /api/worlds/:w/pages/:id': ['pages', 'page', 'search', 'events', 'map', 'factions', 'files'],
   // map: hexes, claims, fog and markers patch rows; art and models patch the map's metadata
   'PATCH /api/worlds/:w/hexes/:id': ['events'],
   'POST /api/worlds/:w/hexes/paint': ['events', 'worlds'],
@@ -112,21 +112,23 @@ export const ROUTE_SCOPES: Record<string, Scope[]> = {
   'POST /api/worlds/:w/claims': ['factions', 'events'],
   'DELETE /api/worlds/:w/claims/:id': ['factions', 'events'],
   'POST /api/worlds/:w/campaigns/:id/fog': ['events'],
-  'POST /api/worlds/:w/tokens': ['events'],
-  'PATCH /api/worlds/:w/tokens/:id': ['events'],
-  'DELETE /api/worlds/:w/tokens/:id': ['events'],
+  'POST /api/worlds/:w/tokens': ['events', 'files'],
+  'PATCH /api/worlds/:w/tokens/:id': ['events', 'files'],
+  'DELETE /api/worlds/:w/tokens/:id': ['events', 'files'],
   'POST /api/worlds/:w/tokens/:id/move': ['events'],
-  'POST /api/worlds/:w/tokens/:id/deploy': ['events'],
-  'POST /api/worlds/:w/token-models': ['map'],
+  'POST /api/worlds/:w/tokens/:id/deploy': ['events', 'files'],
+  'POST /api/worlds/:w/token-models': ['map', 'files', 'tokenModels'],
+  'PATCH /api/worlds/:w/files/:kind/:id': ['files', 'map', 'modelArchive', 'tokenModels', 'events'],
+  'DELETE /api/worlds/:w/files/:kind/:id': ['files', 'map', 'modelArchive', 'tokenModels', 'events'],
   'POST /api/worlds/:w/players': ['map'],
   'DELETE /api/worlds/:w/players/:id': ['map'],
-  'PUT /api/worlds/:w/map/art': ['events', 'worlds'],
+  'PUT /api/worlds/:w/map/art': ['events', 'worlds', 'files'],
   'PATCH /api/worlds/:w/map/art': [],
-  'DELETE /api/worlds/:w/map/art': ['events', 'worlds'],
-  'PUT /api/worlds/:w/map/model': ['events', 'modelArchive'],
+  'DELETE /api/worlds/:w/map/art': ['events', 'worlds', 'files'],
+  'PUT /api/worlds/:w/map/model': ['events', 'modelArchive', 'files'],
   'PATCH /api/worlds/:w/map/model': [],
-  'DELETE /api/worlds/:w/map/model': ['events', 'modelArchive'],
-  'POST /api/worlds/:w/map/model/archive/:id/restore': ['events', 'modelArchive'],
+  'DELETE /api/worlds/:w/map/model': ['events', 'modelArchive', 'files'],
+  'POST /api/worlds/:w/map/model/archive/:id/restore': ['events', 'modelArchive', 'files'],
   // factions, meters, roll tables, campaigns, settlements
   'POST /api/worlds/:w/factions': ['factions', 'map', 'events', 'mh'],
   'PATCH /api/worlds/:w/factions/:id': ['factions', 'events', 'mh'],

@@ -322,10 +322,14 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     if (info.width < 64 || info.height < 64 || info.width > 16384 || info.height > 16384) throw badRequest('Images must be between 64 and 16384 pixels on each side.');
     const placement = coverPlacement(map.layout, info.width, info.height);
     const prev = await db.query.mapArt.findFirst({ where: eq(mapArt.mapId, map.id), columns: { version: true } });
-    const values = { mime: info.mime, bytes: body, width: info.width, height: info.height, placement, updatedAt: new Date() };
-    const [row] = await db.insert(mapArt).values({ mapId: map.id, ...values, version: 1 })
-      .onConflictDoUpdate({ target: mapArt.mapId, set: { ...values, version: (prev?.version ?? 0) + 1 } })
-      .returning(artMeta);
+    const values = { name: z.string().trim().min(1).max(120).parse(String(req.headers['x-file-name'] ?? 'map-art')), mime: info.mime, bytes: body, width: info.width, height: info.height, placement, updatedAt: new Date() };
+    const row = await db.transaction(async tx => {
+      const result = await tx.execute(sql`update maps set art_version = greatest(art_version, coalesce((select version from map_art where map_id = ${map.id}), 0)) + 1 where id = ${map.id} returning art_version as v`);
+      const version = Number((result.rows[0] as { v: number }).v);
+      const [art] = await tx.insert(mapArt).values({ mapId: map.id, ...values, version })
+        .onConflictDoUpdate({ target: mapArt.mapId, set: { ...values, version } }).returning(artMeta);
+      return art;
+    });
     await logEvent(db, { worldId: w.id, kind: 'map.art', summary: `${prev ? 'Replaced' : 'Added'} the map art (${info.width}×${info.height})`, payload: { version: row.version } });
     changed(req, { patches: [{ op: 'art', art: row }] });
     return row;

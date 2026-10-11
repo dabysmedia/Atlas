@@ -53,7 +53,7 @@ export async function insertWikiImages(editor: Editor, worldId: string, files: F
   busy(items.length);
   for (const { file, id } of items) {
     try {
-      const response = await pendingWrites.track(fetch(`/api/worlds/${worldId}/wiki-images`, { method: 'POST', headers: { ...clientHeaders, 'content-type': file.type }, body: file, credentials: 'same-origin' }));
+      const response = await pendingWrites.track(fetch(`/api/worlds/${worldId}/wiki-images?name=${encodeURIComponent(file.name.slice(0, 120))}`, { method: 'POST', headers: { ...clientHeaders, 'content-type': file.type }, body: file, credentials: 'same-origin' }));
       const image = await response.json();
       if (!response.ok) throw new Error(image.error ?? 'Image upload failed');
       if (editor.isDestroyed) continue;

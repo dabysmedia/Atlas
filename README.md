@@ -43,12 +43,12 @@ GM patches, and never receive ephemeral drag coordinates. Their map reads filter
 ## Faction token drawers and party movement
 
 Open **Token drawer**, choose a faction, give a piece a name and create it. Each entry is one persistent token;
-**Deploy** places it on the next clicked hex, and **Return to drawer** keeps its identity and model assignment.
+**Deploy** places it on the next clicked hex; **Deploy another** creates a separate piece. The original entry stays in the drawer.
 Generic scouting, soldiers, envoy, caravan, fleet, character and party choices do not seed any lore or locations.
 Create factions in the Factions module; **Designate as player party** creates that faction's unique main party token.
 
 Token details allow a self-contained **GLB miniature** (10 MB limit), a model from the world's existing library,
-or a faction-colored 2D indicator. Models stand on sampled terrain. HUD indicators and names remain readable at
+or a faction-colored 2D indicator. Models float slightly above sampled terrain. HUD indicators and names remain readable at
 every zoom; pieces sharing a hex get separate slots and can also be selected from the hex's contents or drawer.
 
 Use **Move to next hex** or drag a moving piece to an adjacent hex. The server stores ordered visits and appends
@@ -65,6 +65,20 @@ remain available regardless of fog. GM credentials always see all pieces; do not
 
 `scripts/smoke-pieces.mjs` verifies deployment, miniature footing, shared-hex picking, player movement, DM live
 updates, hiding, reload persistence and unchanged hex rows in a disposable local world.
+
+## Uploaded files
+
+GM **World settings → Uploaded files**, also linked by **Manage files** in the token drawer, lists each world's
+miniatures, wiki images, map art, terrain and archived terrain. Search/filter/sort, rename, download, and two-step
+permanent deletion are available. Renaming preserves asset IDs and existing links. Deleting an assigned miniature
+keeps its pieces, positions, sheets and trails, switching them to 2D indicators. Referenced wiki images must first
+be removed from their pages; active terrain must first be removed in Layers and can then be deleted as an archive.
+Older wiki images and map art use generic names because the original upload names were not retained.
+
+File bytes and names are stored in Postgres, on Railway's persistent Postgres volume, not the app container.
+App redeploys do not remove them. Asset version counters survive permanent deletion to prevent cached old files
+being shown when a new terrain model or map image is uploaded. `scripts/smoke-files.mjs` exercises the file manager
+in a disposable local world, including downloads, reference protection, live miniature fallback, and reload persistence.
 
 ## Run locally
 

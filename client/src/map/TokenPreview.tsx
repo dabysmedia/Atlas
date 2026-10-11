@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Token } from '../types';
 import { MarkerIcon } from './panels';
-export function TokenPreview({ token, color }: { token: Token; color: string }) {
+export function TokenPreview({ token, color }: { token: Pick<Token, 'modelId' | 'worldId' | 'name' | 'kind'>; color: string }) {
   const [picture, setPicture] = useState<{ modelId: string; url: string } | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {

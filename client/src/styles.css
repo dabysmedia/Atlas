@@ -1186,3 +1186,17 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 
 /* Leave the destination map clear while moving or deploying a piece. */
 .mapview:has(.piece-place-hint) .dock-wrap { visibility: hidden; }
+
+.file-manager { margin-top: 28px; scroll-margin-top: 12px; }
+.file-manager h3 { display: flex; gap: 8px; align-items: center; }
+.file-toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
+.file-toolbar .select { width: auto; }
+.file-list { display: flex; flex-direction: column; }
+.file-row { display: grid; grid-template-columns: 84px minmax(0,1fr) auto; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.file-row .piece-picture, .file-thumb { width: 84px; height: 62px; object-fit: contain; border-radius: 8px; }
+.file-row .piece-picture small { font-size: 9px; }
+.file-info { overflow-wrap: anywhere; }
+.file-info small { display: block; color: var(--text-faint); font-size: 11px; margin-top: 4px; }
+.file-info details { margin-top: 5px; font-size: 11px; color: var(--text-dim); }
+.file-actions { display: flex; gap: 4px; }
+@media (max-width: 600px) { .file-row { grid-template-columns: 64px minmax(0,1fr); } .file-actions { grid-column: 2; } .file-row .piece-picture, .file-thumb { width: 64px; } }

@@ -507,14 +507,14 @@ mark { background: rgba(214,176,106,0.3); color: var(--text); border-radius: 2px
 .piece-row .poi span { overflow: hidden; text-overflow: ellipsis; }
 .piece-tools { display: flex; gap: 18px; }
 .piece-tool-content { position: absolute; bottom: calc(100% + 10px); left: 0; width: min(340px, 100%); max-height: 55vh; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-.mapview:has(.piece-drawer) .inspector { bottom: calc(var(--chrome-bottom, 0px) + 334px); }
+.mapview:has(.piece-drawer) .inspector { bottom: calc(var(--chrome-bottom, 0px) + 380px); }
 .piece-row small { display: block; font-size: 10px; color: var(--text-faint); }
 .piece-controls { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
 .piece-history { max-height: 180px; overflow: auto; font-size: 12px; padding-left: 20px; }
 .piece-place-hint { position: absolute; z-index: 28; left: 50%; top: 80px; transform: translateX(-50%); padding: 10px 14px; display: flex; align-items: center; gap: 12px; }
 .player-inspector { padding: 18px; overflow: auto; }
 .player-inspector .piece-controls { margin-top: 18px; }
-@media (max-width: 700px) { .piece-drawer { left: 10px; right: 10px; bottom: calc(var(--chrome-bottom, 0px) + 70px); } .mapview:has(.piece-drawer) .inspector { bottom: calc(var(--chrome-bottom, 0px) + 312px); height: 30vh; } .piece-place-hint { top: 70px; width: calc(100% - 30px); } }
+@media (max-width: 700px) { .piece-drawer { left: 10px; right: 10px; bottom: calc(var(--chrome-bottom, 0px) + 70px); } .mapview:has(.piece-drawer) .inspector { bottom: calc(var(--chrome-bottom, 0px) + 350px); height: 30vh; } .piece-place-hint { top: 70px; width: calc(100% - 30px); } }
 .wiki-main { overflow: auto; min-height: 0; border-radius: 22px; }
 /* The article: a calm, nearly solid sheet under the prose. */
 .wiki-doc {

@@ -9,7 +9,7 @@ import { toastError } from '../components/toast';
 import { MarkerIcon } from './panels';
 export const usePlayer = () => useQuery({ queryKey: qk.me, queryFn: () => api<{ username: string; role: 'gm' | 'player' }>('/api/auth/me'), staleTime: Infinity }).data?.role === 'player';
 const PRESETS = ['Scouting party', 'Soldiers', 'Envoy', 'Caravan', 'Fleet', 'Character', 'Party'];
-export function PieceDrawer({ data, onClose, onSelect, onPlace, startHexId, showTrails, onShowTrails }: { startHexId?: string | null; showTrails: boolean; onShowTrails: (v: boolean) => void; data: MapData; onClose: () => void; onSelect: (id: string) => void; onPlace: (t: Token) => void }) {
+export function PieceDrawer({ data, onClose, onSelect, onPlace, onDeployCopy, startHexId, showTrails, onShowTrails }: { startHexId?: string | null; showTrails: boolean; onShowTrails: (v: boolean) => void; data: MapData; onClose: () => void; onSelect: (id: string) => void; onPlace: (t: Token) => void; onDeployCopy: (t: Token) => void }) {
   const world = useWorld(), qc = useQueryClient(), player = usePlayer();
   const [factionId, setFaction] = useState(data.playerFactionId ?? data.factions[0]?.id ?? '');
   const faction = data.factions.find(f => f.id === factionId);
@@ -30,6 +30,7 @@ export function PieceDrawer({ data, onClose, onSelect, onPlace, startHexId, show
         {data.tokens.filter(t => t.factionId === factionId && ['party', 'unit', 'character', 'marker'].includes(t.kind)).map(t => <div className="piece-row" key={t.id}>
           <button className="poi grow" aria-label={`Select ${t.name}`} onClick={() => onSelect(t.id)}><MarkerIcon kind={t.kind} color={t.color ?? faction.color} size={24} /><span className="grow">{t.name}<small>{t.mainParty ? 'Main party' : String(t.data.role ?? t.kind)} · {t.hexId ? 'Deployed' : 'In drawer'}{!t.visibleToPlayers ? ' · Hidden' : ''}</small></span></button>
           <button className="btn sm" disabled={busy} onClick={() => onPlace(t)}>{t.hexId ? 'Move' : 'Deploy'}</button>
+          {!t.mainParty && <button className="btn ghost sm" disabled={busy} aria-label={`Deploy another ${t.name}`} onClick={() => onDeployCopy(t)}><Plus size={12} /> Deploy another</button>}
         </div>)}
       </div>
       {!player && <>

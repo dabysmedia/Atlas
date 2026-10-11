@@ -64,6 +64,39 @@ export function pieceRoutes(app: FastifyInstance, db: Db) {
     }
     return reply.header('cache-control', 'private, no-store').type('model/gltf-binary').send(model.bytes);
   });
+  app.post('/api/worlds/:w/tokens/:id/deploy', async req => {
+    const { w, id } = req.params as { w: string; id: string };
+    const body = z.object({ hexId: Uuid }).parse(req.body);
+    const map = await rootMap(db, Uuid.parse(w));
+    return db.transaction(async tx => {
+      const [source] = await tx.select().from(tokens).where(and(eq(tokens.worldId, w), eq(tokens.id, Uuid.parse(id)))).for('update');
+      if (!source) throw notFound('Token');
+      if (req.userRole === 'player') {
+        const access = await accessFor(db, req.userId!, w);
+        if (!access || source.factionId !== access.factionId || !source.visibleToPlayers) throw forbidden();
+      }
+      if (source.mainParty || !source.factionId || !['party', 'unit', 'character', 'marker'].includes(source.kind)) throw badRequest('Deploy copies of faction pieces; the main party is unique.');
+      const hex = await tx.query.hexes.findFirst({ where: and(eq(hexes.id, body.hexId), eq(hexes.mapId, map.id)) });
+      if (!hex) throw badRequest('Hex must belong to this map.');
+      await tx.select({ id: factions.id }).from(factions).where(eq(factions.id, source.factionId)).for('update');
+      const data = source.data && typeof source.data === 'object' && !Array.isArray(source.data) ? source.data as Record<string, unknown> : {};
+      const baseName = typeof data.drawerName === 'string' ? data.drawerName : source.name;
+      const names = new Set((await tx.select({ name: tokens.name }).from(tokens).where(and(eq(tokens.worldId, w), eq(tokens.factionId, source.factionId)))).map(t => t.name));
+      let number = 2, name = `${baseName.slice(0, 110)} #${number}`;
+      while (names.has(name)) name = `${baseName.slice(0, 110)} #${++number}`;
+      const day = await worldDay(tx, w);
+      const [copy] = await tx.insert(tokens).values({
+        worldId: w, mapId: map.id, factionId: source.factionId, campaignId: source.campaignId,
+        kind: source.kind, name, hexId: hex.id, color: source.color, icon: source.icon,
+        modelId: source.modelId, visibleToPlayers: source.visibleToPlayers,
+        data: { ...data, drawerName: baseName },
+        trail: [{ hexId: hex.id, day, at: new Date().toISOString() }],
+      }).returning();
+      await logEvent(tx, { worldId: w, campaignId: copy.campaignId, kind: 'token.created', actor: req.userRole ?? 'gm', summary: `${copy.name} deployed`, payload: { tokenId: copy.id, sourceTokenId: source.id, hexId: hex.id } });
+      changed(req, { scopes: ['map'] });
+      return copy;
+    });
+  });
   app.post('/api/worlds/:w/tokens/:id/move', async req => {
     const { w, id } = req.params as { w: string; id: string };
     const body = z.object({ path: z.array(Uuid).min(1).max(100), from: Uuid.nullable() }).parse(req.body);

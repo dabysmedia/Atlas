@@ -116,6 +116,7 @@ export const ROUTE_SCOPES: Record<string, Scope[]> = {
   'PATCH /api/worlds/:w/tokens/:id': ['events'],
   'DELETE /api/worlds/:w/tokens/:id': ['events'],
   'POST /api/worlds/:w/tokens/:id/move': ['events'],
+  'POST /api/worlds/:w/tokens/:id/deploy': ['events'],
   'POST /api/worlds/:w/token-models': ['map'],
   'POST /api/worlds/:w/players': ['map'],
   'DELETE /api/worlds/:w/players/:id': ['map'],

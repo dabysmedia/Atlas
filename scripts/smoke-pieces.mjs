@@ -58,6 +58,8 @@ try {
   assert.equal(cards.length, 2); assert(Math.abs(cards[0].y - cards[1].y) < 1 && cards[1].x > cards[0].x);
   assert.equal(await dm.getByRole('button', { name: 'Return to drawer', exact: true }).count(), 0);
   assert(await dm.getByRole('checkbox', { name: 'Visible to players' }).isDisabled());
+  const panelsClear = await dm.evaluate(() => document.querySelector('.inspector').getBoundingClientRect().bottom < document.querySelector('.piece-drawer').getBoundingClientRect().top);
+  assert(panelsClear, 'token tray stays clear of the selected piece inspector');
   await dm.screenshot({ path: `${shots}/drawer-and-miniature.png` });
   await dm.getByText('New piece', { exact: true }).first().click();
   await dm.getByText('Player access', { exact: true }).click();
@@ -81,6 +83,14 @@ try {
   await playerPage.getByRole('button', { name: 'Deploy', exact: true }).click(); await clickHex(playerPage, route[2]);
   await until(async () => (await api(playerPage, `${path}/map`)).tokens.find(t => t.id === reserve.id).hexId === route[2]);
   assert(!await playerPage.evaluate(id => window.__atlasMap.miniatures.has(id), reserve.id), 'unassigned pieces use a 2D indicator');
+  await dm.getByRole('button', { name: 'Deploy another Scout Alpha', exact: true }).click();
+  await clickHex(dm, route[2]);
+  await until(async () => (await api(dm, `${path}/map`)).tokens.some(t => t.name === 'Scout Alpha #2'));
+  const copy = (await api(dm, `${path}/map`)).tokens.find(t => t.name === 'Scout Alpha #2');
+  assert.notEqual(copy.id, scout.id); assert.equal(copy.modelId, (await api(dm, `${path}/map`)).tokens.find(t => t.id === scout.id).modelId);
+  assert.deepEqual(copy.trail.map(v => v.hexId), [route[2]]);
+  assert.equal((await api(dm, `${path}/map`)).tokens.find(t => t.id === scout.id).hexId, route[0]);
+  await dm.waitForFunction(id => window.__atlasMap.miniatures.has(id), copy.id);
   await dm.getByRole('button', { name: 'Select Scout Alpha', exact: true }).click();
   await dm.waitForFunction(() => { const panels = document.querySelectorAll('.token-panel'); return panels.length === 1 && panels[0].querySelector('input[aria-label="Marker name"]')?.value === 'Scout Alpha'; });
   await dm.getByRole('checkbox', { name: 'Visible to players' }).uncheck();
@@ -97,7 +107,7 @@ try {
   assert.deepEqual(state.hexes, before.hexes);
   await dm.reload(); await dm.waitForFunction(() => window.__atlasMap?.hasGround);
   state = await api(dm, `${path}/map`); scout = state.tokens.find(t => t.id === scout.id);
-  assert.equal(scout.visibleToPlayers, false); assert(scout.modelId); assert.equal(scout.factionId, faction.id); assert.equal(scout.hexId, route[0]);
+  assert.equal(scout.visibleToPlayers, false); assert(scout.modelId); assert.equal(state.tokens.find(t => t.id === copy.id).hexId, route[2]); assert.equal(scout.factionId, faction.id); assert.equal(scout.hexId, route[0]);
   assert.deepEqual(state.tokens.find(t => t.id === main.id).trail.map(v => v.hexId), route);
   await dm.evaluate(() => { const r = window.__atlasMap, c = r.fitCamera(); r.saved = null; r.setCamera(c); }); await dm.screenshot({ path: `${shots}/overview.png` });
   await playerPage.setViewportSize({ width: 390, height: 844 });

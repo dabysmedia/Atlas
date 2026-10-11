@@ -63,7 +63,7 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
       if (!world || !await accessFor(db, req.userId!, world)) throw forbidden();
       const read = new Set(['/api/worlds/:w', '/api/worlds/:w/map', '/api/worlds/:w/map/art', '/api/worlds/:w/map/model', '/api/worlds/:w/token-models/:id', '/api/worlds/:w/campaigns/:id/fog']);
       if (req.method === 'GET' && read.has(path)) return;
-      if (req.method === 'POST' && path === '/api/worlds/:w/tokens/:id/move') return;
+      if (req.method === 'POST' && (path === '/api/worlds/:w/tokens/:id/move' || path === '/api/worlds/:w/tokens/:id/deploy')) return;
       throw forbidden();
     });
     // First, so every mutating route below is held to broadcasting its changes.

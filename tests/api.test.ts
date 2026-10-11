@@ -143,6 +143,11 @@ describe('faction pieces and player movement', () => {
     expect((await asPlayer('POST', '/api/worlds', { name: 'Unauthorized' })).status).toBe(403);
     expect((await asPlayer('PATCH', `${path}/tokens/${main.id}`, { visibleToPlayers: false })).status).toBe(403);
     expect((await asPlayer('GET', `${path}/events`)).status).toBe(403);
+    expect((await asPlayer('POST', `${path}/tokens/${secret.id}/deploy`, { hexId: route[0] })).status).toBe(403);
+    expect((await asPlayer('POST', `${path}/tokens/${fogged.id}/deploy`, { hexId: route[0] })).status).toBe(403);
+    const playerCopy = await asPlayer('POST', `${path}/tokens/${reserve.id}/deploy`, { hexId: route[0] });
+    expect(playerCopy.status).toBe(200);
+    expect(playerCopy.body).toMatchObject({ factionId: party.id, hexId: route[0], mainParty: false });
     expect((await asPlayer('POST', `${path}/tokens/${secret.id}/move`, { from: route[0], path: [route[1]] })).status).toBe(403);
     expect((await asPlayer('POST', `${path}/tokens/${main.id}/move`, { from: route[0], path: [route[3]] })).status).toBe(400);
     expect((await asPlayer('POST', `${path}/tokens/${main.id}/move`, { from: route[0], path: route.slice(1) })).status).toBe(200);
@@ -161,6 +166,30 @@ describe('faction pieces and player movement', () => {
     expect((await asPlayer('GET', `${path}/map`)).body.tokens.some((t: { id: string }) => t.id === reserve.id)).toBe(false);
     expect((await asPlayer('GET', `${path}/map`)).body.tokens.some((t: { id: string }) => t.id === main.id)).toBe(true);
     await call('DELETE', `${path}`);
+  });
+
+  it('deploys independent copies of faction pieces and keeps the main party unique', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Repeated pieces', cols: 4, rows: 4 })).body;
+    const path = `/api/worlds/${w.id}`;
+    const faction = (await call('POST', `${path}/factions`, { name: 'Test faction' })).body;
+    const before = (await call('GET', `${path}/map`)).body;
+    const [h0, h1] = [0, 1].map(q => before.hexes.find((h: { q: number; r: number }) => h.q === q && h.r === 0).id);
+    const original = (await call('POST', `${path}/tokens`, { name: 'Scouts', kind: 'unit', factionId: faction.id, color: '#123456', data: { role: 'Scouting party' }, hexId: h0 })).body;
+    const copies = await Promise.all([call('POST', `${path}/tokens/${original.id}/deploy`, { hexId: h0 }), call('POST', `${path}/tokens/${original.id}/deploy`, { hexId: h0 })]);
+    expect(copies.map(c => c.status)).toEqual([200, 200]);
+    expect(new Set(copies.map(c => c.body.id)).size).toBe(2);
+    expect(new Set(copies.map(c => c.body.name))).toEqual(new Set(['Scouts #2', 'Scouts #3']));
+    for (const c of copies) expect(c.body).toMatchObject({ hexId: h0, factionId: faction.id, color: '#123456', mainParty: false, data: { role: 'Scouting party' } });
+    await call('POST', `${path}/tokens/${copies[0].body.id}/move`, { from: h0, path: [h1] });
+    const after = (await call('GET', `${path}/map`)).body;
+    expect(after.tokens.find((t: { id: string }) => t.id === original.id).hexId).toBe(h0);
+    expect(after.tokens.find((t: { id: string }) => t.id === copies[0].body.id).trail.map((v: { hexId: string }) => v.hexId)).toEqual([h0, h1]);
+    expect(after.tokens.find((t: { id: string }) => t.id === copies[1].body.id).trail.map((v: { hexId: string }) => v.hexId)).toEqual([h0]);
+    expect(after.hexes).toEqual(before.hexes);
+    const main = (await call('POST', `${path}/tokens`, { name: 'Main', kind: 'party', factionId: faction.id, mainParty: true, hexId: h0 })).body;
+    expect((await call('POST', `${path}/tokens/${main.id}/deploy`, { hexId: h1 })).status).toBe(400);
+    expect((await call('POST', `${path}/tokens/${original.id}/deploy`, { hexId: faction.id })).status).toBe(400);
+    await call('DELETE', path);
   });
 
   it('isolates miniature assets and faction/campaign assignments between worlds', async () => {

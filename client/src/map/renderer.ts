@@ -106,6 +106,8 @@ export class HexMapRenderer {
   hoverId: string | null = null;
   selectedId: string | null = null;
   selectedTokenId: string | null = null;
+  hoveredTokenId: string | null = null;
+  moveHexIds: Set<string> = new Set();
   focusFactionId: string | null = null;
   brushIds: Set<string> = new Set();
   dragToken: { token: Token; x: number; y: number } | null = null;
@@ -821,6 +823,14 @@ export class HexMapRenderer {
     }
 
     // 7. Interaction feedback.
+    for (const id of this.moveHexIds) {
+      const h = this.byId.get(id); if (!h) continue;
+      ctx.save(); ctx.translate(h.cx, h.cy);
+      ctx.fillStyle = (h.q + h.r) % 2 === 0 ? 'rgba(143,232,226,0.28)' : 'rgba(244,234,212,0.22)';
+      ctx.strokeStyle = 'rgba(143,232,226,0.9)'; ctx.lineWidth = 2 / z;
+      ctx.fill(this.hexPath); ctx.stroke(this.hexPath); ctx.restore();
+    }
+
     if (this.brushIds.size) {
       ctx.strokeStyle = 'rgba(255,255,255,0.9)';
       ctx.lineWidth = 2 / z;

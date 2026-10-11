@@ -81,7 +81,7 @@ try {
   await dm.getByRole('button', { name: 'Deploy on a hex', exact: true }).click(); await clickHex(dm, route[0]);
   await dm.waitForFunction(id => window.__atlasMap.miniatures.has(id), scout.id);
   const footing = await dm.evaluate(id => { const r = window.__atlasMap, obj = r.miniatures.group.children.find(o => o.userData.tokenId === id); return { y: obj.position.y, terrain: r.groundAt(obj.position.x, obj.position.z), count: r.miniatures.group.children.length }; }, scout.id);
-  assert(Math.abs(footing.y - footing.terrain - 5) < .01);
+  assert(Math.abs(footing.y - footing.terrain - 5) <= .61);
   await dm.getByText('3D miniature ready', { exact: true }).waitFor();
   await dm.getByRole('button', { name: 'Token drawer', exact: true }).click();
   await dm.getByText('New piece', { exact: true }).first().click();

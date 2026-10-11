@@ -1115,8 +1115,10 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.sky.mesh.position.copy(this.camera.position);
     this.sky.mesh.scale.setScalar(this.camera.far * 0.9);
     this.water.update(this.gl, now / 1000, this.camera, this.light);
+    if (this.pointer && !this.stills) this.hoveredTokenId = this.tokenAt(this.pointer.x, this.pointer.y)?.id ?? null;
+    else this.hoveredTokenId = null;
     this.miniatures.group.visible = this.miniatureMode();
-    this.miniatures.update(this.tokens, t => this.tokenPos(t), (x, y) => this.groundAt(x, y), () => this.invalidate());
+    this.miniatures.update(this.tokens, t => this.tokenPos(t), (x, y) => this.groundAt(x, y), () => this.invalidate(), { now, hovered: this.hoveredTokenId, selected: this.selectedTokenId, dragging: this.dragToken?.token.id ?? null, still: this.stills });
     this.gl.render(this.scene, this.camera);
     this.layoutLabels(now);
     this.drawHud(now);

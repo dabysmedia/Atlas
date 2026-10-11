@@ -24,6 +24,7 @@ import { live } from '../live';
 import type { Weather } from '../../../shared/weather';
 import { PieceControls, PieceDrawer, usePlayer } from './PieceDrawer';
 import { isNotableKind } from '../../../shared/markers';
+import { canMoveToken, tokenDestinations } from './tokenMovement';
 
 const HAS_WEBGL2 = typeof document !== 'undefined' && webgl2Available();
 if (HAS_WEBGL2) void load3d().catch(() => {});
@@ -218,6 +219,12 @@ export function MapView() {
     r.focusFactionId = focus?.kind === 'faction' ? focus.id : null;
     if (!is3d(r) || previousFaction !== r.focusFactionId) r.invalidate();
   }, [focus, gen]);
+  useEffect(() => {
+    const r = rendererRef.current; if (!r) return;
+    const token = data?.tokens.find(t => t.id === (placing?.id ?? (focus?.kind === 'token' ? focus.id : null)));
+    r.moveHexIds = tool === 'select' && !align && token && data && canMoveToken(token, player, data.playerFactionId) ? tokenDestinations(token, data.hexes) : new Set();
+    r.invalidate();
+  }, [focus, placing, data, player, tool, align, gen]);
   // 3D: selecting a place preserves magnification; the country overview stays fixed.
   useEffect(() => {
     const r = r3();
@@ -331,6 +338,7 @@ export function MapView() {
     }
   };
 
+  const tokenMoves = useRef(new Set<string>());
   const moveToken = async (t: Token & { deployCopy?: boolean; reopenDrawer?: boolean }, hexId: string) => {
     if (t.deployCopy) {
       try {
@@ -341,6 +349,9 @@ export function MapView() {
       } catch (e) { toastError(e); }
       return;
     }
+    if (tokenMoves.current.has(t.id)) return;
+    if (!isNotableKind(t.kind) && t.hexId && !tokenDestinations(t, dataRef.current?.hexes ?? []).has(hexId)) { toast('Choose a highlighted adjacent hex.'); return; }
+    tokenMoves.current.add(t.id);
     patchCache((d) => ({ ...d, tokens: d.tokens.map((x) => (x.id === t.id ? { ...x, hexId } : x)) }));
     try {
       if (isNotableKind(t.kind)) await api(`/api/worlds/${world.id}/tokens/${t.id}`, { method: 'PATCH', body: { hexId } });
@@ -348,7 +359,7 @@ export function MapView() {
       await qc.invalidateQueries({ queryKey: qk.map(world.id) });
       qc.invalidateQueries({ queryKey: ['w', world.id, 'fog'] });
       qc.invalidateQueries({ queryKey: qk.events(world.id) });
-    } catch (e) { toastError(e); mapQ.refetch(); }
+    } catch (e) { toastError(e); mapQ.refetch(); } finally { tokenMoves.current.delete(t.id); }
   };
 
   // ---- map art
@@ -428,8 +439,8 @@ export function MapView() {
   useEffect(() => { const r = rendererRef.current; if (r && align) { if (is3d(r)) r.setArtPlacement(align); else { r.artPlacement = { ...align }; r.invalidate(); } } }, [align]);
 
   // ---- input
-  const toolRef = useRef({ tool, brush, radius, fogCamp, align, player, placing });
-  toolRef.current = { tool, brush, radius, fogCamp, align, player, placing };
+  const toolRef = useRef({ tool, brush, radius, fogCamp, align, player, placing, focus });
+  toolRef.current = { tool, brush, radius, fogCamp, align, player, placing, focus };
   const handlers = useRef({ commitStroke, moveToken, brushArea, setAlign });
   handlers.current = { commitStroke, moveToken, brushArea, setAlign };
 
@@ -508,7 +519,7 @@ export function MapView() {
       if (t === 'select') {
         if (toolRef.current.placing) { mode = 'maybe-click'; return; }
         const tok = r().tokenAt(p.x, p.y);
-        if (tok) { if (toolRef.current.player && tok.factionId !== dataRef.current?.playerFactionId) { setFocus({ kind: 'token', id: tok.id }); mode = 'none'; return; } dragTok = tok; mode = 'token'; hold(); return; }
+        if (tok) { if (toolRef.current.player && tok.factionId !== dataRef.current?.playerFactionId) { setFocus({ kind: 'token', id: tok.id }); mode = 'none'; return; } dragTok = tok; r().selectedTokenId = tok.id; r().moveHexIds = canMoveToken(tok, toolRef.current.player, dataRef.current?.playerFactionId) ? tokenDestinations(tok, dataRef.current?.hexes ?? []) : new Set(); r().invalidate(); mode = 'token'; hold(); return; }
         mode = 'maybe-click';
       } else {
         if (t === 'fog' && !toolRef.current.fogCamp) { mode = 'maybe-click'; return; }
@@ -521,6 +532,7 @@ export function MapView() {
       const p = pos(e);
       if (pointers.has(e.pointerId)) pointers.set(e.pointerId, p);
       if (is3d(r())) (r() as HexMapRenderer3D).pointer = toolRef.current.align ? null : p;
+      r().hoveredTokenId = toolRef.current.align ? null : r().tokenAt(p.x, p.y)?.id ?? null;
       const h = r().hexAt(p.x, p.y);
       const hid = toolRef.current.align ? null : h?.id ?? null;
       if (r().hoverId !== hid) { r().hoverId = hid; if (!is3d(r())) r().invalidate(); }
@@ -578,14 +590,19 @@ export function MapView() {
       } else if (mode === 'maybe-click') {
         const h = r().hexAt(p.x, p.y);
         if (h && toolRef.current.placing) { void handlers.current.moveToken(toolRef.current.placing, h.id); setFocus({ kind: 'token', id: toolRef.current.placing.id }); setPlacing(null); if (toolRef.current.placing.reopenDrawer) setDrawerOpen(true); }
-        else setFocus(h ? { kind: 'hex', id: h.id } : null);
+        else {
+          const focus = toolRef.current.focus;
+          const token = focus?.kind === 'token' ? dataRef.current?.tokens.find(t => t.id === focus.id) : undefined;
+          if (h && token && canMoveToken(token, toolRef.current.player, dataRef.current?.playerFactionId) && r().moveHexIds.has(h.id)) void handlers.current.moveToken(token, h.id);
+          else setFocus(h ? { kind: 'hex', id: h.id } : null);
+        }
       } else if (mode === 'stroke') {
         saving = handlers.current.commitStroke([...stroke]);
         stroke = new Set();
       } else if (mode === 'token' && dragTok) {
         const dragging = r().dragToken;
         const h = r().hexAt(p.x, p.y);
-        const to = dragging && h && h.id !== dragTok.hexId ? h.id : null;
+        const to = dragging && h && h.id !== dragTok.hexId && (isNotableKind(dragTok.kind) || canMoveToken(dragTok, toolRef.current.player, dataRef.current?.playerFactionId) && tokenDestinations(dragTok, dataRef.current?.hexes ?? []).has(h.id)) ? h.id : null;
         if (dragging) {
           // Let go where it was dropped: it waits there for the move to land, or eases home if there's none.
           const at = { x: dragging.x, y: dragging.y };
@@ -593,7 +610,7 @@ export function MapView() {
           endDrag(dragTok.id, at, to);
         }
         r().dragToken = null;
-        if (to) handlers.current.moveToken(dragTok, to);
+        if (to) { void handlers.current.moveToken(dragTok, to); setFocus({ kind: 'token', id: dragTok.id }); }
         else if (!dragging) setFocus({ kind: 'token', id: dragTok.id });
         r().invalidate();
         dragTok = null;
@@ -630,7 +647,7 @@ export function MapView() {
       const h = r().hexAt(p.x, p.y);
       if (h && !is3d(r())) r().flyTo(h.cx, h.cy, Math.max(r().target.zoom * 2, 1.4));
     };
-    const onLeave = () => { setHover(null); if (rendererRef.current) { if (is3d(r())) (r() as HexMapRenderer3D).pointer = null; r().hoverId = null; r().brushIds = new Set(); r().invalidate(); } };
+    const onLeave = () => { setHover(null); if (rendererRef.current) { if (is3d(r())) (r() as HexMapRenderer3D).pointer = null; r().hoverId = null; r().hoveredTokenId = null; r().brushIds = new Set(); r().invalidate(); } };
     const onKey = (e: KeyboardEvent) => {
       if (e.code === 'Space' && e.type === 'keyup') { space = false; canvas.style.cursor = ''; }
       if ((e.target as HTMLElement)?.closest('.world-module, input, textarea, select, [contenteditable="true"]') || !rendererRef.current) return;

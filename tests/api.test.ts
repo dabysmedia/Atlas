@@ -135,6 +135,79 @@ describe('world rules and token stat sheets', () => {
   });
 });
 
+
+describe('hex presentation', () => {
+  it('persists authored lore, resources and artwork separately, with world isolation and file management', async () => {
+    const world = (await call('POST', '/api/worlds', { name: 'Hex details', cols: 4, rows: 4 })).body;
+    const other = (await call('POST', '/api/worlds', { name: 'Other details', cols: 4, rows: 4 })).body;
+    const path = `/api/worlds/${world.id}`, before = (await call('GET', `${path}/map`)).body;
+    const hex = before.hexes[0], endpoint = `${path}/hexes/${hex.id}/presentation`;
+    const blank = (await call('GET', endpoint)).body;
+    expect(blank).toMatchObject({ lore: '', heroId: null, resources: [], revision: 0 });
+    expect((await call('GET', `/api/worlds/${other.id}/hexes/${hex.id}/presentation`)).status).toBe(404);
+    const bytes = png(320, 240);
+    const upload = await app.inject({ method: 'POST', url: `${path}/hex-artwork?name=Portrait.png`, headers: { cookie, 'content-type': 'image/png' }, payload: bytes });
+    expect(upload.statusCode).toBe(200); const art = upload.json();
+    const resource = { id: crypto.randomUUID(), name: 'User-authored resource', kind: 'mineral', availability: 'User-authored availability', notes: 'Unresolved until surveyed.' };
+    const body = { revision: 0, heroId: art.id, heroFocus: 35, lore: 'User-authored lore.\n\nAnother paragraph.', resources: [resource] };
+    const saved = await call('PATCH', endpoint, body); expect(saved.status).toBe(200); expect(saved.body.revision).toBe(1);
+    expect((await call('PATCH', endpoint, body)).status).toBe(409);
+    expect((await call('PATCH', endpoint, { ...body, revision: 1, resources: [resource, resource] })).status).toBe(400);
+    expect((await call('PATCH', endpoint, { ...body, revision: 1, resources: [{ ...resource, name: '' }] })).status).toBe(400);
+    const otherHex = (await call('GET', `/api/worlds/${other.id}/map`)).body.hexes[0];
+    expect((await call('PATCH', `/api/worlds/${other.id}/hexes/${otherHex.id}/presentation`, body)).status).toBe(400);
+    const image = await app.inject({ method: 'GET', url: `${path}/hex-artwork/${art.id}`, headers: { cookie } });
+    expect(image.rawPayload).toEqual(bytes); expect(image.headers['cache-control']).toBe('private, no-store');
+    const file = (await call('GET', `${path}/files`)).body.find(f => f.kind === 'hex-art');
+    expect(file.uses.length).toBe(1);
+    expect((await call('PATCH', `${path}/files/hex-art/${art.id}`, { name: 'Renamed.png' })).status).toBe(200);
+    expect((await call('DELETE', `${path}/files/hex-art/${art.id}`)).status).toBe(400);
+    await app.close(); const rebuilt = await boot(); app = rebuilt.app; db = rebuilt.db;
+    expect((await call('GET', endpoint)).body).toMatchObject({ ...body, revision: 1 });
+    expect((await call('DELETE', `${path}/files/hex-art/${art.id}?confirm=delete`)).status).toBe(200);
+    expect((await call('GET', endpoint)).body).toMatchObject({ heroId: null, lore: body.lore, resources: [resource], revision: 2 });
+    expect((await call('GET', `${path}/map`)).body.hexes).toEqual(before.hexes);
+  });
+  it('saves explicit hex properties atomically and rejects concurrent paint without overwriting lore', async () => {
+    const world = (await call('POST', '/api/worlds', { name: 'Atomic details', cols: 4, rows: 4 })).body;
+    const path = `/api/worlds/${world.id}`, hex = (await call('GET', `${path}/map`)).body.hexes[0];
+    const endpoint = `${path}/hexes/${hex.id}/presentation`;
+    const body = { revision: 0, heroId: null, heroFocus: 50, lore: 'Authored details', resources: [], hex: { name: 'Authored name' }, expectedHex: { name: hex.name } };
+    expect((await call('PATCH', endpoint, body)).status).toBe(200);
+    expect((await call('PATCH', endpoint, { ...body, revision: 1, lore: 'Rejected lore', hex: { name: 'Lost update' } })).status).toBe(409);
+    expect((await call('GET', endpoint)).body.lore).toBe(body.lore);
+    expect((await call('PATCH', endpoint, { ...body, revision: 1, hex: { terrain: 'invalid' }, expectedHex: { terrain: hex.terrain } })).status).toBe(400);
+    const after = (await call('GET', `${path}/map`)).body.hexes.find(h => h.id === hex.id);
+    expect(after).toEqual({ ...hex, name: 'Authored name' });
+  });
+  it('keeps GM notes private, restricts player edits, and gates lore/art by campaign exploration', async () => {
+    const world = (await call('POST', '/api/worlds', { name: 'Player details', cols: 4, rows: 4 })).body;
+    const path = `/api/worlds/${world.id}`, hex = (await call('GET', `${path}/map`)).body.hexes[0];
+    const faction = (await call('POST', `${path}/factions`, { name: 'Test party' })).body;
+    const campaign = (await call('POST', `${path}/campaigns`, { name: 'Test exploration' })).body;
+    const art = (await app.inject({ method: 'POST', url: `${path}/hex-artwork`, headers: { cookie, 'content-type': 'image/png' }, payload: png(100, 100) })).json();
+    const endpoint = `${path}/hexes/${hex.id}/presentation`;
+    const body = { revision: 0, heroId: art.id, heroFocus: 50, lore: 'Authored public lore', resources: [], hex: { notes: 'GM-only secret' }, expectedHex: { notes: hex.notes } };
+    expect((await call('PATCH', endpoint, body)).status).toBe(200);
+    await call('POST', `${path}/players`, { username: 'hex-reader', password: 'test-player-password', factionId: faction.id, campaignId: campaign.id });
+    const gmCookie = cookie;
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'hex-reader', password: 'test-player-password' } });
+    cookie = String(login.headers['set-cookie']).split(';')[0];
+    try {
+      expect((await call('GET', endpoint)).status).toBe(404);
+      expect((await app.inject({ method: 'GET', url: `${path}/hex-artwork/${art.id}`, headers: { cookie } })).statusCode).toBe(404);
+      expect((await call('PATCH', endpoint, body)).status).toBe(403);
+      expect((await app.inject({ method: 'POST', url: `${path}/hex-artwork`, headers: { cookie, 'content-type': 'image/png' }, payload: png(100, 100) })).statusCode).toBe(403);
+      expect((await call('GET', `${path}/map`)).body.hexes.find(h => h.id === hex.id).notes).toBe('');
+      cookie = gmCookie;
+      await call('POST', `${path}/campaigns/${campaign.id}/fog`, { hexIds: [hex.id], explored: true });
+      cookie = String(login.headers['set-cookie']).split(';')[0];
+      expect((await call('GET', endpoint)).body.lore).toBe(body.lore);
+      expect((await app.inject({ method: 'GET', url: `${path}/hex-artwork/${art.id}`, headers: { cookie } })).statusCode).toBe(200);
+    } finally { cookie = gmCookie; }
+  });
+});
+
 describe('hex interiors', () => {
   it('persists maps and tactical positions, guards concurrent movement, and leaves hex data and world trails unchanged', async () => {
     const w=(await call('POST','/api/worlds',{name:'Interior test',cols:4,rows:4})).body;

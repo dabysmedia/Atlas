@@ -8,7 +8,7 @@ import { TokenPreview } from '../map/TokenPreview';
 import { Dialog } from './Dialog';
 import { toastError } from './toast';
 export type UploadedFile = { id: string; name: string; size: number; kind: string; mime: string; date: string; uses: string[]; blocked: string | null };
-const kinds: Record<string, string> = { 'token-art': 'Token portraits', interior: 'Interior maps', miniature: 'Miniatures', 'wiki-image': 'Wiki images', 'map-art': 'Map art', terrain: 'Terrain', 'terrain-archive': 'Archived terrain' };
+const kinds: Record<string, string> = { 'hex-art': 'Hex artwork', 'token-art': 'Token portraits', interior: 'Interior maps', miniature: 'Miniatures', 'wiki-image': 'Wiki images', 'map-art': 'Map art', terrain: 'Terrain', 'terrain-archive': 'Archived terrain' };
 const sizeLabel = (size: number) => size < 1024 * 1024 ? `${(size / 1024).toFixed(1)} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
 export function FileManager() {
   const world = useWorld(), qc = useQueryClient(), location = useLocation(), section = useRef<HTMLElement>(null);
@@ -26,7 +26,7 @@ export function FileManager() {
     try {
       await api(path(f) + (deleting ? '?confirm=delete' : ''), { method: deleting ? 'DELETE' : 'PATCH', ...(!deleting && { body: { name } }) });
       setRename(null); setRemove(null);
-      await Promise.all([qc.invalidateQueries({ queryKey: key }), qc.invalidateQueries({ queryKey: qk.map(world.id) }), qc.invalidateQueries({ queryKey: ['w', world.id, 'tokenModels'] }), qc.invalidateQueries({ queryKey: ['w', world.id, 'interiors'] }), qc.invalidateQueries({ queryKey: ['modelArchive', world.id] })]);
+      await Promise.all([qc.invalidateQueries({ queryKey: key }), qc.invalidateQueries({ queryKey: ['w', world.id, 'hexPresentation'] }), qc.invalidateQueries({ queryKey: qk.map(world.id) }), qc.invalidateQueries({ queryKey: ['w', world.id, 'tokenModels'] }), qc.invalidateQueries({ queryKey: ['w', world.id, 'interiors'] }), qc.invalidateQueries({ queryKey: ['modelArchive', world.id] })]);
     } catch (error) { toastError(error); } finally { setBusy(false); }
   };
   if (me.data?.role !== 'gm') return null;
@@ -44,7 +44,7 @@ export function FileManager() {
       {files.error && <p role="alert">{files.error.message} <button className="btn sm" onClick={() => void files.refetch()}>Retry</button></p>}
       {!files.isPending && !files.error && <p className="faint">{visible.length} files · {sizeLabel((files.data ?? []).reduce((n,f) => n+f.size,0))} stored</p>}
       <div className="file-list">{visible.map(f => <article className="file-row" key={`${f.kind}/${f.id}`} aria-label={f.name}>
-        {f.mime.startsWith('image/') ? <img className="file-thumb" src={f.kind === 'wiki-image' ? `/api/worlds/${world.id}/wiki-images/${f.id}` : `/api/worlds/${world.id}/map/art?v=${Date.parse(f.date)}`} alt={f.name} /> : <TokenPreview token={{ worldId: world.id, modelId: f.kind === 'miniature' ? f.id : null, name: f.name, kind: 'unit' }} color={world.accent} />}
+        {f.mime.startsWith('image/') ? <img className="file-thumb" src={f.kind === 'hex-art' ? `/api/worlds/${world.id}/hex-artwork/${f.id}` : f.kind === 'token-art' ? `/api/worlds/${world.id}/token-portraits/${f.id}` : f.kind === 'interior' ? `/api/worlds/${world.id}/interiors/${f.id}/asset` : f.kind === 'wiki-image' ? `/api/worlds/${world.id}/wiki-images/${f.id}` : `/api/worlds/${world.id}/map/art?v=${Date.parse(f.date)}`} alt={f.name} /> : <TokenPreview token={{ worldId: world.id, modelId: f.kind === 'miniature' ? f.id : null, name: f.name, kind: 'unit' }} color={world.accent} />}
         <div className="file-info"><b>{f.name}</b><small>{kinds[f.kind]} · {sizeLabel(f.size)} · {new Date(f.date).toLocaleDateString()}</small>
           <details><summary>{f.uses.length ? `Used by ${f.uses.length} ${f.kind === 'wiki-image' ? 'pages' : f.kind === 'miniature' ? 'pieces' : 'map'}` : 'Unused'}</summary>{f.uses.map((use,i) => <div key={i}>{use}</div>)}</details>
           {f.blocked && <small>{f.blocked}</small>}

@@ -30,7 +30,7 @@ try {
     await page.mouse.click(p.x,p.y);await page.waitForFunction(id=>window.__atlasMap.selectedId===id,hex.id);
     await page.waitForFunction(()=>!window.__atlasMap.cameraMoving);
   };
-  await clickHex();await page.getByRole('button',{name:'Place a marker',exact:true}).click();
+  await clickHex();await page.getByRole('button',{name:'Edit hex details',exact:true}).click();await page.getByRole('button',{name:'Place a marker',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Place a marker'});
   const icons=await dialog.locator('canvas.marker-icon').evaluateAll(cs=>cs.map(c=>c.toDataURL()));
   assert.equal(icons.length,18);assert.equal(new Set(icons).size,18,'every type needs a distinct rendered icon');
@@ -39,13 +39,13 @@ try {
   await dialog.getByRole('button',{name:'Place',exact:true}).click();
   await page.waitForFunction(name=>window.__atlasMap.tokens.some(t=>t.name===name),dungeonName);
   const dungeon=(await api(`/api/worlds/${world.id}/map`)).tokens.find(t=>t.name===dungeonName);ids.push(dungeon.id);
-  await page.getByRole('button',{name:'Close panel',exact:true}).last().click();await page.waitForFunction(()=>!window.__atlasMap.cameraMoving);
-  await clickHex();await page.getByRole('button',{name:'Place a marker',exact:true}).click();
+  await page.getByRole('button',{name:'Close hex details',exact:true}).click();await page.waitForFunction(()=>!window.__atlasMap.cameraMoving);
+  await clickHex();await page.getByRole('button',{name:'Edit hex details',exact:true}).click();await page.getByRole('button',{name:'Place a marker',exact:true}).click();
   await dialog.getByRole('button',{name:'City',exact:true}).click();await dialog.getByPlaceholder('Name',{exact:true}).fill(cityName);
   await dialog.getByRole('checkbox',{name:'Major city'}).check();await dialog.getByRole('button',{name:'Place',exact:true}).click();
   await page.waitForFunction(name=>window.__atlasMap.tokens.some(t=>t.name===name),cityName);
   const city=(await api(`/api/worlds/${world.id}/map`)).tokens.find(t=>t.name===cityName);ids.push(city.id);assert.equal(city.data.majorCity,true);
-  await page.getByRole('button',{name:'Close panel',exact:true}).last().click();await page.waitForFunction(()=>!window.__atlasMap.cameraMoving);
+  await page.getByRole('button',{name:'Close hex details',exact:true}).click();await page.waitForFunction(()=>!window.__atlasMap.cameraMoving);
   const variants=[];
   for (const [kind,name] of [['village','Smoke village'],['temple','Smoke shrine'],['outpost','Smoke outpost']]) {
     const token=await api(`/api/worlds/${world.id}/tokens`,'POST',{hexId:hex.id,kind,name});ids.push(token.id);

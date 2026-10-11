@@ -1006,9 +1006,8 @@ export function MapView() {
 
       <AnimatePresence>
         {placing && <div className="piece-place-hint panel" role="status">{placing.deployCopy ? `Choose a hex for another ${placing.name}` : placing.hexId ? `Choose the next adjacent hex for ${placing.name}` : `Choose a hex to deploy ${placing.name}`}<button className="iconbtn" aria-label="Cancel token placement" onClick={() => setPlacing(null)}><X size={14} /></button></div>}
-        {data && focusHex && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusHex.name || 'Hex'}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div>{data.tokens.filter(t => t.hexId === focusHex.id).map(t => <button className="poi" key={t.id} onClick={() => setFocus({ kind: 'token', id: t.id })}>{t.name}</button>)}{interiors.sidebar(focusHex.id)}</aside>}
         {data && focusToken && player && !placing && <TokenInspector token={focusToken} data={data} onClose={() => setFocus(null)} onMove={() => { setPlacing(focusToken); setDrawerOpen(false); }} onLocate={() => { const p = r?.tokenPos(focusToken); if (p && r) centerOn(p.x,p.y,r.target.zoom); }}/> }
-        {data && focusHex && !align && !player && !placing && (
+        {data && focusHex && !align && !placing && (
           <HexPanel key={`hex-${focusHex.id}`} hex={focusHex} data={data} fogCampaignId={fogCamp} explored={fogQ.data?.includes(focusHex.id) ?? false}
             interiorFooter={interiors.sidebar(focusHex.id)} label={r?.label(focusHex) ?? ''} onClose={() => setFocus(null)} onFocus={setFocus}
             snap={(() => { const h = r?.hexById(focusHex.id); return h ? snapAt(h.cx, h.cy, 2.1) : () => null; })()} />

@@ -23,6 +23,7 @@ import { worlds } from './db/schema.js';
 import { fileRoutes } from './routes/files.js';
 import { interiorRoutes } from './routes/interiors.js';
 import { pieceRoutes } from './routes/pieces.js';
+import { hexPresentationRoutes } from './routes/hexPresentation.js';
 import { rulesRoutes } from './routes/rules.js';
 import { ensureSheets } from './rules.js';
 import { accessFor, forbidden } from './tokenAccess.js';
@@ -65,7 +66,7 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
       if (req.method === 'GET' && (path === '/api/live' || path === '/api/worlds')) return;
       const world = (req.params as { w?: string }).w;
       if (!world || !await accessFor(db, req.userId!, world)) throw forbidden();
-      const read = new Set(['/api/worlds/:w', '/api/worlds/:w/map', '/api/worlds/:w/map/art', '/api/worlds/:w/map/model', '/api/worlds/:w/token-models/:id', '/api/worlds/:w/campaigns/:id/fog', '/api/worlds/:w/interiors', '/api/worlds/:w/interiors/:id/asset', '/api/worlds/:w/rules', '/api/worlds/:w/tokens/:id/sheet', '/api/worlds/:w/token-portraits/:id']);
+      const read = new Set(['/api/worlds/:w', '/api/worlds/:w/map', '/api/worlds/:w/map/art', '/api/worlds/:w/map/model', '/api/worlds/:w/token-models/:id', '/api/worlds/:w/campaigns/:id/fog', '/api/worlds/:w/interiors', '/api/worlds/:w/interiors/:id/asset', '/api/worlds/:w/rules', '/api/worlds/:w/tokens/:id/sheet', '/api/worlds/:w/token-portraits/:id', '/api/worlds/:w/hexes/:id/presentation', '/api/worlds/:w/hex-artwork/:id']);
       if (req.method === 'GET' && read.has(path)) return;
       if (req.method === 'PATCH' && path === '/api/worlds/:w/tokens/:id/sheet' || req.method === 'POST' && path === '/api/worlds/:w/tokens/:id/sheet/roll') return;
       if (req.method === 'POST' && (path === '/api/worlds/:w/tokens/:id/move' || path === '/api/worlds/:w/tokens/:id/deploy' || ['/api/worlds/:w/interiors/:id/enter','/api/worlds/:w/interiors/:id/move','/api/worlds/:w/interiors/:id/leave'].includes(path))) return;
@@ -86,6 +87,7 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
     modelRoutes(api, db);
     pieceRoutes(api, db);
     rulesRoutes(api, db);
+    hexPresentationRoutes(api, db);
     interiorRoutes(api, db);
     fileRoutes(api, db);
     factionRoutes(api, db);

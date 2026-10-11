@@ -10,7 +10,7 @@
 import { sql } from 'drizzle-orm';
 import {
   pgTable, uuid, text, integer, timestamp, jsonb, boolean, real,
-  uniqueIndex, index, primaryKey, bigserial, customType, check,
+  uniqueIndex, index, primaryKey, bigserial, customType, check, type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import type { MeterBand } from '../../shared/meters.js';
 import type { Weather } from '../../shared/weather.js';
@@ -82,6 +82,8 @@ export const wikiPages = pgTable('wiki_pages', {
   worldId: worldRef(),
   title: text('title').notNull(),
   category: text('category').notNull().default('Lore'),
+  parentId: uuid('parent_id').references((): AnyPgColumn => wikiPages.id, { onDelete: 'set null' }),
+  sortOrder: integer('sort_order').notNull().default(0),
   /** ProseMirror JSON document. */
   content: jsonb('content').notNull().default({ type: 'doc', content: [] }),
   /** Plain text extracted from content, for search and previews. */
@@ -97,6 +99,12 @@ export const wikiPages = pgTable('wiki_pages', {
   index('wiki_search_idx').using('gin', t.search),
   index('wiki_title_trgm_idx').using('gin', sql`${t.title} gin_trgm_ops`),
 ]);
+
+/** Wiki images belong to the world, so copying one between pages keeps it intact. */
+export const wikiImages = pgTable('wiki_images', {
+  id: id(), worldId: worldRef(), mime: text('mime').notNull(), bytes: bytea('bytes').notNull(),
+  width: integer('width').notNull(), height: integer('height').notNull(), createdAt: created(),
+}, (t) => [index('wiki_images_world_idx').on(t.worldId)]);
 
 /** Outgoing links, rebuilt on every save, used for backlinks. */
 export const wikiLinks = pgTable('wiki_links', {

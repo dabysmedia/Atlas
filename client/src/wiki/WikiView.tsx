@@ -6,7 +6,7 @@ import StarterKit from '@tiptap/starter-kit';
 import { Placeholder } from '@tiptap/extensions';
 import { motion } from 'motion/react';
 import {
-  Bold, Heading2, Heading3, Italic, Link2, List, ListOrdered, Plus, Quote, Search, Strikethrough, Trash2,
+  ArrowDown, ArrowUp, Bold, Check, ChevronDown, ChevronRight, Heading2, Heading3, ImagePlus, Italic, Link2, List, ListOrdered, MoreHorizontal, Pencil, Plus, Quote, Search, Strikethrough, Trash2,
 } from 'lucide-react';
 import { api, qk } from '../api';
 import { canonical } from '../live';
@@ -17,6 +17,7 @@ import { Snippet, useCombinedSearch, useCreatePage, usePageIndex } from './usePa
 import { resolveLinks, WikiLink, wikiHost } from './WikiLink';
 import { Dialog } from '../components/Dialog';
 import { toastError } from '../components/toast';
+import { insertWikiImages, WikiImage } from './WikiImage';
 
 export const CATEGORIES = ['Lore', 'Place', 'Person', 'Faction', 'Item', 'Session', 'Rules'];
 
@@ -27,8 +28,11 @@ export function WikiView() {
   const index = usePageIndex(world.id);
   const create = useCreatePage(world.id);
   const [filter, setFilter] = useState('');
+  const [editing, setEditing] = useState(false);
   const results = useCombinedSearch(world.id, filter);
   const qc = useQueryClient();
+  const article = useRef<HTMLElement>(null);
+  useEffect(() => { article.current?.scrollTo({ top: 0 }); }, [pageId]);
 
   // Keep the editor's link machinery pointed at this world's pages.
   useEffect(() => {
@@ -46,25 +50,17 @@ export function WikiView() {
   }, [pageId, index.data, world.id, navigate]);
   useEffect(() => { if (pageId) lastPage(world.id).set(pageId); }, [pageId, world.id]);
 
-  const newPage = async () => {
+  const newPage = async (parent?: PageIndex) => {
     try {
       let title = 'Untitled page', n = 1;
       const taken = new Set((index.data ?? []).map((p) => p.title.toLowerCase()));
       while (taken.has(title.toLowerCase())) title = `Untitled page ${++n}`;
-      const page = await create.mutateAsync({ title });
+      const page = await create.mutateAsync({ title, parentId: parent?.id ?? null, category: parent?.category });
       qc.setQueryData(qk.page(world.id, page.id), { ...page, content: { type: 'doc', content: [{ type: 'paragraph' }] }, contentText: '', backlinks: [], _fresh: true });
       navigate(`/w/${world.id}/wiki/${page.id}`, { state: { focusTitle: true } });
+      setEditing(true);
     } catch (e) { toastError(e); }
   };
-
-  const grouped = useMemo(() => {
-    const m = new Map<string, PageIndex[]>();
-    for (const p of [...(index.data ?? [])].sort((a, b) => a.title.localeCompare(b.title))) {
-      if (!m.has(p.category)) m.set(p.category, []);
-      m.get(p.category)!.push(p);
-    }
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [index.data]);
 
   return (
     <div className="wiki">
@@ -80,7 +76,8 @@ export function WikiView() {
                   if (e.key === 'Escape') setFilter('');
                 }} />
             </div>
-            <button className="btn primary icon" onClick={newPage} title="New page"><Plus size={16} /></button>
+            {editing && <button className="btn primary icon" onClick={() => void newPage()} aria-label="New page"><Plus size={16} /></button>}
+            {!pageId && <button className="iconbtn" onClick={() => setEditing(v => !v)} aria-label={editing ? 'Finish editing wiki' : 'Edit wiki'} aria-pressed={editing}><Pencil size={15} /></button>}
           </div>
         </div>
         <div className="wiki-list scroll">
@@ -93,27 +90,18 @@ export function WikiView() {
                 </div>
               </div>
             )) : <div className="empty">No matches.</div>
-          ) : grouped.map(([cat, pages]) => (
-            <div key={cat}>
-              <div className="wiki-group">{cat} <span style={{ opacity: 0.6 }}>{pages.length}</span></div>
-              {pages.map((p) => (
-                <div key={p.id} className={`wiki-item ${p.id === pageId ? 'on' : ''}`} onClick={() => navigate(`/w/${world.id}/wiki/${p.id}`)}>
-                  <span className="t">{p.title}</span>
-                </div>
-              ))}
-            </div>
-          ))}
-          {index.data && !index.data.length && <div className="empty">No pages yet.<br />Press <b>+</b> to write the first one.</div>}
+          ) : <WikiTree pages={index.data ?? []} selected={pageId} editing={editing} onNew={newPage} />}
+          {index.data && !index.data.length && <div className="empty">No pages yet.<br />{editing ? <>Press <b>+</b> to write the first one.</> : <>Enable Edit to write the first one.</>}</div>}
         </div>
       </aside>
-      <section className="wiki-main scroll">
-        {pageId ? <PageEditor key={pageId} pageId={pageId} /> : <WikiHome onNew={newPage} />}
+      <section ref={article} className="wiki-main scroll">
+        {pageId ? <PageEditor key={pageId} pageId={pageId} editing={editing} onEditing={setEditing} /> : <WikiHome onNew={() => void newPage()} editing={editing} onEditing={setEditing} />}
       </section>
     </div>
   );
 }
 
-function WikiHome({ onNew }: { onNew: () => void }) {
+function WikiHome({ onNew, editing, onEditing }: { onNew: () => void; editing: boolean; onEditing: (v: boolean) => void }) {
   const world = useWorld();
   const index = usePageIndex(world.id);
   const navigate = useNavigate();
@@ -122,7 +110,8 @@ function WikiHome({ onNew }: { onNew: () => void }) {
     <div className="wiki-doc">
       <h1 className="wiki-title">{world.name} Wiki</h1>
       <p className="muted">Type <span className="kbd">[[</span> in any page to link another page, or to create one on the spot. <span className="kbd">Ctrl K</span> finds anything.</p>
-      <button className="btn primary" onClick={onNew} style={{ marginTop: 10 }}><Plus size={15} /> New page</button>
+      {editing ? <button className="btn primary" onClick={onNew} style={{ marginTop: 10 }}><Plus size={15} /> New page</button>
+        : <button className="btn ghost" onClick={() => onEditing(true)} style={{ marginTop: 10 }}><Pencil size={15} /> Edit wiki</button>}
       {!!recent.length && (
         <>
           <div className="label" style={{ marginTop: 32 }}>Recently edited</div>
@@ -139,7 +128,99 @@ function WikiHome({ onNew }: { onNew: () => void }) {
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
 
-function PageEditor({ pageId }: { pageId: string }) {
+const pageOrder = (a: PageIndex, b: PageIndex) => a.sortOrder - b.sortOrder || a.title.localeCompare(b.title);
+function WikiTree({ pages, selected, editing, onNew }: { pages: PageIndex[]; selected?: string; editing: boolean; onNew: (p: PageIndex) => Promise<void> }) {
+  const world = useWorld(), navigate = useNavigate(), qc = useQueryClient();
+  const [collapsed, setCollapsed] = useState(new Set<string>());
+  const [organize, setOrganize] = useState<string | null>(null);
+  const [parent, setParent] = useState('');
+  const [drop, setDrop] = useState<string | null>(null);
+  const byId = useMemo(() => new Map(pages.map(p => [p.id, p])), [pages]);
+  const current = organize ? byId.get(organize) : undefined;
+  const within = (p: PageIndex, ancestor: string) => {
+    const seen = new Set<string>();
+    let id: string | null = p.id;
+    while (id && !seen.has(id)) { if (id === ancestor) return true; seen.add(id); id = byId.get(id)?.parentId ?? null; }
+    return false;
+  };
+  // Keep the selected page's ancestors open, including after a drag or a search jump.
+  useEffect(() => {
+    if (!selected) return;
+    setCollapsed(previous => { const next = new Set(previous); let p = byId.get(selected); const seen = new Set<string>();
+      while (p?.parentId && !seen.has(p.parentId)) { seen.add(p.parentId); next.delete(p.parentId); p = byId.get(p.parentId); }
+      return next;
+    });
+  }, [selected, byId]);
+  useEffect(() => { if (!editing) setOrganize(null); }, [editing]);
+  const changed = async () => {
+    await qc.invalidateQueries({ queryKey: qk.pages(world.id) });
+    await qc.invalidateQueries({ predicate: q => q.queryKey[0] === 'w' && q.queryKey[1] === world.id && q.queryKey[2] === 'page' });
+  };
+  const move = useMutation({ mutationFn: ({ id, parentId }: { id: string; parentId: string | null }) => api(`/api/worlds/${world.id}/pages/${id}`, { method: 'PATCH', body: { parentId } }), onSuccess: changed, onError: toastError });
+  const reorder = useMutation({ mutationFn: (ids: string[]) => api(`/api/worlds/${world.id}/pages/reorder`, { body: { parentId: current?.parentId ?? null, ids } }), onSuccess: changed, onError: toastError });
+  const siblings = current ? pages.filter(p => p.parentId === current.parentId).sort(pageOrder) : [];
+  const visibleSiblings = siblings.filter(p => current?.parentId || p.category === current?.category);
+  const place = current ? visibleSiblings.findIndex(p => p.id === current.id) : -1;
+  const step = (offset: number) => {
+    const neighbor = visibleSiblings[place + offset];
+    if (!current || !neighbor) return;
+    const ids = siblings.map(p => p.id), from = ids.indexOf(current.id), to = ids.indexOf(neighbor.id);
+    [ids[from], ids[to]] = [ids[to], ids[from]]; reorder.mutate(ids);
+  };
+  const toggle = (id: string) => setCollapsed(old => { const next = new Set(old); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  const branch = (p: PageIndex, depth: number): React.ReactNode => {
+    const children = pages.filter(c => c.parentId === p.id).sort(pageOrder), shut = collapsed.has(p.id);
+    return <div key={p.id}>
+      <div className={`wiki-item wiki-tree-item ${p.id === selected ? 'on' : ''} ${drop === p.id ? 'drop-target' : ''}`} role="treeitem" aria-level={depth + 1}
+        aria-selected={p.id === selected} aria-expanded={children.length ? !shut : undefined} tabIndex={0} style={{ paddingLeft: 6 + depth * 14 }}
+        draggable={editing} onDragStart={e => { e.dataTransfer.setData('application/x-atlas-page', p.id); e.dataTransfer.effectAllowed = 'move'; }}
+        onDragOver={e => { if (editing && e.dataTransfer.types.includes('application/x-atlas-page')) { e.preventDefault(); setDrop(p.id); } }}
+        onDragLeave={() => setDrop(null)} onDrop={e => { e.preventDefault(); setDrop(null); const id = e.dataTransfer.getData('application/x-atlas-page'); if (editing && id && id !== p.id) move.mutate({ id, parentId: p.id }); }}
+        onClick={() => navigate(`/w/${world.id}/wiki/${p.id}`)} onKeyDown={e => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/w/${world.id}/wiki/${p.id}`); }
+          if (children.length && (e.key === 'ArrowRight' && shut || e.key === 'ArrowLeft' && !shut)) { e.preventDefault(); toggle(p.id); }
+        }}>
+        {children.length ? <button className="wiki-tree-control" aria-label={`${shut ? 'Expand' : 'Collapse'} ${p.title}`} onClick={e => { e.stopPropagation(); toggle(p.id); }}>{shut ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button> : <span className="wiki-tree-spacer" />}
+        <span className="t grow" title={p.title}>{p.title}</span>
+        {editing && <span className="wiki-tree-actions">
+          <button className="wiki-tree-control" aria-label={`New child of ${p.title}`} onClick={e => { e.stopPropagation(); void onNew(p); }}><Plus size={13} /></button>
+          <button className="wiki-tree-control" aria-label={`Organize ${p.title}`} onClick={e => { e.stopPropagation(); setOrganize(p.id); setParent(p.parentId ?? ''); }}><MoreHorizontal size={13} /></button>
+        </span>}
+      </div>
+      {!!children.length && !shut && <div role="group">{children.map(c => branch(c, depth + 1))}</div>}
+    </div>;
+  };
+  const roots = pages.filter(p => !p.parentId || !byId.has(p.parentId));
+  const categories = [...new Set(roots.map(p => p.category))].sort();
+  return <>
+    <div role="tree" aria-label="Wiki pages">
+      {categories.map(category => <div key={category}>
+        <div className="wiki-group">{category}</div>
+        {roots.filter(p => p.category === category).sort(pageOrder).map(p => branch(p, 0))}
+      </div>)}
+    </div>
+    <Dialog open={!!current} onClose={() => setOrganize(null)} title="Organize page">
+      {current && <>
+        <p className="muted" style={{ marginTop: 0 }}>{current.title}</p>
+        <label className="field">Parent page<select className="select" aria-label="Parent page" value={parent} onChange={e => setParent(e.target.value)}>
+          <option value="">Top level</option>
+          {pages.filter(p => !within(p, current.id)).sort((a, b) => a.title.localeCompare(b.title)).map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
+        </select></label>
+        <div className="row" style={{ marginTop: 16 }}>
+          <button className="btn sm" disabled={place <= 0 || reorder.isPending} onClick={() => step(-1)}><ArrowUp size={13} /> Move up</button>
+          <button className="btn sm" disabled={place < 0 || place >= visibleSiblings.length - 1 || reorder.isPending} onClick={() => step(1)}><ArrowDown size={13} /> Move down</button>
+        </div>
+        <p className="faint">Drag a page onto another page to nest it. Moving a parent keeps its children together.</p>
+        <div className="actions"><button className="btn ghost" onClick={() => setOrganize(null)}>Cancel</button>
+          <button className="btn primary" disabled={move.isPending} onClick={async () => { try { await move.mutateAsync({ id: current.id, parentId: parent || null }); setOrganize(null); } catch { /* mutation shows the error */ } }}>Save parent</button>
+        </div>
+      </>}
+    </Dialog>
+  </>;
+}
+
+function PageEditor({ pageId, editing, onEditing }: { pageId: string; editing: boolean; onEditing: (v: boolean) => void }) {
   const world = useWorld();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -149,6 +230,9 @@ function PageEditor({ pageId }: { pageId: string }) {
   const [save, setSave] = useState<SaveState>('saved');
   const [titleError, setTitleError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [uploading, setUploading] = useState(0);
+  const imageInput = useRef<HTMLInputElement>(null);
+  const deleting = useRef(false);
   const pending = useRef<{ title?: string; category?: string; content?: unknown }>({});
   const timer = useRef<number | undefined>(undefined);
   const titleRef = useRef<HTMLTextAreaElement>(null);
@@ -159,6 +243,7 @@ function PageEditor({ pageId }: { pageId: string }) {
 
   const flush = async () => {
     window.clearTimeout(timer.current);
+    if (deleting.current) return;
     const body = pending.current;
     if (!Object.keys(body).length) return;
     pending.current = {};
@@ -167,6 +252,7 @@ function PageEditor({ pageId }: { pageId: string }) {
     try {
       if (body.content) body.content = resolveLinks(body.content);
       const row = await api<PageIndex>(`/api/worlds/${world.id}/pages/${pageId}`, { method: 'PATCH', body });
+      if (deleting.current) return;
       // Only what this save sent counts as taken in: another screen's rename that arrived meanwhile still has to show.
       shown.current = {
         title: body.title !== undefined ? row.title : shown.current.title,
@@ -181,6 +267,7 @@ function PageEditor({ pageId }: { pageId: string }) {
       qc.invalidateQueries({ queryKey: ['w', world.id, 'search'] });
       setSave(Object.keys(pending.current).length ? 'dirty' : 'saved');
     } catch (e) {
+      if (deleting.current) return;
       const msg = e instanceof Error ? e.message : 'Save failed';
       if (body.title && /title/.test(msg)) { setTitleError(msg); setSave('saved'); }
       else { pending.current = { ...body, ...pending.current }; setSave('error'); toastError(e); }
@@ -200,17 +287,28 @@ function PageEditor({ pageId }: { pageId: string }) {
     return () => window.removeEventListener('beforeunload', before);
   });
 
-  const editor = useEditor({
+  const editor: Editor | null = useEditor({
     extensions: [
       StarterKit.configure({ link: { openOnClick: false, autolink: true }, heading: { levels: [1, 2, 3] } }),
       Placeholder.configure({ placeholder: 'Write lore… Type [[ to link a page.' }),
       WikiLink,
+      WikiImage,
     ],
     content: null,
+    editable: false,
+    editorProps: {
+      handlePaste: (_view, event) => {
+        if (!editor?.isEditable) return false;
+        const files = [...(event.clipboardData?.files ?? [])].filter(file => file.type.startsWith('image/'));
+        if (!files.length) return false;
+        event.preventDefault(); void insertWikiImages(editor, world.id, files, delta => setUploading(n => n + delta)); return true;
+      },
+    },
     immediatelyRender: true,
     shouldRerenderOnTransaction: false,
-    onUpdate: ({ editor }) => { if (loaded.current) queue({ content: editor.getJSON() }); },
+    onUpdate: ({ editor }) => { if (loaded.current && editor.isEditable) queue({ content: editor.getJSON() }); },
   });
+  useEffect(() => { editor?.setEditable(editing && !!page.data); }, [editing, editor, !!page.data]);
 
   useEffect(() => {
     if (!page.data || !editor || loaded.current) return;
@@ -221,7 +319,11 @@ function PageEditor({ pageId }: { pageId: string }) {
     loaded.current = true;
     const fresh = (page.data as { _fresh?: boolean })._fresh;
     // A brand-new page: select the placeholder title so typing replaces it.
-    if (fresh) requestAnimationFrame(() => { titleRef.current?.focus(); titleRef.current?.select(); });
+    if (fresh) {
+      onEditing(true);
+      qc.setQueryData(qk.page(world.id, pageId), { ...page.data, _fresh: false });
+      requestAnimationFrame(() => { titleRef.current?.focus(); titleRef.current?.select(); });
+    }
   }, [page.data, editor]);
 
   // Another screen saved this page: take its version in, unless this one has typing of its own still to save
@@ -247,23 +349,27 @@ function PageEditor({ pageId }: { pageId: string }) {
   }, [title]);
 
   const del = useMutation({
-    mutationFn: () => api(`/api/worlds/${world.id}/pages/${pageId}`, { method: 'DELETE' }),
+    mutationFn: () => {
+      window.clearTimeout(timer.current); pending.current = {}; deleting.current = true;
+      return api(`/api/worlds/${world.id}/pages/${pageId}`, { method: 'DELETE' });
+    },
     onSuccess: () => {
       pending.current = {};
       qc.setQueryData<PageIndex[]>(qk.pages(world.id), (xs) => (xs ?? []).filter((x) => x.id !== pageId));
       qc.removeQueries({ queryKey: qk.page(world.id, pageId) });
+      qc.invalidateQueries({ queryKey: qk.pages(world.id) });
       navigate(`/w/${world.id}/wiki`);
     },
-    onError: toastError,
+    onError: (e) => { deleting.current = false; toastError(e); },
   });
 
   if (page.isError) return <div className="empty">This page doesn&rsquo;t exist (it may have been deleted).</div>;
   return (
     <motion.div className="wiki-doc" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18 }}>
-      <textarea ref={titleRef} className="wiki-title" rows={1} value={title} placeholder="Page title" aria-label="Page title"
+      <textarea ref={titleRef} className="wiki-title" rows={1} value={title} readOnly={!editing || !page.data} placeholder="Page title" aria-label="Page title"
         onChange={(e) => { const v = e.target.value.replace(/\n/g, ''); setTitle(v); if (v.trim()) queue({ title: v.trim() }); }}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === 'ArrowDown') {
+          if (editing && (e.key === 'Enter' || e.key === 'ArrowDown')) {
             e.preventDefault();
             // Focus synchronously so the next keystroke lands in the body, not the title.
             if (editor) { editor.commands.setTextSelection(1); editor.view.focus(); }
@@ -274,14 +380,23 @@ function PageEditor({ pageId }: { pageId: string }) {
       <div className="wiki-meta">
         <span className={`save-dot ${save === 'dirty' || save === 'saving' ? 'dirty' : save === 'error' ? 'err' : ''}`} />
         <span>{save === 'saved' ? 'Saved' : save === 'error' ? 'Not saved, retrying on next edit' : 'Saving…'}</span>
+        <button className={`wiki-edit ${editing ? 'on' : ''}`} aria-label={editing ? 'Finish editing page' : 'Edit page'} aria-pressed={editing} disabled={uploading > 0 || !page.data}
+          onClick={() => { if (editing) void flush(); onEditing(!editing); }}>
+          {editing ? <Check size={13} /> : <Pencil size={13} />}{editing ? 'Done' : 'Edit'}
+        </button>
         <span>·</span>
-        <input className="input bare" list="wiki-cats" style={{ width: 120, padding: '0 4px', fontSize: 12, color: 'var(--text-dim)' }}
+        {editing ? <input className="input bare" list="wiki-cats" style={{ width: 120, padding: '0 4px', fontSize: 12, color: 'var(--text-dim)' }}
           value={category} onChange={(e) => { setCategory(e.target.value); queue({ category: e.target.value }); }} aria-label="Category" />
+          : <span>{category}</span>}
         <datalist id="wiki-cats">{CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
         <div className="spacer" />
-        <button className="btn ghost sm danger" onClick={() => setConfirmDelete(true)}><Trash2 size={13} /> Delete</button>
+        {editing && <button className="btn ghost sm danger" disabled={uploading > 0} onClick={() => setConfirmDelete(true)}><Trash2 size={13} /> Delete</button>}
       </div>
-      {editor && <FormatBar editor={editor} />}
+      {editor && editing && <FormatBar editor={editor} onImage={() => imageInput.current?.click()} />}
+      <input ref={imageInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onChange={e => {
+        const files = [...(e.target.files ?? [])]; e.target.value = '';
+        if (editor) void insertWikiImages(editor, world.id, files, delta => setUploading(n => n + delta));
+      }} />
       <EditorContent editor={editor} />
       {!!page.data?.backlinks.length && (
         <div className="backlinks">
@@ -294,17 +409,17 @@ function PageEditor({ pageId }: { pageId: string }) {
         </div>
       )}
       <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)} title="Delete page">
-        <p className="muted" style={{ marginTop: 0 }}>Delete &ldquo;{title}&rdquo;? Links to it will turn red (clicking one recreates the page).</p>
+        <p className="muted" style={{ marginTop: 0 }}>Delete &ldquo;{title}&rdquo;? Links to it will turn red. Its child pages will move up one level.</p>
         <div className="actions">
-          <button className="btn ghost" onClick={() => setConfirmDelete(false)}>Cancel</button>
-          <button className="btn danger" onClick={() => { setConfirmDelete(false); del.mutate(); }}><Trash2 size={14} /> Delete</button>
+          <button className="btn ghost" disabled={del.isPending} onClick={() => setConfirmDelete(false)}>Cancel</button>
+          <button className="btn danger" disabled={del.isPending} onClick={() => del.mutate()}><Trash2 size={14} /> {del.isPending ? 'Deleting…' : 'Delete'}</button>
         </div>
       </Dialog>
     </motion.div>
   );
 }
 
-function FormatBar({ editor }: { editor: Editor }) {
+function FormatBar({ editor, onImage }: { editor: Editor; onImage: () => void }) {
   const s = useEditorState({
     editor,
     selector: ({ editor: e }) => ({
@@ -314,7 +429,7 @@ function FormatBar({ editor }: { editor: Editor }) {
     }),
   });
   const b = (on: boolean, label: string, run: () => void, Icon: typeof Bold) => (
-    <button className={on ? 'on' : ''} title={label} aria-label={label} onMouseDown={(e) => { e.preventDefault(); run(); }}><Icon size={15} /></button>
+    <button className={on ? 'on' : ''} title={label} aria-label={label} onMouseDown={e => e.preventDefault()} onClick={run}><Icon size={15} /></button>
   );
   const c = () => editor.chain().focus();
   return (
@@ -328,6 +443,7 @@ function FormatBar({ editor }: { editor: Editor }) {
       {b(s.ol, 'Numbered list', () => c().toggleOrderedList().run(), ListOrdered)}
       {b(s.quote, 'Quote', () => c().toggleBlockquote().run(), Quote)}
       {b(false, 'Link a page ([[)', () => c().insertContent('[[').run(), Link2)}
+      {b(false, 'Insert image', onImage, ImagePlus)}
     </div>
   );
 }

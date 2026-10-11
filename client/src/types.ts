@@ -19,7 +19,7 @@ export type World = {
   weather: Weather;
 };
 
-export type PageIndex = { id: string; title: string; category: string; updatedAt: string };
+export type PageIndex = { id: string; title: string; category: string; updatedAt: string; parentId: string | null; sortOrder: number };
 export type Page = PageIndex & { content: unknown; contentText: string; backlinks: PageIndex[] };
 export type SearchHit = PageIndex & { snippet: string; score: number };
 

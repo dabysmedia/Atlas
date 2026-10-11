@@ -101,6 +101,8 @@ export const ROUTE_SCOPES: Record<string, Scope[]> = {
   'POST /api/worlds/:w/day': ['worlds', 'events'],
   // wiki
   'POST /api/worlds/:w/pages': ['pages', 'page', 'search', 'events'],
+  'POST /api/worlds/:w/pages/reorder': ['pages', 'page'],
+  'POST /api/worlds/:w/wiki-images': [],
   'PATCH /api/worlds/:w/pages/:id': ['pages', 'page', 'search'],
   'DELETE /api/worlds/:w/pages/:id': ['pages', 'page', 'search', 'events', 'map', 'factions'],
   // map: hexes, claims, fog and markers patch rows; art and models patch the map's metadata

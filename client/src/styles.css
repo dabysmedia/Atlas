@@ -482,6 +482,19 @@ mark { background: rgba(214,176,106,0.3); color: var(--text); border-radius: 2px
 .wiki-item.on { background: var(--gold-soft); color: var(--gold-hi); box-shadow: var(--gilt-glow); }
 .wiki-item .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wiki-item .snip { font-size: 12px; color: var(--text-faint); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiki-tree-item { gap: 3px; min-height: 32px; }
+.wiki-tree-control { flex: none; display: grid; place-items: center; width: 20px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-dim); cursor: pointer; }
+.wiki-tree-control:hover { color: var(--gold-hi); background: var(--gold-soft); }
+.wiki-tree-spacer { width: 20px; flex: none; }
+.wiki-tree-actions { display: flex; flex: none; opacity: 0.25; }
+.wiki-tree-item:hover .wiki-tree-actions, .wiki-tree-item:focus-within .wiki-tree-actions { opacity: 1; }
+.wiki-tree-item.drop-target { outline: 1px solid var(--gold); background: var(--gold-soft); }
+.wiki-edit { display: inline-flex; align-items: center; gap: 4px; border: 1px solid transparent; border-radius: 999px; padding: 3px 7px; background: transparent; color: var(--text-dim); font-size: 11px; cursor: pointer; }
+.wiki-edit:hover, .wiki-edit.on { color: var(--gold-hi); border-color: var(--glass-edge); background: var(--gold-soft); }
+.wiki-meta { flex-wrap: wrap; }
+.wiki-image { display: inline-block; max-width: 100%; height: auto; max-height: 600px; object-fit: contain; vertical-align: middle; border-radius: 8px; }
+.wiki-image.ProseMirror-selectednode { outline: 2px solid var(--gold); outline-offset: 3px; }
+.wiki-image-uploading { display: inline-block; padding: 6px 10px; border: 1px dashed var(--glass-edge); border-radius: 8px; font: 12px var(--font-ui); color: var(--gold); }
 .wiki-main { overflow: auto; min-height: 0; border-radius: 22px; }
 /* The article: a calm, nearly solid sheet under the prose. */
 .wiki-doc {

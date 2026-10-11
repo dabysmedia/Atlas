@@ -56,7 +56,7 @@ export function useCombinedSearch(worldId: string, q: string) {
 export function useCreatePage(worldId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (p: { title: string; category?: string }) => {
+    mutationFn: async (p: { title: string; category?: string; parentId?: string | null }) => {
       try {
         return await api<PageIndex>(`/api/worlds/${worldId}/pages`, { body: p });
       } catch (e) {

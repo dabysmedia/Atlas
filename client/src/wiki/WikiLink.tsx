@@ -148,7 +148,7 @@ const SuggestList = forwardRef<SuggestHandle, SuggestProps>(function SuggestList
 });
 
 /** Shows the target page's live title, so renaming a page updates every link to it. */
-function WikiLinkView({ node }: NodeViewProps) {
+function WikiLinkView({ node, editor }: NodeViewProps) {
   const { pageId, label, text } = node.attrs as { pageId: string | null; label: string; text: string | null };
   const page = pageId ? wikiHost.pages.find((p) => p.id === pageId) : findByTitle(label);
   const [, force] = useState(0);
@@ -160,12 +160,13 @@ function WikiLinkView({ node }: NodeViewProps) {
   const open = async (e: React.MouseEvent) => {
     e.preventDefault();
     if (page) return wikiHost.openPage(page.id);
+    if (!editor.isEditable) return;
     const created = await wikiHost.createPage(label);
     wikiHost.openPage(created.id);
   };
   return (
     <NodeViewWrapper as="span" className={`wikilink ${page ? '' : 'missing'}`} onClick={open}
-      title={page ? `Open ${page.title}` : `"${label}" doesn't exist yet. Click to create it.`} data-wikilink="">
+      title={page ? `Open ${page.title}` : `"${label}" doesn't exist yet. Enable Edit to create it.`} data-wikilink="">
       {text || (page?.title ?? label)}
     </NodeViewWrapper>
   );

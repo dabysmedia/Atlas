@@ -1,0 +1,111 @@
+// Disposable-world browser checks for reading, pasted images and page organization.
+import { chromium } from 'playwright';
+import assert from 'node:assert/strict';
+import { mkdirSync } from 'node:fs';
+const base = process.env.BASE_URL ?? 'http://localhost:3001';
+const shots = process.env.SHOTS ?? './shots/wiki';
+mkdirSync(shots, { recursive: true });
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+page.setDefaultTimeout(30000);
+const errors = []; page.on('pageerror', e => errors.push(e.message));
+const api = (url, method = 'GET', body) => page.evaluate(async ({ url, method, body }) => {
+  const r = await fetch(url, { method, ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }) });
+  const result = await r.json(); if (!r.ok) throw new Error(`${url}: ${r.status} ${JSON.stringify(result)}`); return result;
+}, { url, method, body });
+let world;
+const until = async check => {
+  const deadline = Date.now() + 30000;
+  while (!await check()) { if (Date.now() > deadline) throw new Error('Timed out waiting for persisted wiki change'); await new Promise(resolve => setTimeout(resolve, 100)); }
+};
+try {
+  await page.goto(base); await page.locator('#u').fill('gm'); await page.locator('#p').fill(process.env.ATLAS_PASS ?? 'atlas-local-playtest');
+  await page.getByRole('button', { name: 'Sign in' }).click(); await page.waitForSelector('canvas.map');
+  world = await api('/api/worlds', 'POST', { name: `Wiki browser ${Date.now()}`, cols: 4, rows: 4 });
+  const path = `/api/worlds/${world.id}/pages`;
+  const parent = await api(path, 'POST', { title: 'Test faction', category: 'Faction', content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Before after' }] }] } });
+  const first = await api(path, 'POST', { title: 'First child', parentId: parent.id, category: 'Faction' });
+  const second = await api(path, 'POST', { title: 'Second child', parentId: parent.id, category: 'Faction' });
+  await page.goto(`${base}/w/${world.id}/wiki/${parent.id}`);
+  await page.getByRole('textbox', { name: 'Page title' }).waitFor();
+  await page.waitForFunction(() => document.querySelector('.wiki-title')?.value === 'Test faction');
+  const body = page.locator('.tiptap');
+  assert.equal(await body.getAttribute('contenteditable'), 'false');
+  assert(await page.getByRole('textbox', { name: 'Page title' }).evaluate(e => e.readOnly));
+  assert.equal(await page.getByRole('button', { name: 'Delete', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: 'Insert image' }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: 'Organize Test faction' }).count(), 0);
+  const saved = await page.locator('.wiki-meta > span').nth(1).boundingBox(), edit = await page.getByRole('button', { name: 'Edit page', exact: true }).boundingBox();
+  assert(edit.x > saved.x + saved.width, 'Edit sits to the right of Saved');
+  await page.evaluate(() => { window.__wikiHeldMap = window.__atlasMap; });
+  await page.getByRole('button', { name: 'Edit page', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.tiptap')?.isContentEditable);
+  await body.click(); await page.keyboard.press('Control+Home'); await page.keyboard.press('ArrowRight');
+  // Put a PNG on the real browser clipboard, then paste between text with Ctrl+V.
+  await page.evaluate(async () => {
+    const canvas = document.createElement('canvas'); canvas.width = 240; canvas.height = 120;
+    const ctx = canvas.getContext('2d'); ctx.fillStyle = '#294947'; ctx.fillRect(0, 0, 240, 120); ctx.fillStyle = '#dab67b'; ctx.font = '22px sans-serif'; ctx.fillText('Wiki image', 48, 68);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+  });
+  await page.keyboard.press('Control+V');
+  await body.locator('img.wiki-image').waitFor();
+  await page.waitForFunction(() => { const img = document.querySelector('.tiptap img.wiki-image'); return img?.complete && img.naturalWidth === 240; });
+  await page.waitForFunction(() => document.querySelector('.wiki-meta')?.textContent.includes('Saved'));
+  let stored = await api(`${path}/${parent.id}`);
+  const image = stored.content.content[0].content.find(node => node.type === 'image');
+  assert(image.attrs.src.startsWith(`/api/worlds/${world.id}/wiki-images/`));
+  assert.equal(stored.content.content[0].content.filter(node => node.type === 'text').map(node => node.text).join(''), 'Before after');
+  await page.screenshot({ path: `${shots}/editing.png` });
+  await page.getByRole('button', { name: 'Finish editing page' }).click();
+  assert.equal(await body.getAttribute('contenteditable'), 'false');
+  assert.equal(await page.getByRole('button', { name: 'Delete', exact: true }).count(), 0);
+  await body.click(); await page.keyboard.press('Control+Z'); await page.keyboard.type('Read-only attempt');
+  assert.equal(await body.locator('img.wiki-image').count(), 1, 'read mode blocks undo edits');
+  assert.equal(await body.textContent(), 'Before after', 'read mode blocks typing');
+  assert(await page.evaluate(() => window.__atlasMap === window.__wikiHeldMap), 'wiki editing keeps the map mounted');
+  await page.reload(); await body.locator('img.wiki-image').waitFor();
+  await page.waitForFunction(() => document.querySelector('.tiptap img.wiki-image')?.naturalWidth === 240);
+  assert.equal(await body.getAttribute('contenteditable'), 'false');
+  await page.screenshot({ path: `${shots}/reading.png` });
+  await page.getByRole('button', { name: 'Edit page', exact: true }).click();
+  await page.getByRole('button', { name: 'New child of Test faction', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.wiki-title')?.value === 'Untitled page');
+  await page.getByRole('textbox', { name: 'Page title' }).fill('New nested page');
+  await page.waitForFunction(() => document.querySelector('.wiki-meta')?.textContent.includes('Saved'));
+  const created = (await api(path)).find(p => p.title === 'New nested page'); assert.equal(created.parentId, parent.id);
+  await page.getByRole('button', { name: 'Organize Second child', exact: true }).click();
+  await page.getByRole('button', { name: 'Move up', exact: true }).click();
+  await until(async () => (await api(`${path}/${second.id}`)).sortOrder === 0);
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  const source = page.getByRole('treeitem').filter({ has: page.locator('span.t[title="New nested page"]') });
+  const destination = page.getByRole('treeitem').filter({ has: page.locator('span.t[title="First child"]') });
+  await source.dragTo(destination);
+  await until(async () => (await api(`${path}/${created.id}`)).parentId === first.id);
+  await page.getByRole('button', { name: 'Organize New nested page', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Parent page', exact: true }).selectOption('');
+  await page.getByRole('button', { name: 'Save parent', exact: true }).click();
+  await until(async () => (await api(`${path}/${created.id}`)).parentId === null);
+  await page.getByRole('dialog').waitFor({ state: 'detached' });
+  // First press only opens the dialog; cancellation keeps the page.
+  await page.getByRole('treeitem').filter({ has: page.locator('span.t[title="Test faction"]') }).click();
+  await page.waitForFunction(() => document.querySelector('.wiki-title')?.value === 'Test faction');
+  await page.getByRole('button', { name: 'Delete', exact: true }).click();
+  await page.getByRole('dialog').waitFor(); assert.equal((await api(`${path}/${parent.id}`)).id, parent.id);
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.getByRole('dialog').waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: 'Delete', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Delete', exact: true }).click();
+  await until(async () => !(await api(path)).some(p => p.id === parent.id));
+  stored = await api(path); assert(stored.every(p => p.parentId === null), JSON.stringify(stored));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('treeitem').filter({ has: page.locator('span.t[title="New nested page"]') }).click();
+  await page.getByRole('button', { name: 'Finish editing page' }).click();
+  await page.screenshot({ path: `${shots}/mobile.png` });
+  assert.deepEqual(errors, []);
+  console.log(JSON.stringify({ readOnly: true, clipboardImage: true, imageReload: true, childCreation: true, reorder: true, dragNesting: true, parentSelection: true, twoStepDelete: true, childPromotion: true, errors }));
+} finally {
+  if (world) await api(`/api/worlds/${world.id}`, 'DELETE');
+  await browser.close();
+}

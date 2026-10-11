@@ -114,6 +114,65 @@ describe('notable places', () => {
 });
 
 describe('wiki', () => {
+  it('orders and moves children, rejects cycles and keeps children when a parent is deleted', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Wiki tree', cols: 4, rows: 4 })).body;
+    const path = `/api/worlds/${w.id}/pages`;
+    const parent = (await call('POST', path, { title: 'Faction', category: 'Factions' })).body;
+    const a = (await call('POST', path, { title: 'History', parentId: parent.id })).body;
+    const b = (await call('POST', path, { title: 'People', parentId: parent.id })).body;
+    expect(a).toMatchObject({ parentId: parent.id, sortOrder: 0 });
+    expect(b.sortOrder).toBe(1);
+    expect((await call('POST', `${path}/reorder`, { parentId: parent.id, ids: [b.id, a.id] })).status).toBe(200);
+    expect((await call('GET', `${path}/${b.id}`)).body.sortOrder).toBe(0);
+    expect((await call('POST', `${path}/reorder`, { parentId: parent.id, ids: [a.id, a.id] })).status).toBe(400);
+    expect((await call('POST', `${path}/reorder`, { parentId: parent.id, ids: [a.id] })).status).toBe(400);
+    expect((await call('PATCH', `${path}/${parent.id}`, { parentId: a.id })).status).toBe(400);
+    expect((await call('PATCH', `${path}/${a.id}`, { parentId: a.id })).status).toBe(400);
+    const foreign = (await call('POST', '/api/worlds', { name: 'Other wiki', cols: 4, rows: 4 })).body;
+    expect((await call('POST', `/api/worlds/${foreign.id}/pages`, { title: 'Foreign', parentId: parent.id })).status).toBe(404);
+    expect((await call('PATCH', `${path}/${a.id}`, { parentId: null })).status).toBe(200);
+    expect((await call('PATCH', `${path}/${a.id}`, { parentId: parent.id })).status).toBe(200);
+    const competing = await Promise.all([
+      call('PATCH', `${path}/${a.id}`, { parentId: b.id }),
+      call('PATCH', `${path}/${b.id}`, { parentId: a.id }),
+    ]);
+    expect(competing.map(r => r.status).sort()).toEqual([200, 400]);
+    // Restore siblings, then deleting their parent promotes both instead of deleting their content.
+    await call('PATCH', `${path}/${a.id}`, { parentId: parent.id });
+    await call('PATCH', `${path}/${b.id}`, { parentId: parent.id });
+    await call('DELETE', `${path}/${parent.id}`);
+    expect((await call('GET', path)).body.map((p: { parentId: string | null }) => p.parentId)).toEqual([null, null]);
+    await call('DELETE', `/api/worlds/${w.id}`);
+    await call('DELETE', `/api/worlds/${foreign.id}`);
+  });
+
+  it('stores inline image bytes across restarts and protects them within their world', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Wiki images', cols: 4, rows: 4 })).body;
+    const path = `/api/worlds/${w.id}`, bytes = png(32, 16);
+    const upload = await app.inject({ method: 'POST', url: `${path}/wiki-images`, headers: { cookie, 'content-type': 'image/png' }, payload: bytes });
+    expect(upload.statusCode).toBe(200);
+    const image = upload.json();
+    expect(image).toMatchObject({ width: 32, height: 16 });
+    const content = { type: 'doc', content: [{ type: 'paragraph', content: [
+      { type: 'text', text: 'Before ' }, { type: 'image', attrs: { src: image.src, alt: 'Map reference' } }, { type: 'text', text: ' after' },
+    ] }] };
+    const page = (await call('POST', `${path}/pages`, { title: 'Illustrated', content })).body;
+    const copy = (await call('POST', `${path}/pages`, { title: 'Copy', content })).body;
+    await call('DELETE', `${path}/pages/${page.id}`);
+    await app.close(); const rebooted = await boot(); app = rebooted.app; db = rebooted.db;
+    expect((await call('GET', `${path}/pages/${copy.id}`)).body.content).toEqual(content);
+    const got = await app.inject({ method: 'GET', url: image.src, headers: { cookie } });
+    expect(got.headers['content-type']).toBe('image/png');
+    expect(got.rawPayload).toEqual(bytes);
+    expect((await app.inject({ method: 'GET', url: image.src })).statusCode).toBe(401);
+    const foreign = (await call('GET', '/api/worlds')).body.find((other: { id: string }) => other.id !== w.id);
+    expect((await call('GET', `/api/worlds/${foreign.id}/wiki-images/${image.id}`)).status).toBe(404);
+    expect((await app.inject({ method: 'POST', url: `${path}/wiki-images`, headers: { cookie, 'content-type': 'image/svg+xml' }, payload: Buffer.from('<svg/>') })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: `${path}/wiki-images`, headers: { cookie, 'content-type': 'image/png' }, payload: Buffer.alloc(10 * 1024 * 1024 + 1) })).statusCode).toBe(413);
+    await call('DELETE', `/api/worlds/${w.id}`);
+    expect((await call('GET', image.src)).status).toBe(404);
+  });
+
   it('creates, links, backlinks and finds pages', async () => {
     const w = (await call('POST', '/api/worlds', { name: 'Wiki World', cols: 4, rows: 4 })).body;
     const target = (await call('POST', `/api/worlds/${w.id}/pages`, { title: 'Duke Harrow' })).body;

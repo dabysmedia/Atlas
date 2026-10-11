@@ -50,6 +50,13 @@
       "when": 1791530447396,
       "tag": "0006_weather",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791678699839,
+      "tag": "0007_wiki_media_tree",
+      "breakpoints": true
     }
   ]
 }

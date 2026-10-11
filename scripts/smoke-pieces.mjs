@@ -81,8 +81,12 @@ try {
   await dm.getByRole('button', { name: 'Deploy on a hex', exact: true }).click(); await clickHex(dm, route[0]);
   await dm.waitForFunction(id => window.__atlasMap.miniatures.has(id), scout.id);
   const footing = await dm.evaluate(id => { const r = window.__atlasMap, obj = r.miniatures.group.children.find(o => o.userData.tokenId === id); return { y: obj.position.y, terrain: r.groundAt(obj.position.x, obj.position.z), count: r.miniatures.group.children.length }; }, scout.id);
-  assert(Math.abs(footing.y - footing.terrain - .35) < .01);
+  assert(Math.abs(footing.y - footing.terrain - 5) < .01);
   await dm.getByText('3D miniature ready', { exact: true }).waitFor();
+  await dm.getByRole('button', { name: 'Token drawer', exact: true }).click();
+  await dm.getByText('New piece', { exact: true }).first().click();
+  await dm.getByRole('img', { name: 'Scout Alpha miniature preview', exact: true }).waitFor();
+  assert(await dm.getByRole('img', { name: 'Scout Alpha miniature preview', exact: true }).evaluate(img => img.complete && img.naturalWidth === 240));
   const plainPixels = await visibleMiniature(dm);
   const oldModel = (await api(dm, `${path}/map`)).tokens.find(t => t.id === scout.id).modelId;
   await dm.locator('.token-panel input[type=file]').setInputFiles({ name: 'test-draco-miniature.glb', mimeType: 'model/gltf-binary', buffer: await compressedMiniature() });
@@ -143,6 +147,7 @@ try {
   }
   let state = await api(dm, `${path}/map`); assert.deepEqual(state.tokens.find(t => t.id === main.id).trail.map(v => v.hexId), route);
   const log = await api(dm, `${path}/events?kind=token.moved`); assert.equal(log.filter(e => e.actor === 'player').length, 3);
+  if (!await playerPage.getByRole('complementary', { name: 'Faction token drawer' }).count()) await playerPage.getByRole('button', { name: 'Token drawer', exact: true }).click();
   await playerPage.getByRole('button', { name: 'Deploy', exact: true }).click(); await clickHex(playerPage, route[2]);
   await until(async () => (await api(playerPage, `${path}/map`)).tokens.find(t => t.id === reserve.id).hexId === route[2]);
   assert(!await playerPage.evaluate(id => window.__atlasMap.miniatures.has(id), reserve.id), 'unassigned pieces use a 2D indicator');

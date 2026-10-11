@@ -46,7 +46,7 @@ export function MapView() {
   const player = usePlayer();
   const [showTrails, setShowTrails] = useState(() => partyTrailPref(world.id).get() ?? true);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [placing, setPlacing] = useState<(Token & { deployCopy?: boolean }) | null>(null);
+  const [placing, setPlacing] = useState<(Token & { deployCopy?: boolean; reopenDrawer?: boolean }) | null>(null);
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
   const location = useLocation();
@@ -329,7 +329,7 @@ export function MapView() {
     }
   };
 
-  const moveToken = async (t: Token & { deployCopy?: boolean }, hexId: string) => {
+  const moveToken = async (t: Token & { deployCopy?: boolean; reopenDrawer?: boolean }, hexId: string) => {
     if (t.deployCopy) {
       try {
         const copy = await api<Token>(`/api/worlds/${world.id}/tokens/${t.id}/deploy`, { body: { hexId } });
@@ -575,7 +575,7 @@ export function MapView() {
         if (performance.now() - lastMove.t < 80 && Math.hypot(vel.x, vel.y) > 120) r().fling(vel.x, vel.y);
       } else if (mode === 'maybe-click') {
         const h = r().hexAt(p.x, p.y);
-        if (h && toolRef.current.placing) { void handlers.current.moveToken(toolRef.current.placing, h.id); setFocus({ kind: 'token', id: toolRef.current.placing.id }); setPlacing(null); }
+        if (h && toolRef.current.placing) { void handlers.current.moveToken(toolRef.current.placing, h.id); setFocus({ kind: 'token', id: toolRef.current.placing.id }); setPlacing(null); if (toolRef.current.placing.reopenDrawer) setDrawerOpen(true); }
         else setFocus(h ? { kind: 'hex', id: h.id } : null);
       } else if (mode === 'stroke') {
         saving = handlers.current.commitStroke([...stroke]);
@@ -979,10 +979,10 @@ export function MapView() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {data && drawerOpen && <PieceDrawer data={data} startHexId={focusHex?.id ?? focusToken?.hexId} showTrails={showTrails} onShowTrails={setShowTrails} onClose={() => setDrawerOpen(false)} onSelect={id => { setFocus({ kind: 'token', id }); if (window.matchMedia('(max-width: 700px)').matches) setDrawerOpen(false); }} onDeployCopy={token => { setTool('select'); setPlacing({ ...token, deployCopy: true }); if (window.matchMedia('(max-width: 700px)').matches) setDrawerOpen(false); }} onPlace={token => { setTool('select'); setPlacing(token); if (window.matchMedia('(max-width: 700px)').matches) setDrawerOpen(false); }} />}
+        {data && drawerOpen && <PieceDrawer data={data} startHexId={focusHex?.id ?? focusToken?.hexId} showTrails={showTrails} onShowTrails={setShowTrails} onClose={() => setDrawerOpen(false)} onSelect={id => { setFocus({ kind: 'token', id }); if (window.matchMedia('(max-width: 700px)').matches) setDrawerOpen(false); }} onDeployCopy={token => { setTool('select'); setPlacing({ ...token, deployCopy: true, reopenDrawer: true }); setDrawerOpen(false); }} onPlace={token => { setTool('select'); setPlacing({ ...token, reopenDrawer: true }); setDrawerOpen(false); }} />}
         {placing && <div className="piece-place-hint panel" role="status">{placing.deployCopy ? `Choose a hex for another ${placing.name}` : placing.hexId ? `Choose the next adjacent hex for ${placing.name}` : `Choose a hex to deploy ${placing.name}`}<button className="iconbtn" aria-label="Cancel token placement" onClick={() => setPlacing(null)}><X size={14} /></button></div>}
         {data && focusHex && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusHex.name || 'Hex'}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div>{data.tokens.filter(t => t.hexId === focusHex.id).map(t => <button className="poi" key={t.id} onClick={() => setFocus({ kind: 'token', id: t.id })}>{t.name}</button>)}</aside>}
-        {data && focusToken && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusToken.name}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div><PieceControls token={focusToken} data={data} onMove={() => setPlacing(focusToken)} /></aside>}
+        {data && focusToken && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusToken.name}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div><PieceControls token={focusToken} data={data} onMove={() => { setPlacing(focusToken); setDrawerOpen(false); }} /></aside>}
         {data && focusHex && !align && !player && !placing && (
           <HexPanel key={`hex-${focusHex.id}`} hex={focusHex} data={data} fogCampaignId={fogCamp} explored={fogQ.data?.includes(focusHex.id) ?? false}
             label={r?.label(focusHex) ?? ''} onClose={() => setFocus(null)} onFocus={setFocus}
@@ -990,7 +990,7 @@ export function MapView() {
         )}
         {data && focusToken && !align && !player && !placing && (
           <TokenPanel key={`tok-${focusToken.id}`} token={focusToken} data={data} onClose={() => setFocus(null)} onFocus={setFocus}
-            onMove={() => { setTool('select'); setPlacing(focusToken); }}
+            onMove={() => { setTool('select'); setPlacing(focusToken); setDrawerOpen(false); }}
             onLocate={() => { const p = r?.tokenPos(focusToken); if (p && r) centerOn(p.x, p.y, Math.max(r.target.zoom, 1.5)); }}
             snap={(() => { const p = r?.tokenPos(focusToken); return p ? snapAt(p.x, p.y, 2.1) : () => null; })()} />
         )}

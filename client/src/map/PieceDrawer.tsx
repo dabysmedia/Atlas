@@ -1,4 +1,4 @@
-import { motion } from 'motion/react';
+import { motion, useIsPresent } from 'motion/react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -8,11 +8,13 @@ import type { MapData, Token } from '../types';
 import { useWorld } from '../world';
 import { toastError } from '../components/toast';
 import { MarkerIcon } from './panels';
+import { TokenPreview } from './TokenPreview';
 import { usePageIndex } from '../wiki/usePages';
 import { useMiniatureStatus, retryMiniature } from '../map3d/modelStatus';
 export const usePlayer = () => useQuery({ queryKey: qk.me, queryFn: () => api<{ username: string; role: 'gm' | 'player' }>('/api/auth/me'), staleTime: Infinity }).data?.role === 'player';
 const PRESETS = ['Scouting party', 'Soldiers', 'Envoy', 'Caravan', 'Fleet', 'Character', 'Party'];
 export function PieceDrawer({ data, onClose, onSelect, onPlace, onDeployCopy, startHexId, showTrails, onShowTrails }: { startHexId?: string | null; showTrails: boolean; onShowTrails: (v: boolean) => void; data: MapData; onClose: () => void; onSelect: (id: string) => void; onPlace: (t: Token) => void; onDeployCopy: (t: Token) => void }) {
+  const present = useIsPresent();
   const world = useWorld(), qc = useQueryClient(), player = usePlayer();
   const [factionId, setFaction] = useState(data.playerFactionId ?? data.factions[0]?.id ?? '');
   const faction = data.factions.find(f => f.id === factionId);
@@ -24,7 +26,7 @@ export function PieceDrawer({ data, onClose, onSelect, onPlace, onDeployCopy, st
   const refresh = async () => { await qc.invalidateQueries({ queryKey: qk.map(world.id) }); await qc.invalidateQueries({ queryKey: ['w', world.id, 'players'] }); };
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); try { await fn(); await refresh(); } catch (e) { toastError(e); } finally { setBusy(false); } };
   const create = () => run(async () => { const t = await api<Token>(`/api/worlds/${world.id}/tokens`, { body: { name: name.trim(), kind: preset === 'Party' ? 'party' : preset === 'Character' ? 'character' : 'unit', factionId, data: { role: preset } } }); setName(''); onSelect(t.id); });
-  return <motion.aside initial={{ y: 240, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 240, opacity: 0 }} transition={{ type: "spring", stiffness: 320, damping: 32 }} className="panel piece-drawer" aria-label="Faction token drawer">
+  return <motion.aside initial={{ y: 240, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 240, opacity: 0 }} transition={{ type: "spring", stiffness: 320, damping: 32 }} style={{ pointerEvents: present ? "auto" : "none" }} className="panel piece-drawer" aria-label="Faction token drawer">
     <div className="row"><Flag size={16} /><b className="grow">Token drawer</b><label className="toggle"><input type="checkbox" aria-label="Show party trail" checked={showTrails} onChange={e => onShowTrails(e.target.checked)} /><Footprints size={14} /> Trail</label><button className="iconbtn" aria-label="Close token drawer" onClick={onClose}><X size={16} /></button></div>
     <div className="piece-factions" role="tablist" aria-label="Token drawer factions">
       {data.factions.filter(f => !player || f.id === data.playerFactionId).map(f => <button key={f.id} role="tab" aria-selected={f.id === factionId} className={`btn sm ${f.id === factionId ? 'on' : 'ghost'}`} onClick={() => setFaction(f.id)}><span className="piece-faction-dot" style={{ background: f.color }} />{f.name}{f.isParty ? ' · Party' : ''}</button>)}
@@ -33,7 +35,7 @@ export function PieceDrawer({ data, onClose, onSelect, onPlace, onDeployCopy, st
     {faction && <>
       <div className="piece-palette scroll">
         {entries.map(t => <div className="piece-row" key={t.id}>
-          <button className="poi grow" aria-label={`Select ${t.name}`} onClick={() => onSelect(t.id)}><MarkerIcon kind={t.kind} color={t.color ?? faction.color} size={24} /><span className="grow">{t.name}<small>{t.mainParty ? 'Main party' : String(t.data.role ?? t.kind)} · {t.hexId ? 'Deployed' : 'In drawer'}{!t.visibleToPlayers ? ' · Hidden' : ''}</small></span></button>
+          <button className="poi grow piece-card" aria-label={`Select ${t.name}`} onClick={() => onSelect(t.id)}><TokenPreview token={t} color={t.color ?? faction.color} /><span className="grow">{t.name}<small>{t.mainParty ? 'Main party' : String(t.data.role ?? t.kind)} · {t.hexId ? 'Deployed' : 'In drawer'}{!t.visibleToPlayers ? ' · Hidden' : ''}</small></span></button>
           <button className="btn sm" disabled={busy} onClick={() => onPlace(t)}>{t.hexId ? 'Move' : 'Deploy'}</button>
           {!t.mainParty && <button className="btn ghost sm" disabled={busy} aria-label={`Deploy another ${t.name}`} onClick={() => onDeployCopy(t)}><Plus size={12} /> Deploy another</button>}
           {data.tokens.some(c => isCopyOf(c, t)) && <details className="piece-instances piece-tool"><summary>Copies · {data.tokens.filter(c => isCopyOf(c, t)).length}</summary><div className="panel piece-tool-content piece-instance-list">{data.tokens.filter(c => isCopyOf(c, t)).map(c => <button key={c.id} className="poi" aria-label={`Select ${c.name}`} onClick={() => onSelect(c.id)}>{c.name} · {c.hexId ? 'Deployed' : 'In reserve'}</button>)}</div></details>}

@@ -39,18 +39,20 @@ export class Miniatures {
       let piece = this.pieces.get(token.id);
       if (!piece) {
         const object = new THREE.Group(), model = clone(asset), box = new THREE.Box3().setFromObject(model), size = box.getSize(new THREE.Vector3());
-        const scale = Math.min(26 / Math.max(size.y, 0.001), 32 / Math.max(size.x, size.z, 0.001));
+        const scale = Math.min(46 / Math.max(size.y, 0.001), 56 / Math.max(size.x, size.z, 0.001));
         model.scale.setScalar(scale); model.position.set(-(box.min.x + box.max.x) * scale / 2, -box.min.y * scale, -(box.min.z + box.max.z) * scale / 2);
-        object.add(model); object.userData.tokenId = token.id; object.traverse(o => { o.userData.tokenId = token.id; if ((o as THREE.Mesh).isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+        object.add(model); object.userData.footprint = Math.max(size.x, size.z) * scale; object.userData.tokenId = token.id; object.traverse(o => { o.userData.tokenId = token.id; if ((o as THREE.Mesh).isMesh) { o.castShadow = true; o.receiveShadow = true; } });
         piece = { modelId: token.modelId, object }; this.pieces.set(token.id, piece); this.group.add(object);
       }
       const p = pos(token);
       if (p) {
         const peers = tokens.filter(t => t.hexId === token.hexId).sort((a, b) => a.id.localeCompare(b.id));
         const index = peers.findIndex(t => t.id === token.id);
+        const maxFootprint = peers.length > 1 ? 36 * Math.sin(Math.PI / peers.length) : 56;
+        piece.object.scale.setScalar(Math.min(1, maxFootprint / Math.max(piece.object.userData.footprint, 0.001)));
         const angle = index / peers.length * Math.PI * 2, radius = peers.length > 1 ? 20 : 0;
         const x = p.x + Math.cos(angle) * radius, y = p.y + Math.sin(angle) * radius;
-        piece.object.position.set(x, ground(x, y) + 0.35, y);
+        piece.object.position.set(x, ground(x, y) + 5, y);
       }
     }
   }

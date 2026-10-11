@@ -1172,3 +1172,11 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
   .ambient canvas { transition: none; }
 }
+
+.piece-row .piece-card { flex-direction: column; align-items: stretch; }
+.piece-picture { height: 94px; display: flex; align-items: center; justify-content: center; flex-direction: column; background: radial-gradient(ellipse at 50% 80%, color-mix(in srgb, var(--piece-color) 18%, transparent), transparent 70%); }
+.piece-picture img { width: 100%; height: 100%; object-fit: contain; }
+.piece-picture small { font-size: 10px; }
+.mapview:has(.piece-drawer) .dock-wrap { bottom: calc(var(--chrome-bottom) + 400px); }
+.shell:has(.piece-drawer) .world-module { bottom: calc(var(--chrome-bottom) + 400px); }
+@media (max-width: 700px) { .mapview:has(.piece-drawer) .inspector { bottom: calc(var(--chrome-bottom) + 400px); height: 26vh; } }

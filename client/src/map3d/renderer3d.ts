@@ -588,7 +588,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
 
   tokenAt(sx: number, sy: number): Token | undefined {
     this.layoutPieces();
-    for (const tile of [...this.pieceTiles].reverse()) if (Math.abs(sx - tile.x) <= 38 && sy >= tile.y - 19 && sy <= tile.y + 24) return tile.token;
+    for (const tile of [...this.pieceTiles].reverse()) if (Math.abs(sx - tile.x) <= (this.miniatures.has(tile.token.id) ? 41 : 38) && sy >= tile.y - 19 && sy <= tile.y + 35) return tile.token;
     const miniature = this.miniatures.hit(sx, sy, this.w, this.h, this.camera);
     if (miniature) return this.tokens.find(t => t.id === miniature);
     this.layoutPlaces();
@@ -623,9 +623,15 @@ export class HexMapRenderer3D extends HexMapRenderer {
       const modeled = this.miniatures.has(t.id);
       const radius = modeled ? 12 : 18;
       if (!modeled) { const sprite = markerSprite(t.kind, color, radius, this.dpr); const size = sprite.canvas.width / this.dpr; hud.drawImage(sprite.canvas, tile.x - size / 2, tile.y - size / 2, size, size); }
-      if (this.selectedTokenId === t.id) { hud.strokeStyle = '#8fe8e2'; hud.lineWidth = 2; hud.beginPath(); hud.arc(tile.x, tile.y, radius + 3, 0, Math.PI * 2); hud.stroke(); }
-      hud.font = '600 10px Inter, sans-serif'; hud.textAlign = 'center'; hud.textBaseline = 'middle'; hud.fillStyle = 'rgba(6,12,17,.92)'; hud.beginPath(); hud.roundRect(tile.x - 38, tile.y + 17, 76, 15, 5); hud.fill(); hud.fillStyle = '#f4ead4';
-      let name = `${!t.visibleToPlayers ? '◌ ' : ''}${t.name}`; while (hud.measureText(name).width > 70 && name.length > 2) name = name.slice(0, -2) + '…'; hud.fillText(name, tile.x, tile.y + 24);
+      if (!modeled && this.selectedTokenId === t.id) { hud.strokeStyle = '#8fe8e2'; hud.lineWidth = 2; hud.beginPath(); hud.arc(tile.x, tile.y, radius + 3, 0, Math.PI * 2); hud.stroke(); }
+      hud.font = '600 10px Inter, sans-serif'; hud.textAlign = 'center'; hud.textBaseline = 'middle';
+      const plateWidth = modeled ? 82 : 76, plateY = tile.y + 17;
+      hud.fillStyle = 'rgba(6,12,17,.92)'; hud.beginPath(); hud.roundRect(tile.x - plateWidth / 2, plateY, plateWidth, 18, 5); hud.fill();
+      hud.strokeStyle = this.selectedTokenId === t.id ? '#8fe8e2' : color; hud.lineWidth = this.selectedTokenId === t.id ? 2 : 1; hud.stroke();
+      if (modeled) { const icon = markerSprite(t.kind, color, 6, this.dpr), size = icon.canvas.width / this.dpr; hud.drawImage(icon.canvas, tile.x - plateWidth / 2 + 9 - size / 2, plateY + 9 - size / 2, size, size); }
+      hud.fillStyle = '#f4ead4';
+      let name = `${!t.visibleToPlayers ? '◌ ' : ''}${t.name}`; const available = modeled ? 59 : 70;
+      while (hud.measureText(name).width > available && name.length > 2) name = name.slice(0, -2) + '…'; hud.fillText(name, tile.x + (modeled ? 8 : 0), plateY + 9);
     }
     hud.restore();
     this.layoutPlaces();

@@ -3,8 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, qk } from '../api';
 import type { PageIndex, SearchHit } from '../types';
 
-export function usePageIndex(worldId: string) {
-  return useQuery({ queryKey: qk.pages(worldId), queryFn: () => api<PageIndex[]>(`/api/worlds/${worldId}/pages`), staleTime: 60_000 });
+export function usePageIndex(worldId: string, enabled = true) {
+  return useQuery({ queryKey: qk.pages(worldId), enabled, queryFn: () => api<PageIndex[]>(`/api/worlds/${worldId}/pages`), staleTime: 60_000 });
 }
 
 /** Instant client-side title match, ranked: exact, prefix, word-prefix, substring, subsequence. */

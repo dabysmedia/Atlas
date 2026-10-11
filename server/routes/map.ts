@@ -237,7 +237,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
 
   // ---------------------------------------------------------------- tokens
   const TokenKind = z.enum(TOKEN_KIND_KEYS);
-  const TokenData = z.object({ majorCity: z.boolean().optional() }).catchall(z.unknown());
+  const TokenData = z.object({ majorCity: z.boolean().optional(), sheetPageId: Uuid.nullable().optional() }).catchall(z.unknown());
   const TokenCreate = z.object({
     kind: TokenKind, name: z.string().trim().min(1).max(120), hexId: Uuid.nullable().optional(),
     factionId: Uuid.nullable().optional(), campaignId: Uuid.nullable().optional(), color: z.string().max(20).nullable().optional(),

@@ -175,11 +175,17 @@ describe('faction pieces and player movement', () => {
     const before = (await call('GET', `${path}/map`)).body;
     const [h0, h1] = [0, 1].map(q => before.hexes.find((h: { q: number; r: number }) => h.q === q && h.r === 0).id);
     const original = (await call('POST', `${path}/tokens`, { name: 'Scouts', kind: 'unit', factionId: faction.id, color: '#123456', data: { role: 'Scouting party' }, hexId: h0 })).body;
+    const sheet = (await call('POST', `${path}/pages`, { title: 'Scout sheet' })).body;
+    expect((await call('PATCH', `${path}/tokens/${original.id}`, { data: { role: 'Scouting party', sheetPageId: sheet.id } })).status).toBe(200);
+    const foreign = (await call('POST', '/api/worlds', { name: 'Other sheets', cols: 4, rows: 4 })).body;
+    const foreignSheet = (await call('POST', `/api/worlds/${foreign.id}/pages`, { title: 'Private sheet' })).body;
+    expect((await call('PATCH', `${path}/tokens/${original.id}`, { data: { sheetPageId: foreignSheet.id } })).status).toBe(400);
+    await call('DELETE', `/api/worlds/${foreign.id}`);
     const copies = await Promise.all([call('POST', `${path}/tokens/${original.id}/deploy`, { hexId: h0 }), call('POST', `${path}/tokens/${original.id}/deploy`, { hexId: h0 })]);
     expect(copies.map(c => c.status)).toEqual([200, 200]);
     expect(new Set(copies.map(c => c.body.id)).size).toBe(2);
     expect(new Set(copies.map(c => c.body.name))).toEqual(new Set(['Scouts #2', 'Scouts #3']));
-    for (const c of copies) expect(c.body).toMatchObject({ hexId: h0, factionId: faction.id, color: '#123456', mainParty: false, data: { role: 'Scouting party' } });
+    for (const c of copies) expect(c.body).toMatchObject({ hexId: h0, factionId: faction.id, color: '#123456', mainParty: false, data: { role: 'Scouting party', sheetPageId: sheet.id, drawerSourceId: original.id } });
     await call('POST', `${path}/tokens/${copies[0].body.id}/move`, { from: h0, path: [h1] });
     const after = (await call('GET', `${path}/map`)).body;
     expect(after.tokens.find((t: { id: string }) => t.id === original.id).hexId).toBe(h0);

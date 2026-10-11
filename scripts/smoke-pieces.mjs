@@ -1,6 +1,8 @@
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import { createRequire } from 'node:module';
 const base = process.env.BASE_URL ?? 'http://localhost:3001', shots = process.env.SHOTS ?? './shots/pieces';
 mkdirSync(shots, { recursive: true });
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
@@ -20,6 +22,38 @@ function miniature() {
   let json = JSON.stringify(doc); json = json.padEnd(Math.ceil(json.length / 4) * 4, ' '); const text = Buffer.from(json), out = Buffer.alloc(28 + text.length + bin.length);
   out.write('glTF'); out.writeUInt32LE(2,4); out.writeUInt32LE(out.length,8); out.writeUInt32LE(text.length,12); out.writeUInt32LE(0x4e4f534a,16); text.copy(out,20); out.writeUInt32LE(bin.length,20+text.length); out.writeUInt32LE(0x004e4942,24+text.length); bin.copy(out,28+text.length); return out;
 }
+async function compressedMiniature() {
+  const module = { exports: {} };
+  runInNewContext(readFileSync('node_modules/three/examples/jsm/libs/draco/gltf/draco_encoder.js', 'utf8'), { module, exports: module.exports, require: createRequire(import.meta.url), console, process: { ...process, on: () => {} }, Buffer, __dirname: process.cwd(), setTimeout, clearTimeout });
+  const encoder = await new Promise(resolve => module.exports({ onModuleLoaded: e => { delete e.then; resolve(e); } }));
+  const mesh = new encoder.Mesh(), builder = new encoder.MeshBuilder(), compressor = new encoder.Encoder(), out = new encoder.DracoInt8Array();
+  builder.AddFloatAttributeToMesh(mesh, encoder.POSITION, 4, 3, new Float32Array([0,1,0,-1,0,1,1,0,1,0,0,-1]));
+  builder.AddFacesToMesh(mesh, 4, new Uint32Array([0,1,2,0,2,3,0,3,1,1,3,2]));
+  compressor.SetAttributeQuantization(encoder.POSITION, 14);
+  const length = compressor.EncodeMeshToDracoBuffer(mesh, out); assert(length > 0);
+  const bin = Buffer.alloc(Math.ceil(length / 4) * 4); for (let i = 0; i < length; i++) bin[i] = out.GetValue(i);
+  const doc = { asset: { version: '2.0' }, extensionsUsed: ['KHR_draco_mesh_compression'], extensionsRequired: ['KHR_draco_mesh_compression'], scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, extensions: { KHR_draco_mesh_compression: { bufferView: 0, attributes: { POSITION: 0 } } } }] }], buffers: [{ byteLength: bin.length }], bufferViews: [{ buffer: 0, byteLength: length }], accessors: [{ componentType: 5126, count: 4, type: 'VEC3', min: [-1,0,-1], max: [1,1,1] }, { componentType: 5123, count: 12, type: 'SCALAR' }] };
+  let json = JSON.stringify(doc); json = json.padEnd(Math.ceil(json.length / 4) * 4, ' '); const text = Buffer.from(json), glb = Buffer.alloc(28 + text.length + bin.length);
+  glb.write('glTF'); glb.writeUInt32LE(2,4); glb.writeUInt32LE(glb.length,8); glb.writeUInt32LE(text.length,12); glb.writeUInt32LE(0x4e4f534a,16); text.copy(glb,20); glb.writeUInt32LE(bin.length,20+text.length); glb.writeUInt32LE(0x004e4942,24+text.length); bin.copy(glb,28+text.length);
+  for (const obj of [mesh,builder,compressor,out]) encoder.destroy(obj);
+  return glb;
+}
+async function visibleMiniature(page) {
+  const captures = await page.evaluate(() => {
+    const r = window.__atlasMap;
+    r.miniatures.group.visible = false; r.gl.render(r.scene, r.camera); const absent = r.glCanvas.toDataURL();
+    r.miniatures.group.visible = true; r.gl.render(r.scene, r.camera); const present = r.glCanvas.toDataURL();
+    return [absent, present];
+  });
+  const changed = await page.evaluate(async urls => {
+    const decode = async url => { const img = new Image(); img.src = url; await img.decode(); const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const ctx = c.getContext('2d'); ctx.drawImage(img,0,0); return ctx.getImageData(0,0,c.width,c.height).data; };
+    const [a,b] = await Promise.all(urls.map(decode)); let changed = 0;
+    for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i]-b[i])+Math.abs(a[i+1]-b[i+1])+Math.abs(a[i+2]-b[i+2]) > 20) changed++;
+    return changed;
+  }, captures);
+  assert(changed > 20, `miniature must render visible pixels, observed ${changed}`);
+  return changed;
+}
 let world, playerPage;
 try {
   await login(dm, 'gm', process.env.ATLAS_PASS ?? 'atlas-local-playtest');
@@ -27,6 +61,7 @@ try {
   const faction = await api(dm, `${path}/factions`, 'POST', { name: 'Test party', color: '#da9f48' });
   await api(dm, `${path}/factions`, 'POST', { name: 'Test rival', color: '#599ac1' });
   await api(dm, `${path}/campaigns`, 'POST', { name: 'Test travel campaign' });
+  const sheet = await api(dm, `${path}/pages`, 'POST', { title: 'Scout sheet' });
   const before = await api(dm, `${path}/map`);
   const route = [1,2,3,4].map(q => before.hexes.find(h => h.q === q && h.r === 1).id);
   await dm.goto(`${base}/w/${world.id}/map`); await dm.waitForFunction(() => window.__atlasMap?.hasGround);
@@ -41,10 +76,38 @@ try {
   let scout = (await api(dm, `${path}/map`)).tokens.find(t => t.name === 'Scout Alpha'); assert.equal(scout.hexId, null);
   await dm.locator('.token-panel input[type=file]').setInputFiles({ name: 'test-miniature.glb', mimeType: 'model/gltf-binary', buffer: miniature() });
   await until(async () => (await api(dm, `${path}/map`)).tokens.find(t => t.id === scout.id).modelId);
+  await dm.getByRole('combobox', { name: 'Token sheet', exact: true }).selectOption(sheet.id);
+  await until(async () => (await api(dm, `${path}/map`)).tokens.find(t => t.id === scout.id).data.sheetPageId === sheet.id);
   await dm.getByRole('button', { name: 'Deploy on a hex', exact: true }).click(); await clickHex(dm, route[0]);
   await dm.waitForFunction(id => window.__atlasMap.miniatures.has(id), scout.id);
   const footing = await dm.evaluate(id => { const r = window.__atlasMap, obj = r.miniatures.group.children.find(o => o.userData.tokenId === id); return { y: obj.position.y, terrain: r.groundAt(obj.position.x, obj.position.z), count: r.miniatures.group.children.length }; }, scout.id);
   assert(Math.abs(footing.y - footing.terrain - .35) < .01);
+  await dm.getByText('3D miniature ready', { exact: true }).waitFor();
+  const plainPixels = await visibleMiniature(dm);
+  const oldModel = (await api(dm, `${path}/map`)).tokens.find(t => t.id === scout.id).modelId;
+  await dm.locator('.token-panel input[type=file]').setInputFiles({ name: 'test-draco-miniature.glb', mimeType: 'model/gltf-binary', buffer: await compressedMiniature() });
+  await until(async () => (await api(dm, `${path}/map`)).tokens.find(t => t.id === scout.id).modelId !== oldModel);
+  await dm.waitForFunction(id => { const r = window.__atlasMap, t = r.tokens.find(t => t.id === id); return r.miniatures.pieces.get(id)?.modelId === t.modelId; }, scout.id);
+  await dm.getByText('3D miniature ready', { exact: true }).waitFor();
+  const compressedPixels = await visibleMiniature(dm);
+  await dm.getByRole('link', { name: 'Open token sheet', exact: true }).click();
+  await dm.getByRole('region', { name: 'Wiki panel' }).waitFor();
+  assert(await dm.evaluate(() => window.__atlasMap === window.__piecesHeldMap));
+  await dm.getByRole('button', { name: 'Close Wiki', exact: true }).click();
+  await dm.locator('.world-module').waitFor({ state: 'detached' });
+  const goodModel = (await api(dm, `${path}/map`)).tokens.find(t => t.id === scout.id).modelId;
+  let json = JSON.stringify({ asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [] }] }); json = json.padEnd(Math.ceil(json.length / 4) * 4, ' ');
+  const empty = Buffer.alloc(20 + Buffer.byteLength(json)); empty.write('glTF'); empty.writeUInt32LE(2,4); empty.writeUInt32LE(empty.length,8); empty.writeUInt32LE(Buffer.byteLength(json),12); empty.writeUInt32LE(0x4e4f534a,16); empty.write(json,20);
+  let modelRequests = 0; dm.on('request', req => { if (/token-models\/[a-f0-9-]+$/.test(req.url())) modelRequests++; });
+  await dm.locator('.token-panel input[type=file]').setInputFiles({ name: 'empty-miniature.glb', mimeType: 'model/gltf-binary', buffer: empty });
+  await dm.getByText('This GLB has no visible geometry.', { exact: false }).waitFor();
+  const requestsBefore = modelRequests;
+  await dm.getByRole('button', { name: 'Retry miniature', exact: true }).click();
+  await until(() => modelRequests > requestsBefore);
+  await dm.getByText('This GLB has no visible geometry.', { exact: false }).waitFor();
+  await dm.getByRole('combobox', { name: 'Token miniature', exact: true }).selectOption(goodModel);
+  await dm.waitForFunction(({ id, model }) => window.__atlasMap.miniatures.pieces.get(id)?.modelId === model, { id: scout.id, model: goodModel });
+
   await dm.getByRole('button', { name: 'Designate as player party', exact: true }).click();
   await until(async () => (await api(dm, `${path}/map`)).tokens.some(t => t.mainParty));
   const main = (await api(dm, `${path}/map`)).tokens.find(t => t.mainParty);
@@ -58,7 +121,7 @@ try {
   assert.equal(cards.length, 2); assert(Math.abs(cards[0].y - cards[1].y) < 1 && cards[1].x > cards[0].x);
   assert.equal(await dm.getByRole('button', { name: 'Return to drawer', exact: true }).count(), 0);
   assert(await dm.getByRole('checkbox', { name: 'Visible to players' }).isDisabled());
-  const panelsClear = await dm.evaluate(() => document.querySelector('.inspector').getBoundingClientRect().bottom < document.querySelector('.piece-drawer').getBoundingClientRect().top);
+  const panelsClear = await dm.evaluate(() => { const details = document.querySelector('.inspector').getBoundingClientRect(), tray = document.querySelector('.piece-drawer').getBoundingClientRect(); return tray.right < details.left && Math.abs(tray.bottom - innerHeight) < 2; });
   assert(panelsClear, 'token tray stays clear of the selected piece inspector');
   await dm.screenshot({ path: `${shots}/drawer-and-miniature.png` });
   await dm.getByText('New piece', { exact: true }).first().click();
@@ -91,6 +154,8 @@ try {
   assert.deepEqual(copy.trail.map(v => v.hexId), [route[2]]);
   assert.equal((await api(dm, `${path}/map`)).tokens.find(t => t.id === scout.id).hexId, route[0]);
   await dm.waitForFunction(id => window.__atlasMap.miniatures.has(id), copy.id);
+  assert.equal(copy.data.sheetPageId, sheet.id);
+  assert.equal(await dm.locator('.piece-row').count(), 3, 'copies do not replace or duplicate the persistent drawer entry');
   await dm.getByRole('button', { name: 'Select Scout Alpha', exact: true }).click();
   await dm.waitForFunction(() => { const panels = document.querySelectorAll('.token-panel'); return panels.length === 1 && panels[0].querySelector('input[aria-label="Marker name"]')?.value === 'Scout Alpha'; });
   await dm.getByRole('checkbox', { name: 'Visible to players' }).uncheck();
@@ -117,7 +182,7 @@ try {
   await playerPage.locator('.inspector').waitFor({ state: 'detached' });
   await playerPage.screenshot({ path: `${shots}/mobile-movement.png` });
   await playerPage.getByRole('button', { name: 'Cancel token placement' }).click();
-  assert.deepEqual(errors, []); console.log(JSON.stringify({ drawer: true, modelFooting: footing, twoTokensSelectable: true, playerMovedThree: true, dmLive: true, hiddenServerAndLive: true, persists: true, hexesUnchanged: true, errors }));
+  assert.deepEqual(errors, []); console.log(JSON.stringify({ plainPixels, compressedPixels, drawer: true, modelFooting: footing, twoTokensSelectable: true, playerMovedThree: true, dmLive: true, hiddenServerAndLive: true, persists: true, hexesUnchanged: true, errors }));
 } finally {
   if (playerPage) await playerPage.close();
   if (world) await api(dm, `/api/worlds/${world.id}`, 'DELETE');

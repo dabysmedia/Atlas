@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "scripts": {
     "dev:server": "tsx watch server/index.ts",
-    "dev:client": "vite",
-    "build": "vite build && tsc -p tsconfig.server.json && node scripts/copy-migrations.mjs",
+    "dev:client": "node scripts/copy-miniature-decoders.mjs && vite",
+    "build": "node scripts/copy-miniature-decoders.mjs && vite build && tsc -p tsconfig.server.json && node scripts/copy-migrations.mjs",
     "start": "node dist/server/index.js",
     "typecheck": "tsc -p .",
     "test": "vitest run",

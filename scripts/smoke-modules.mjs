@@ -78,6 +78,7 @@ try {
   await page.getByRole('region', { name: 'Factions panel' }).waitFor(); assert.deepEqual(await snapshot(), kept, '3D map stays mounted');
   await page.getByRole('button', { name: 'Close Factions', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForFunction(() => window.__atlasMap?.w === 390 && document.querySelector('canvas.map')?.getBoundingClientRect().width === 390);
   const mobilePoint=await page.evaluate(id=>{
     const r=window.__atlasMap,h=r.hexIds().find(h=>h.id===id);r.saved=null;r.setCamera({x:h.x,y:h.y,zoom:1.7});r.frame(performance.now(),false);
     const s=r.hexScreen(id),b=r.hud.getBoundingClientRect();return{x:s.x+b.x,y:s.y+b.y};

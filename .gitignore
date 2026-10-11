@@ -5,3 +5,5 @@ shots-live
 *.log
 .env
 .scratch/
+
+/client/public/codecs/

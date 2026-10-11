@@ -1,5 +1,6 @@
 import { motion } from 'motion/react';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Flag, Plus, X, Eye, EyeOff, Footprints, Box } from 'lucide-react';
 import { api, qk, clientHeaders, pendingWrites } from '../api';
@@ -7,12 +8,16 @@ import type { MapData, Token } from '../types';
 import { useWorld } from '../world';
 import { toastError } from '../components/toast';
 import { MarkerIcon } from './panels';
+import { usePageIndex } from '../wiki/usePages';
+import { useMiniatureStatus, retryMiniature } from '../map3d/modelStatus';
 export const usePlayer = () => useQuery({ queryKey: qk.me, queryFn: () => api<{ username: string; role: 'gm' | 'player' }>('/api/auth/me'), staleTime: Infinity }).data?.role === 'player';
 const PRESETS = ['Scouting party', 'Soldiers', 'Envoy', 'Caravan', 'Fleet', 'Character', 'Party'];
 export function PieceDrawer({ data, onClose, onSelect, onPlace, onDeployCopy, startHexId, showTrails, onShowTrails }: { startHexId?: string | null; showTrails: boolean; onShowTrails: (v: boolean) => void; data: MapData; onClose: () => void; onSelect: (id: string) => void; onPlace: (t: Token) => void; onDeployCopy: (t: Token) => void }) {
   const world = useWorld(), qc = useQueryClient(), player = usePlayer();
   const [factionId, setFaction] = useState(data.playerFactionId ?? data.factions[0]?.id ?? '');
   const faction = data.factions.find(f => f.id === factionId);
+  const isCopyOf = (t: Token, source: Token) => t.id !== source.id && (t.data.drawerSourceId === source.id || !t.data.drawerSourceId && t.data.drawerName === source.name && t.factionId === source.factionId && t.kind === source.kind);
+  const entries = data.tokens.filter(t => t.factionId === factionId && ['party', 'unit', 'character', 'marker'].includes(t.kind) && !t.data.drawerSourceId && !t.data.drawerName);
   const [name, setName] = useState(''), [preset, setPreset] = useState(PRESETS[0]);
   const [username, setUsername] = useState(''), [password, setPassword] = useState(''), [campaign, setCampaign] = useState(data.campaigns[0]?.id ?? '');
   const [busy, setBusy] = useState(false);
@@ -27,10 +32,11 @@ export function PieceDrawer({ data, onClose, onSelect, onPlace, onDeployCopy, st
     {!faction && <p className="muted">Create a faction in the Factions module first, then open its drawer.</p>}
     {faction && <>
       <div className="piece-palette scroll">
-        {data.tokens.filter(t => t.factionId === factionId && ['party', 'unit', 'character', 'marker'].includes(t.kind)).map(t => <div className="piece-row" key={t.id}>
+        {entries.map(t => <div className="piece-row" key={t.id}>
           <button className="poi grow" aria-label={`Select ${t.name}`} onClick={() => onSelect(t.id)}><MarkerIcon kind={t.kind} color={t.color ?? faction.color} size={24} /><span className="grow">{t.name}<small>{t.mainParty ? 'Main party' : String(t.data.role ?? t.kind)} · {t.hexId ? 'Deployed' : 'In drawer'}{!t.visibleToPlayers ? ' · Hidden' : ''}</small></span></button>
           <button className="btn sm" disabled={busy} onClick={() => onPlace(t)}>{t.hexId ? 'Move' : 'Deploy'}</button>
           {!t.mainParty && <button className="btn ghost sm" disabled={busy} aria-label={`Deploy another ${t.name}`} onClick={() => onDeployCopy(t)}><Plus size={12} /> Deploy another</button>}
+          {data.tokens.some(c => isCopyOf(c, t)) && <details className="piece-instances piece-tool"><summary>Copies · {data.tokens.filter(c => isCopyOf(c, t)).length}</summary><div className="panel piece-tool-content piece-instance-list">{data.tokens.filter(c => isCopyOf(c, t)).map(c => <button key={c.id} className="poi" aria-label={`Select ${c.name}`} onClick={() => onSelect(c.id)}>{c.name} · {c.hexId ? 'Deployed' : 'In reserve'}</button>)}</div></details>}
         </div>)}
       </div>
       {!player && <>
@@ -60,6 +66,8 @@ function PlayerList() {
 }
 export function PieceControls({ token, data, onMove }: { token: Token; data: MapData; onMove: () => void }) {
   const world = useWorld(), qc = useQueryClient(), player = usePlayer(), [busy, setBusy] = useState(false);
+  const pages = usePageIndex(world.id, !player);
+  const miniatureStatus = useMiniatureStatus(token.worldId, token.modelId);
   const [visibility, setVisibility] = useState<boolean | null>(null);
   const models = useQuery({ queryKey: ['w', world.id, 'tokenModels'], enabled: !player, queryFn: () => api<{ id: string; name: string }[]>(`/api/worlds/${world.id}/token-models`) });
   const patch = async (body: Partial<Token>) => {
@@ -74,6 +82,10 @@ export function PieceControls({ token, data, onMove }: { token: Token; data: Map
     {!player && <>
       <label className="toggle"><input type="checkbox" aria-label="Visible to players" disabled={token.mainParty || visibility !== null} checked={visibility ?? token.visibleToPlayers} onChange={e => { const visible = e.target.checked; setVisibility(visible); void patch({ visibleToPlayers: visible }).finally(() => setVisibility(null)); }} />{(visibility ?? token.visibleToPlayers) ? <Eye size={14} /> : <EyeOff size={14} />} Visible to players</label>
       <label className="field">Miniature<select className="select" aria-label="Token miniature" value={token.modelId ?? ''} onChange={e => patch({ modelId: e.target.value || null })}><option value="">2D indicator</option>{models.data?.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label>
+      {token.modelId && <div className={miniatureStatus?.state === 'error' ? 'miniature-error' : 'faint'} role="status">{!token.hexId ? 'Miniature will load when deployed.' : miniatureStatus?.state === 'ready' ? '3D miniature ready' : miniatureStatus?.state === 'error' ? <>{miniatureStatus.message}<button className="btn ghost sm" onClick={() => retryMiniature(token.worldId, token.modelId!)}>Retry miniature</button></> : 'Loading 3D miniature…'}</div>}
+      <label className="field">Token sheet<select className="select" aria-label="Token sheet" value={String(token.data.sheetPageId ?? '')} onChange={e => patch({ data: { ...token.data, sheetPageId: e.target.value || null } })}><option value="">No sheet assigned</option>{pages.data?.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}</select></label>
+      {pages.data?.some(p => p.id === token.data.sheetPageId) && <Link className="btn ghost sm" to={`/w/${world.id}/wiki/${token.data.sheetPageId}`}>Open token sheet</Link>}
+      <span className="faint">Link a wiki page for this token’s sheet. New copies use the same sheet.</span>
       <label className="btn"><Box size={14} />{busy ? 'Uploading…' : 'Upload GLB miniature'}<input type="file" accept=".glb" hidden disabled={busy} onChange={async e => {
         const file = e.target.files?.[0]; e.target.value = ''; if (!file) return; setBusy(true);
         try { if (file.size > 10 * 1024 * 1024) throw new Error('Miniatures must be under 10 MB.'); const response = await pendingWrites.track(fetch(`/api/worlds/${world.id}/token-models?name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { ...clientHeaders, 'content-type': 'model/gltf-binary' }, body: file })); const model = await response.json(); if (!response.ok) throw new Error(model.error); await patch({ modelId: model.id }); qc.invalidateQueries({ queryKey: ['w', world.id, 'tokenModels'] }); } catch (e) { toastError(e); } finally { setBusy(false); }

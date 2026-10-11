@@ -165,6 +165,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.hud = hud;
     this.hudCtx = hud.getContext('2d')!;
     this.gl = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, powerPreference: 'high-performance' });
+    this.miniatures.configure(this.gl);
     this.gl.outputColorSpace = THREE.SRGBColorSpace;
     this.gl.toneMapping = THREE.ACESFilmicToneMapping;
     this.gl.shadowMap.enabled = true;
@@ -619,8 +620,9 @@ export class HexMapRenderer3D extends HexMapRenderer {
       const t = tile.token, color = t.color ?? this.factionColor.get(t.factionId ?? '') ?? '#d6b06a';
       hud.globalAlpha = t.visibleToPlayers ? 1 : 0.62;
       hud.strokeStyle = color; hud.lineWidth = 1; hud.beginPath(); hud.moveTo(tile.foot.x, tile.foot.y); hud.lineTo(tile.x, tile.y + 17); hud.stroke();
-      const radius = this.miniatures.has(t.id) && this.overviewAlpha() < 0.5 ? 12 : 18;
-      const sprite = markerSprite(t.kind, color, radius, this.dpr); const size = sprite.canvas.width / this.dpr; hud.drawImage(sprite.canvas, tile.x - size / 2, tile.y - size / 2, size, size);
+      const modeled = this.miniatures.has(t.id);
+      const radius = modeled ? 12 : 18;
+      if (!modeled) { const sprite = markerSprite(t.kind, color, radius, this.dpr); const size = sprite.canvas.width / this.dpr; hud.drawImage(sprite.canvas, tile.x - size / 2, tile.y - size / 2, size, size); }
       if (this.selectedTokenId === t.id) { hud.strokeStyle = '#8fe8e2'; hud.lineWidth = 2; hud.beginPath(); hud.arc(tile.x, tile.y, radius + 3, 0, Math.PI * 2); hud.stroke(); }
       hud.font = '600 10px Inter, sans-serif'; hud.textAlign = 'center'; hud.textBaseline = 'middle'; hud.fillStyle = 'rgba(6,12,17,.92)'; hud.beginPath(); hud.roundRect(tile.x - 38, tile.y + 17, 76, 15, 5); hud.fill(); hud.fillStyle = '#f4ead4';
       let name = `${!t.visibleToPlayers ? '◌ ' : ''}${t.name}`; while (hud.measureText(name).width > 70 && name.length > 2) name = name.slice(0, -2) + '…'; hud.fillText(name, tile.x, tile.y + 24);

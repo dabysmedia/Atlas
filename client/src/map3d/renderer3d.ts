@@ -602,13 +602,14 @@ export class HexMapRenderer3D extends HexMapRenderer {
     return super.tokenAt(sx, sy);
   }
 
+  showPartyTrails = true;
   protected drawTokens(now: number, z: number, still?: boolean) {
     super.drawTokens(now, z, still);
     this.layoutPieces();
     const hud = this.ctx;
     hud.save(); hud.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     // The party's actual ordered visits; a null visit breaks repositioning/return-to-drawer paths.
-    for (const token of this.tokens.filter(t => t.mainParty && t.hexId)) {
+    for (const token of this.tokens.filter(t => this.showPartyTrails && t.mainParty && t.hexId)) {
       hud.strokeStyle = token.color ?? this.factionColor.get(token.factionId ?? '') ?? '#d6b06a'; hud.lineWidth = 2.5; hud.globalAlpha = 0.85; hud.setLineDash([5, 4]);
       hud.beginPath(); let previous: { x: number; y: number } | null = null;
       for (const visit of token.trail ?? []) { const h = this.byId.get(visit.hexId ?? ''); if (!h) { previous = null; continue; } const p = this.worldToScreen(h.cx, h.cy); if (previous) hud.lineTo(p.x, p.y); else hud.moveTo(p.x, p.y); previous = p; }

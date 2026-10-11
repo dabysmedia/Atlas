@@ -248,6 +248,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
   app.post('/api/worlds/:w/tokens', async (req) => {
     const w = await getWorld(db, (req.params as P).w);
     const body = TokenCreate.parse(req.body);
+    if (body.mainParty && (!body.hexId || body.visibleToPlayers === false)) throw badRequest('The main party must start on a hex and remain visible.');
     await validateTokenRefs(db, w.id, body);
     if (body.mainParty && await db.query.tokens.findFirst({ where: and(eq(tokens.factionId, body.factionId!), eq(tokens.mainParty, true)) })) throw badRequest('This faction already has its main party token.');
     const map = await rootMap(db, w.id);
@@ -273,6 +274,8 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const tok = await db.query.tokens.findFirst({ where: and(eq(tokens.id, Uuid.parse(id)), eq(tokens.worldId, w.id)) });
     if (!tok) throw notFound('Token');
     const body = TokenPatch.parse(req.body);
+    if (tok.mainParty && (body.hexId === null || body.visibleToPlayers === false || body.mainParty === false || (body.kind !== undefined && body.kind !== 'party') || (body.factionId !== undefined && body.factionId !== tok.factionId))) throw badRequest('The main party must remain on the map, visible and assigned to its faction.');
+    if (body.mainParty && (!(body.hexId ?? tok.hexId) || (body.visibleToPlayers ?? tok.visibleToPlayers) === false)) throw badRequest('Choose a starting hex and keep the main party visible.');
     await validateTokenRefs(db, w.id, { ...tok, ...body });
     if (body.hexId) await worldHexes(db, w.id, [body.hexId]);
     // Direct GM repositioning is recorded as a break, never an invented path.
@@ -296,6 +299,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const w = await getWorld(db, wid);
     const tok = await db.query.tokens.findFirst({ where: and(eq(tokens.id, Uuid.parse(id)), eq(tokens.worldId, w.id)) });
     if (!tok) throw notFound('Token');
+    if (tok.mainParty) throw badRequest('The main party must remain on the map.');
     // Removing a settlement token removes the settlement (it cascades to the token).
     if (tok.settlementId) await db.delete(settlements).where(eq(settlements.id, tok.settlementId));
     else await db.delete(tokens).where(eq(tokens.id, tok.id));

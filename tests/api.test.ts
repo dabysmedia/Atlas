@@ -122,12 +122,13 @@ describe('faction pieces and player movement', () => {
     const campaign = (await call('POST', `${path}/campaigns`, { name: 'Test campaign' })).body;
     const before = (await call('GET', `${path}/map`)).body;
     const route = [0, 1, 2, 3].map(q => before.hexes.find((h: { q: number; r: number }) => h.q === q && h.r === 0).id);
-    const main = (await call('POST', `${path}/tokens`, { kind: 'party', name: 'Test main party', factionId: party.id, mainParty: true, campaignId: campaign.id })).body;
+    const main = (await call('POST', `${path}/tokens`, { kind: 'party', name: 'Test main party', factionId: party.id, mainParty: true, hexId: route[0], campaignId: campaign.id })).body;
     const reserve = (await call('POST', `${path}/tokens`, { kind: 'unit', name: 'Test scout', factionId: party.id })).body;
     const secret = (await call('POST', `${path}/tokens`, { kind: 'unit', name: 'Secret scout', factionId: enemy.id, visibleToPlayers: false, hexId: route[0] })).body;
     const fogged = (await call('POST', `${path}/tokens`, { kind: 'unit', name: 'Unexplored rival', factionId: enemy.id, hexId: route[3] })).body;
     expect((await call('POST', `${path}/tokens`, { kind: 'party', name: 'Duplicate main', factionId: party.id, mainParty: true })).status).toBe(400);
-    expect((await call('POST', `${path}/tokens/${main.id}/move`, { from: null, path: [route[0]] })).status).toBe(200);
+    for (const body of [{ hexId: null }, { visibleToPlayers: false }, { mainParty: false }, { factionId: enemy.id }]) expect((await call('PATCH', `${path}/tokens/${main.id}`, body)).status).toBe(400);
+    expect((await call('DELETE', `${path}/tokens/${main.id}`)).status).toBe(400);
     await call('POST', `${path}/players`, { username: 'test-piece-player', password: 'test-player-123', factionId: party.id, campaignId: campaign.id });
     const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'test-piece-player', password: 'test-player-123' } });
     const playerCookie = String(login.headers['set-cookie']).split(';')[0];
@@ -156,8 +157,9 @@ describe('faction pieces and player movement', () => {
     expect(after.hexes).toEqual(before.hexes);
     expect(after.tokens.find((t: { id: string }) => t.id === reserve.id)).toMatchObject({ factionId: party.id, hexId: null });
     expect(after.tokens.find((t: { id: string }) => t.id === main.id).trail.map((v: { hexId: string }) => v.hexId)).toEqual(route);
-    await call('PATCH', `${path}/tokens/${main.id}`, { visibleToPlayers: false });
-    expect((await asPlayer('GET', `${path}/map`)).body.tokens.some((t: { id: string }) => t.id === main.id)).toBe(false);
+    await call('PATCH', `${path}/tokens/${reserve.id}`, { visibleToPlayers: false });
+    expect((await asPlayer('GET', `${path}/map`)).body.tokens.some((t: { id: string }) => t.id === reserve.id)).toBe(false);
+    expect((await asPlayer('GET', `${path}/map`)).body.tokens.some((t: { id: string }) => t.id === main.id)).toBe(true);
     await call('DELETE', `${path}`);
   });
 

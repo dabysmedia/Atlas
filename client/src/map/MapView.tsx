@@ -9,7 +9,7 @@ import {
 import { api, ApiError, clientHeaders, pendingWrites, qk } from '../api';
 import type { ArchivedModel, ArtPlacement, Claim, Hex, MapArt, MapData, MapModel, Token } from '../types';
 import { useWorld } from '../world';
-import { cameraPref, fogCampaign, layerPrefs, panelPrefs } from '../prefs';
+import { cameraPref, fogCampaign, layerPrefs, panelPrefs, partyTrailPref } from '../prefs';
 import { HEX_SIZE, HexMapRenderer, type Camera, type Layers as RLayers } from './renderer';
 import { FactionPanel, HexPanel, TokenPanel, Diamond, type Focus } from './panels';
 import { FactionCard, type CardAnchor, type FactionArea } from './FactionCard';
@@ -44,6 +44,7 @@ const DEFAULT_LAYERS: RLayers = { terrainOverlay: 0, grid: true, territory: true
 export function MapView() {
   const world = useWorld();
   const player = usePlayer();
+  const [showTrails, setShowTrails] = useState(() => partyTrailPref(world.id).get() ?? true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [placing, setPlacing] = useState<Token | null>(null);
   const qc = useQueryClient();
@@ -226,6 +227,7 @@ export function MapView() {
       if (p) r.selectAt(p.x, p.y, r.viewport.w > 900 ? 185 : 0);
     } else if (!focus) r.restoreView();
   }, [focus?.kind, focus?.id, gen]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { const r = rendererRef.current; if (is3d(r)) { r.showPartyTrails = showTrails; r.invalidate(); } partyTrailPref(world.id).set(showTrails); }, [showTrails, gen, world.id]);
   useEffect(() => { const r = rendererRef.current; if (r) { r.showFog = showFog; r.invalidate(); } }, [showFog, gen]);
   useEffect(() => { fogCampaign(world.id).set(fogCamp); }, [fogCamp, world.id]);
   useEffect(() => {
@@ -968,7 +970,7 @@ export function MapView() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {data && drawerOpen && <PieceDrawer data={data} onClose={() => setDrawerOpen(false)} onSelect={id => { setFocus({ kind: 'token', id }); if (window.matchMedia('(max-width: 700px)').matches) setDrawerOpen(false); }} onPlace={token => { setTool('select'); setPlacing(token); if (window.matchMedia('(max-width: 700px)').matches) setDrawerOpen(false); }} />}
+        {data && drawerOpen && <PieceDrawer data={data} startHexId={focusHex?.id ?? focusToken?.hexId} showTrails={showTrails} onShowTrails={setShowTrails} onClose={() => setDrawerOpen(false)} onSelect={id => { setFocus({ kind: 'token', id }); if (window.matchMedia('(max-width: 700px)').matches) setDrawerOpen(false); }} onPlace={token => { setTool('select'); setPlacing(token); if (window.matchMedia('(max-width: 700px)').matches) setDrawerOpen(false); }} />}
         {placing && <div className="piece-place-hint panel" role="status">{placing.hexId ? `Choose the next adjacent hex for ${placing.name}` : `Choose a hex to deploy ${placing.name}`}<button className="iconbtn" aria-label="Cancel token placement" onClick={() => setPlacing(null)}><X size={14} /></button></div>}
         {data && focusHex && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusHex.name || 'Hex'}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div>{data.tokens.filter(t => t.hexId === focusHex.id).map(t => <button className="poi" key={t.id} onClick={() => setFocus({ kind: 'token', id: t.id })}>{t.name}</button>)}</aside>}
         {data && focusToken && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusToken.name}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div><PieceControls token={focusToken} data={data} onMove={() => setPlacing(focusToken)} /></aside>}

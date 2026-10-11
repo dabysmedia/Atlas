@@ -28,3 +28,5 @@ export const ambientPref = {
 export const glassPref = store<'full' | 'lite'>('atlas.glass');
 
 /** 3D map (default) or the flat 2D map, per browser. */
+
+export const partyTrailPref = (worldId: string) => store<boolean>(`atlas.partyTrail.${worldId}`);

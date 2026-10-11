@@ -1,3 +1,4 @@
+import { motion } from 'motion/react';
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Flag, Plus, X, Eye, EyeOff, Footprints, Box } from 'lucide-react';
@@ -8,7 +9,7 @@ import { toastError } from '../components/toast';
 import { MarkerIcon } from './panels';
 export const usePlayer = () => useQuery({ queryKey: qk.me, queryFn: () => api<{ username: string; role: 'gm' | 'player' }>('/api/auth/me'), staleTime: Infinity }).data?.role === 'player';
 const PRESETS = ['Scouting party', 'Soldiers', 'Envoy', 'Caravan', 'Fleet', 'Character', 'Party'];
-export function PieceDrawer({ data, onClose, onSelect, onPlace }: { data: MapData; onClose: () => void; onSelect: (id: string) => void; onPlace: (t: Token) => void }) {
+export function PieceDrawer({ data, onClose, onSelect, onPlace, startHexId, showTrails, onShowTrails }: { startHexId?: string | null; showTrails: boolean; onShowTrails: (v: boolean) => void; data: MapData; onClose: () => void; onSelect: (id: string) => void; onPlace: (t: Token) => void }) {
   const world = useWorld(), qc = useQueryClient(), player = usePlayer();
   const [factionId, setFaction] = useState(data.playerFactionId ?? data.factions[0]?.id ?? '');
   const faction = data.factions.find(f => f.id === factionId);
@@ -18,11 +19,11 @@ export function PieceDrawer({ data, onClose, onSelect, onPlace }: { data: MapDat
   const refresh = async () => { await qc.invalidateQueries({ queryKey: qk.map(world.id) }); await qc.invalidateQueries({ queryKey: ['w', world.id, 'players'] }); };
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); try { await fn(); await refresh(); } catch (e) { toastError(e); } finally { setBusy(false); } };
   const create = () => run(async () => { const t = await api<Token>(`/api/worlds/${world.id}/tokens`, { body: { name: name.trim(), kind: preset === 'Party' ? 'party' : preset === 'Character' ? 'character' : 'unit', factionId, data: { role: preset } } }); setName(''); onSelect(t.id); });
-  return <aside className="panel piece-drawer" aria-label="Faction token drawer">
-    <div className="row"><Flag size={16} /><b className="grow">Token drawer</b><button className="iconbtn" aria-label="Close token drawer" onClick={onClose}><X size={16} /></button></div>
-    <select className="select" aria-label="Token drawer faction" value={factionId} onChange={e => setFaction(e.target.value)}>
-      {data.factions.filter(f => !player || f.id === data.playerFactionId).map(f => <option key={f.id} value={f.id}>{f.name}{f.isParty ? ' · Player party' : ''}</option>)}
-    </select>
+  return <motion.aside initial={{ y: 240, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 240, opacity: 0 }} transition={{ type: "spring", stiffness: 320, damping: 32 }} className="panel piece-drawer" aria-label="Faction token drawer">
+    <div className="row"><Flag size={16} /><b className="grow">Token drawer</b><label className="toggle"><input type="checkbox" aria-label="Show party trail" checked={showTrails} onChange={e => onShowTrails(e.target.checked)} /><Footprints size={14} /> Trail</label><button className="iconbtn" aria-label="Close token drawer" onClick={onClose}><X size={16} /></button></div>
+    <div className="piece-factions" role="tablist" aria-label="Token drawer factions">
+      {data.factions.filter(f => !player || f.id === data.playerFactionId).map(f => <button key={f.id} role="tab" aria-selected={f.id === factionId} className={`btn sm ${f.id === factionId ? 'on' : 'ghost'}`} onClick={() => setFaction(f.id)}><span className="piece-faction-dot" style={{ background: f.color }} />{f.name}{f.isParty ? ' · Party' : ''}</button>)}
+    </div>
     {!faction && <p className="muted">Create a faction in the Factions module first, then open its drawer.</p>}
     {faction && <>
       <div className="piece-palette scroll">
@@ -32,23 +33,23 @@ export function PieceDrawer({ data, onClose, onSelect, onPlace }: { data: MapDat
         </div>)}
       </div>
       {!player && <>
-        <div className="label">New piece</div><select className="select" aria-label="Piece type" value={preset} onChange={e => setPreset(e.target.value)}>{PRESETS.map(s => <option key={s}>{s}</option>)}</select>
+        <div className="piece-tools"><details className="piece-tool" onToggle={e => { if (e.currentTarget.open) e.currentTarget.parentElement?.querySelectorAll<HTMLDetailsElement>("details").forEach(d => { if (d !== e.currentTarget) d.open = false; }); }}><summary>New piece</summary><div className="panel piece-tool-content"><div className="label">New piece</div><select className="select" aria-label="Piece type" value={preset} onChange={e => setPreset(e.target.value)}>{PRESETS.map(s => <option key={s}>{s}</option>)}</select>
         <div className="row"><input className="input grow" aria-label="Piece name" placeholder="Give this piece a name" value={name} onChange={e => setName(e.target.value)} /><button className="btn icon" disabled={busy || !name.trim()} aria-label="Create piece" onClick={create}><Plus size={16} /></button></div>
-        {!data.tokens.some(t => t.factionId === factionId && t.mainParty) && <button className="btn" disabled={busy} onClick={() => run(async () => {
+        {!data.tokens.some(t => t.factionId === factionId && t.mainParty) && <button className="btn" disabled={busy || !startHexId} title={startHexId ? "Start on the selected hex" : "Select a starting hex first"} onClick={() => run(async () => {
           await api(`/api/worlds/${world.id}/factions/${factionId}`, { method: 'PATCH', body: { isParty: true } });
-          await api(`/api/worlds/${world.id}/tokens`, { body: { kind: 'party', name: faction.name, factionId, mainParty: true, campaignId: campaign || null } });
+          await api(`/api/worlds/${world.id}/tokens`, { body: { kind: 'party', name: faction.name, factionId, mainParty: true, hexId: startHexId, campaignId: campaign || null } });
         })}><Footprints size={14} /> Designate as player party</button>}
-        <details><summary>Player access</summary>
+        {!startHexId && <p className="faint">Select the party’s starting hex before designating it.</p>}</div></details><details className="piece-tool" onToggle={e => { if (e.currentTarget.open) e.currentTarget.parentElement?.querySelectorAll<HTMLDetailsElement>("details").forEach(d => { if (d !== e.currentTarget) d.open = false; }); }}><summary>Player access</summary><div className="panel piece-tool-content">
           <p className="faint">Players can move this faction’s visible deployed pieces. If a campaign is selected, unexplored hexes conceal other factions’ tokens.</p>
           <select className="select" aria-label="Player campaign" value={campaign} onChange={e => setCampaign(e.target.value)}><option value="">No fog campaign</option>{data.campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
           <input className="input" aria-label="Player username" placeholder="Player username" value={username} onChange={e => setUsername(e.target.value)} autoComplete="off" />
           <input className="input" aria-label="Player password" type="password" placeholder="Password (10+ characters)" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" />
           <button className="btn" disabled={busy || !username.trim() || password.length < 10} onClick={() => run(async () => { await api(`/api/worlds/${world.id}/players`, { body: { username, password, factionId, campaignId: campaign || null } }); setUsername(''); setPassword(''); })}>Create player account</button>
           <PlayerList />
-        </details>
+        </div></details></div>
       </>}
     </>}
-  </aside>;
+  </motion.aside>;
 }
 function PlayerList() {
   const world = useWorld(), qc = useQueryClient();
@@ -70,13 +71,13 @@ export function PieceControls({ token, data, onMove }: { token: Token; data: Map
   return <div className="piece-controls">
     {canMove && <button className="btn" onClick={onMove}><Footprints size={14} />{token.hexId ? 'Move to next hex' : 'Deploy on a hex'}</button>}
     {!player && <>
-      <label className="toggle"><input type="checkbox" aria-label="Visible to players" disabled={visibility !== null} checked={visibility ?? token.visibleToPlayers} onChange={e => { const visible = e.target.checked; setVisibility(visible); void patch({ visibleToPlayers: visible }).finally(() => setVisibility(null)); }} />{(visibility ?? token.visibleToPlayers) ? <Eye size={14} /> : <EyeOff size={14} />} Visible to players</label>
+      <label className="toggle"><input type="checkbox" aria-label="Visible to players" disabled={token.mainParty || visibility !== null} checked={visibility ?? token.visibleToPlayers} onChange={e => { const visible = e.target.checked; setVisibility(visible); void patch({ visibleToPlayers: visible }).finally(() => setVisibility(null)); }} />{(visibility ?? token.visibleToPlayers) ? <Eye size={14} /> : <EyeOff size={14} />} Visible to players</label>
       <label className="field">Miniature<select className="select" aria-label="Token miniature" value={token.modelId ?? ''} onChange={e => patch({ modelId: e.target.value || null })}><option value="">2D indicator</option>{models.data?.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label>
       <label className="btn"><Box size={14} />{busy ? 'Uploading…' : 'Upload GLB miniature'}<input type="file" accept=".glb" hidden disabled={busy} onChange={async e => {
         const file = e.target.files?.[0]; e.target.value = ''; if (!file) return; setBusy(true);
         try { if (file.size > 10 * 1024 * 1024) throw new Error('Miniatures must be under 10 MB.'); const response = await pendingWrites.track(fetch(`/api/worlds/${world.id}/token-models?name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { ...clientHeaders, 'content-type': 'model/gltf-binary' }, body: file })); const model = await response.json(); if (!response.ok) throw new Error(model.error); await patch({ modelId: model.id }); qc.invalidateQueries({ queryKey: ['w', world.id, 'tokenModels'] }); } catch (e) { toastError(e); } finally { setBusy(false); }
       }} /></label>
-      {token.hexId && <button className="btn ghost sm" onClick={() => patch({ hexId: null })}>Return to drawer</button>}
+      {token.hexId && !token.mainParty && <button className="btn ghost sm" onClick={() => patch({ hexId: null })}>Return to drawer</button>}
     </>}
     {!!token.trail?.length && <details open={token.mainParty}><summary>Movement log · {token.trail.filter(v => v.hexId).length} visits</summary><ol className="piece-history">{token.trail.map((v, i) => {
       const h = data.hexes.find(h => h.id === v.hexId); return <li key={i}>{h ? h.name || `Hex ${h.q}, ${h.r}` : 'Trail break / off-map'} <span className="faint">· Day {v.day}</span></li>;

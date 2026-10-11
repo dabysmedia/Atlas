@@ -470,7 +470,7 @@ export function TokenPanel({ token, data, onClose, onFocus, onLocate, snap, onMo
         )}
         <div className="panel-actions">
           <button className="btn" onClick={onLocate}><Crosshair size={14} /> Center on map</button>
-          <button className="btn ghost danger" onClick={() => setConfirm(true)}><Trash2 size={14} /> Remove</button>
+          {!token.mainParty && <button className="btn ghost danger" onClick={() => setConfirm(true)}><Trash2 size={14} /> Remove</button>}
         </div>
         <div className="faint hint-line">Drag the marker on the map to move it.</div>
       </div>

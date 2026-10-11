@@ -41,6 +41,8 @@ try {
     await page.getByRole('link', { name: label, exact: true }).click();
     const panel = page.getByRole('region', { name: `${label} panel` }); await panel.waitFor();
     await panel.locator('.wiki, .pagebody').waitFor();
+    const moduleBounds = await panel.boundingBox(), detailsBounds = await page.locator('.inspector').boundingBox();
+    assert(moduleBounds.x < 20 && moduleBounds.x + moduleBounds.width < detailsBounds.x, 'left module must leave the right hex details exposed');
     await panel.focus();
     for (const key of ['q', 'e', 't', 'n', '-', 'f', '1', 'Space']) await page.keyboard.press(key);
     assert.deepEqual(await snapshot(), initial, `${label} preserves map and ignores panel keyboard shortcuts`);
@@ -51,8 +53,10 @@ try {
   await page.getByRole('link', { name: 'Wiki', exact: true }).click();
   const item = page.locator('.world-module .wiki-item').first(); await item.waitFor(); await item.click();
   await page.waitForURL(/\/wiki\/.+/); const wikiUrl = page.url();
+  const normalWidth = (await page.locator('.world-module').boundingBox()).width;
   await page.getByRole('button', { name: 'Expand panel', exact: true }).click();
-  assert(await page.locator('.world-module').evaluate(e => e.getBoundingClientRect().width > 1300));
+  const expandedBounds=await page.locator('.world-module').boundingBox(), detailsBounds=await page.locator('.inspector').boundingBox();
+  assert(expandedBounds.width > normalWidth && expandedBounds.x + expandedBounds.width < detailsBounds.x);
   assert.deepEqual(await snapshot(), initial, 'expansion does not resize or reposition map');
   await page.getByRole('button', { name: 'Restore panel size', exact: true }).click();
   await page.getByRole('link', { name: 'Factions', exact: true }).click(); await page.goBack();
@@ -64,25 +68,43 @@ try {
   assert.equal(modelRequests.length, requestCount, 'modules never request the model again');
   await page.getByRole('link', { name: 'Factions', exact: true }).click();
   const zoom = await page.evaluate(() => window.__atlasMap.cam.zoom);
-  await page.mouse.move(200, 600); await page.mouse.wheel(0, -100);
+  await page.mouse.move(980, 600); await page.mouse.wheel(0, -100);
   await page.waitForFunction(zoom => window.__atlasMap.cam.zoom !== zoom, zoom);
   assert((await snapshot()).same, 'exposed map stays interactive while a module is open');
   await page.goto(wikiUrl); await page.waitForFunction(() => window.__atlasMap?.hasGround); await hold();
   const direct = await snapshot(); await page.getByRole('button', { name: 'Close Wiki', exact: true }).click(); assert.deepEqual(await snapshot(), direct);
-  await page.locator('.mode-toggle').click(); await page.waitForFunction(() => document.querySelector('.mapview').dataset.mapMode === '2d'); await hold();
-  const flat = await snapshot(); await page.getByRole('link', { name: 'Factions', exact: true }).click();
-  await page.getByRole('region', { name: 'Factions panel' }).waitFor(); assert.deepEqual(await snapshot(), flat, '2D fallback stays mounted');
+  assert.equal(await page.locator('.mode-toggle').count(), 0); await hold();
+  const kept = await snapshot(); await page.getByRole('link', { name: 'Factions', exact: true }).click();
+  await page.getByRole('region', { name: 'Factions panel' }).waitFor(); assert.deepEqual(await snapshot(), kept, '3D map stays mounted');
   await page.getByRole('button', { name: 'Close Factions', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
+  const mobilePoint=await page.evaluate(id=>{
+    const r=window.__atlasMap,h=r.hexIds().find(h=>h.id===id);r.saved=null;r.setCamera({x:h.x,y:h.y,zoom:1.7});r.frame(performance.now(),false);
+    const s=r.hexScreen(id),b=r.hud.getBoundingClientRect();return{x:s.x+b.x,y:s.y+b.y};
+  },hex.id);
+  await page.mouse.click(mobilePoint.x,mobilePoint.y);await page.waitForSelector('.inspector');await page.waitForFunction(()=>!window.__atlasMap.cameraMoving);
   for (const label of ['Wiki', 'World settings']) {
     await page.getByRole('link', { name: label, exact: true }).click();
     const panel = page.getByRole('region', { name: `${label} panel` }); await panel.waitFor();
     const bounds = await panel.boundingBox(); assert(bounds.x >= 0 && bounds.x + bounds.width <= 390 && bounds.y + bounds.height <= 790);
+    const details=await page.locator('.inspector').boundingBox();assert(bounds.y+bounds.height<details.y,'mobile module and hex details must not overlap');
     await page.screenshot({ path: `${shots}/mobile-${label.replaceAll(' ', '-')}.png` });
     await page.getByRole('button', { name: `Close ${label}`, exact: true }).click();
   }
   const after = await api(`/api/worlds/${world.id}/map`); assert.deepEqual(after, before);
+  const unsupportedContext = await browser.newContext({storageState:await page.context().storageState()});
+  const unsupported = await unsupportedContext.newPage();
+  await unsupported.addInitScript(() => {
+    const getContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function(kind, ...args) { return kind === 'webgl2' ? null : getContext.call(this, kind, ...args); };
+  });
+  await unsupported.goto(`${base}/w/${world.id}/map`);
+  await unsupported.getByRole('alert').filter({hasText:'This browser cannot display the 3D map'}).waitFor();
+  assert.equal(await unsupported.locator('.mode-toggle').count(),0);
+  assert.equal(await unsupported.evaluate(()=>!!window.__atlasMap),false,'unsupported browser never starts a flat fallback');
+  await unsupported.getByRole('link',{name:'Wiki',exact:true}).click();
+  await unsupported.getByRole('region',{name:'Wiki panel'}).waitFor();await unsupportedContext.close();
   assert.deepEqual(errors, []);
-  writeFileSync(`${shots}/results.json`, JSON.stringify({ persistent3D: true, cameraAndSelectionPreserved: true, navigation: true, keyboardIsolation: true, deepLinks: true, fallback2D: true, mobile: true, dataUnchanged: true }, null, 2));
-  console.log('Persistent modules, camera/selection, keyboard isolation, history, deep links, 2D fallback and mobile passed');
+  writeFileSync(`${shots}/results.json`, JSON.stringify({ persistent3D: true, cameraAndSelectionPreserved: true, navigation: true, keyboardIsolation: true, deepLinks: true, unsupportedBrowser: true, mobile: true, dataUnchanged: true }, null, 2));
+  console.log('Persistent modules, camera/selection, history, mobile and unsupported-browser handling passed');
 } finally { await browser.close(); }

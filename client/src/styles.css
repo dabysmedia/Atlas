@@ -893,13 +893,17 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
  * Each page is a sheet of glass floating clear of the chrome. No blur of its own: the backdrop is either the
  * ink ground or the ambient map, which is already blurred once into a still image. */
 .world-module {
-  position: absolute; z-index: 12; top: var(--chrome-top); right: var(--chrome-inset);
+  position: absolute; z-index: 12; top: var(--chrome-top); left: var(--chrome-inset);
   bottom: calc(var(--chrome-bottom) + var(--chrome-inset));
-  width: min(1040px, calc(100% - 300px)); display: flex; flex-direction: column;
+  width: min(900px, calc(100% - 400px)); padding-left: 64px; display: flex; flex-direction: column;
   border: 1px solid var(--glass-edge); border-radius: 22px; overflow: hidden;
   background: var(--glass-sheen), var(--ink-1); box-shadow: var(--glass-shadow), var(--glass-highlight);
 }
-.world-module.expanded { width: calc(100% - var(--chrome-left) - var(--chrome-inset)); }
+.world-module.expanded { width: calc(100% - 400px); }
+@media (min-width: 601px) {
+  .shell:has(.world-module) .rail { background: transparent; border-color: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .world-module::before { content: ''; position: absolute; left: 62px; top: 12px; bottom: 12px; border-left: 1px solid var(--glass-edge); }
+}
 .world-module-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--glass-edge); color: var(--gold-hi); }
 .world-module-head strong { font-family: var(--font-display); letter-spacing: 0.06em; }
 .world-module-content { position: relative; flex: 1; min-height: 0; }
@@ -908,11 +912,16 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 .world-module .wiki { padding: 12px; grid-template-columns: 230px minmax(0, 1fr); gap: 10px; }
 .world-module .faction-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); }
 @media (max-width: 900px) {
-  .world-module { width: calc(100% - var(--chrome-left) - var(--chrome-inset)); }
+  .world-module, .world-module.expanded { width: calc(100% - 2 * var(--chrome-inset)); }
+  .shell:has(.world-module) .inspector { top: auto; bottom: calc(var(--chrome-bottom) + var(--chrome-inset)); height: 42%; left: var(--chrome-left); right: var(--chrome-inset); width: auto; }
+  .shell:has(.inspector) .world-module { bottom: calc(var(--chrome-bottom) + 42% + var(--chrome-inset) + 10px); }
 }
 @media (max-width: 700px) {
   .world-module .wiki { grid-template-columns: 1fr; grid-template-rows: minmax(0, 32%) minmax(0, 1fr); }
   .world-module .pagewrap { padding: 6px; }
+}
+@media (max-width: 600px) {
+  .world-module { padding-left: 0; }
 }
 .pagewrap {
   position: absolute; inset: 0; overflow: auto;

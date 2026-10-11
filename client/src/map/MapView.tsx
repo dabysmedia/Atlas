@@ -3,13 +3,13 @@ import { useLocation, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  Archive, Box, Brush, CloudFog, Eye, EyeOff, Flag, Grid3x3, Image as ImageIcon, Layers, Map as MapIcon, Mountain, MousePointer2, Move,
+  Archive, Box, Brush, CloudFog, Eye, EyeOff, Flag, Grid3x3, Image as ImageIcon, Layers, Mountain, MousePointer2, Move,
   RotateCcw, Shield, Stamp, Trash2, Upload, X,
 } from 'lucide-react';
 import { api, ApiError, clientHeaders, pendingWrites, qk } from '../api';
 import type { ArchivedModel, ArtPlacement, Claim, Hex, MapArt, MapData, MapModel, Token } from '../types';
 import { useWorld } from '../world';
-import { cameraPref, fogCampaign, layerPrefs, mapModePref, panelPrefs } from '../prefs';
+import { cameraPref, fogCampaign, layerPrefs, panelPrefs } from '../prefs';
 import { HEX_SIZE, HexMapRenderer, type Camera, type Layers as RLayers } from './renderer';
 import { FactionPanel, HexPanel, TokenPanel, Diamond, type Focus } from './panels';
 import { FactionCard, type CardAnchor, type FactionArea } from './FactionCard';
@@ -24,7 +24,7 @@ import { live } from '../live';
 import type { Weather } from '../../../shared/weather';
 
 const HAS_WEBGL2 = typeof document !== 'undefined' && webgl2Available();
-if (HAS_WEBGL2 && mapModePref.get() !== '2d') void load3d();
+if (HAS_WEBGL2) void load3d().catch(() => {});
 
 type Tool = 'select' | 'terrain' | 'state' | 'claim' | 'fog';
 const TOOLS: ToolDef<Tool>[] = [
@@ -48,10 +48,9 @@ export function MapView() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const glRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<HexMapRenderer | null>(null);
-  // 3D is the default; the flat map stays one click away, and is used without WebGL2.
-  const [modePref, setModePref] = useState<'3d' | '2d'>(() => mapModePref.get() ?? '3d');
-  const [alignIn2d, setAlignIn2d] = useState(false);
-  const mode: '3d' | '2d' = HAS_WEBGL2 && modePref === '3d' && !alignIn2d ? '3d' : '2d';
+  const mode = '3d';
+  const [mapError, setMapError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
   const [gen, setGen] = useState(0);
   const [modelState, setModelState] = useState<'loading' | 'ready' | 'error' | null>(null);
   const r3 = () => (is3d(rendererRef.current) ? rendererRef.current : null);
@@ -96,7 +95,8 @@ export function MapView() {
       rendererRef.current = r;
       wire(r);
     };
-    if (mode === '3d') {
+    setMapError(null);
+    if (HAS_WEBGL2) {
       load3d().then((m) => {
         if (!live) return;
         const r3d = new m.HexMapRenderer3D(glRef.current!, canvasRef.current!);
@@ -104,8 +104,8 @@ export function MapView() {
         r3d.onFactionHover = (area, at) => setFactionHover(area && at ? { area, at } : null);
         r3d.onFactionClick = (id) => setFocus((f) => (f?.kind === 'faction' && f.id === id ? null : { kind: 'faction', id }));
         start(r3d);
-      }).catch(() => { if (live) setModePref('2d'); });
-    } else start(new HexMapRenderer(canvasRef.current!));
+      }).catch(() => { if (live) setMapError('The 3D map could not start. Try reloading the island.'); });
+    } else setMapError('This browser cannot display the 3D map. Enable hardware acceleration or use a browser with WebGL 2 support.');
     function wire(r: HexMapRenderer) {
       (window as unknown as { __atlasMap?: HexMapRenderer }).__atlasMap = r;
       ro = new ResizeObserver(([e]) => r.resize(e.contentRect.width, e.contentRect.height));
@@ -120,8 +120,7 @@ export function MapView() {
       setGen((g) => g + 1);
     }
     return () => { live = false; ro?.disconnect(); r?.destroy(); rendererRef.current = null; setModelState(null); setFactionHover(null); };
-  }, [world.id, mode]);
-  useEffect(() => { mapModePref.set(modePref); }, [modePref]);
+  }, [world.id, retry]);
 
   const placedCamera = useRef(false);
   // A brush stroke or marker drag in progress shows its own edits ahead of the cache; changes arriving from other
@@ -177,7 +176,7 @@ export function MapView() {
   }, [art?.version, world.id, gen]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const r = rendererRef.current;
-    if (r && art && r.hasArt && !align) { r.artPlacement = { ...art.placement }; r.invalidate(); }
+    if (r && art && r.hasArt && !align) { if (is3d(r)) r.setArtPlacement(art.placement); else { r.artPlacement = { ...art.placement }; r.invalidate(); } }
   }, [art?.placement, align]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Place the camera once both data and a measured viewport exist: back to the exact
@@ -225,7 +224,7 @@ export function MapView() {
   useEffect(() => { fogCampaign(world.id).set(fogCamp); }, [fogCamp, world.id]);
   useEffect(() => {
     const r = rendererRef.current;
-    if (r) { r.layers = align ? { ...layers, territory: false, grid: true, terrainOverlay: Math.max(layers.terrainOverlay, 0.35) } : layers; r.invalidate(); }
+    if (r) { r.layers = align ? { ...layers, territory: false, grid: true, terrainOverlay: Math.max(layers.terrainOverlay, 0.35) } : layers; if (is3d(r)) r.alignArt = !!align; r.invalidate(); }
     layerPrefs(world.id).set(layers);
   }, [layers, align, world.id, gen]);
   useEffect(() => { const r = rendererRef.current; if (r) { r.painting = tool === 'terrain' || tool === 'state'; r.invalidate(); } }, [tool, gen]);
@@ -404,7 +403,7 @@ export function MapView() {
     } catch (e) { toastError(e); }
   };
   // Live preview while aligning.
-  useEffect(() => { const r = rendererRef.current; if (r && align) { r.artPlacement = { ...align }; r.invalidate(); } }, [align]);
+  useEffect(() => { const r = rendererRef.current; if (r && align) { if (is3d(r)) r.setArtPlacement(align); else { r.artPlacement = { ...align }; r.invalidate(); } } }, [align]);
 
   // ---- input
   const toolRef = useRef({ tool, brush, radius, fogCamp, align });
@@ -526,8 +525,8 @@ export function MapView() {
         vel = { x: (dx / dt) * 1000 * 0.6 + vel.x * 0.4, y: (dy / dt) * 1000 * 0.6 + vel.y * 0.4 };
         canvas.style.cursor = 'grabbing';
       } else if (mode === 'art') {
-        const z = r().cam.zoom;
-        handlers.current.setAlign((a) => (a ? { ...a, x: a.x + dx / z, y: a.y + dy / z } : a));
+        const from = r().screenToWorld(p.x - dx, p.y - dy), to = r().screenToWorld(p.x, p.y);
+        handlers.current.setAlign((a) => (a ? { ...a, x: a.x + to.x - from.x, y: a.y + to.y - from.y } : a));
         canvas.style.cursor = 'move';
       } else if (mode === 'stroke') strokeAt(p);
       else if (mode === 'token' && dragTok) {
@@ -717,6 +716,9 @@ export function MapView() {
       {mode === '3d' && <canvas key="gl" ref={glRef} className="map map-gl" aria-hidden />}
       <canvas key={`hud-${mode}`} ref={canvasRef} className="map" aria-label="Hex map" />
       {!data && <div className="map-loading"><span>Unrolling the map…</span></div>}
+      {mapError && <div className="map-loading" role="alert"><div className="panel" style={{ maxWidth: 440, padding: 24 }}>
+        <p>{mapError}</p><button className="btn" onClick={() => setRetry((n) => n + 1)}>Retry 3D map</button>
+      </div></div>}
       {mode === '3d' && modelState === 'loading' && <div className="map-raising"><Mountain size={13} /> Raising the island…</div>}
 
       {/* Tool dock: the tool in hand, with its brushes tiling up above it. */}
@@ -787,7 +789,7 @@ export function MapView() {
                           onPointerUp={() => saveArt(data.map.art?.placement ?? null)} onKeyUp={() => saveArt(data.map.art?.placement ?? null)} />
                       </label>
                       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-                        <button className="btn sm" onClick={() => { setLayersOpen(false); setFocus(null); if (mode === '3d') setAlignIn2d(true); setAlign({ ...art.placement }); }}><Move size={13} /> Align</button>
+                        <button className="btn sm" onClick={() => { setLayersOpen(false); setFocus(null); setAlign({ ...art.placement }); }}><Move size={13} /> Align</button>
                         <button className="btn sm" onClick={() => fileRef.current?.click()}><Upload size={13} /> Replace</button>
                         <button className="btn sm ghost danger" onClick={() => setConfirmArt('remove')}><Trash2 size={13} /> Remove</button>
                       </div>
@@ -894,11 +896,6 @@ export function MapView() {
           </>
         )}
         <ViewControls getRenderer={getRenderer} mode={mode} onFit={fitMap} keysOpen={keysOpen} onKeys={() => setKeysOpen((o) => !o)} />
-        {HAS_WEBGL2 && (
-          <StackButton className="mode-toggle" label={mode === '3d' ? 'Switch to the flat map' : 'Switch to the 3D island'} tip={mode === '3d' ? 'Flat map' : '3D island'} onClick={() => setModePref(mode === '3d' ? '2d' : '3d')}>
-            {mode === '3d' ? <MapIcon size={14} strokeWidth={1.7} /> : <Mountain size={14} strokeWidth={1.7} />}<span>{mode === '3d' ? '2D' : '3D'}</span>
-          </StackButton>
-        )}
       </div>
       <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void uploadArt(f); }} />
       <input ref={modelRef} type="file" accept=".glb,model/gltf-binary" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void uploadModel(f); }} />
@@ -929,8 +926,8 @@ export function MapView() {
               </div>
               <button className="btn sm" onClick={async () => { const m = await saveArt(null, true); if (m) setAlign({ ...m.placement }); }}><RotateCcw size={13} /> Fit to grid</button>
               <span className="spacer" />
-              <button className="btn sm ghost" onClick={() => { setAlign(null); setAlignIn2d(false); }}>Cancel</button>
-              <button className="btn sm primary" onClick={async () => { const m = await saveArt(align); if (m) { setAlign(null); setAlignIn2d(false); toast('Art alignment saved'); } }}>Save alignment</button>
+              <button className="btn sm ghost" onClick={() => { setAlign(null); }}>Cancel</button>
+              <button className="btn sm primary" onClick={async () => { const m = await saveArt(align); if (m) { setAlign(null); toast('Art alignment saved'); } }}>Save alignment</button>
             </div>
           </motion.div>
         )}

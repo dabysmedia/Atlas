@@ -37,14 +37,14 @@ import { GridProjection, GRID_GLSL } from './gridProjection';
 import { isNotableKind, isMajorCity } from '../../../shared/markers';
 import { FactionLabels, type LabelPlace, type LabelSpot } from './labels3d';
 import type { CardAnchor, FactionArea } from '../map/FactionCard';
-import { placeDiamond } from '../map/markers';
+import { drawPlaceGlyph, placeDiamond } from '../map/markers';
 
 const FOV = 24; // degrees, vertical; narrow so the overhead view stays close to a flat map
 const MAX_TILT = 1.32;
 /** Sea level on a model, in its normalized height units (its base sits at 0). */
 const MODEL_SEA = 0.008;
 const OVERLAY_MAX = 2048;
-type PlaceTile = { token: Token; x: number; y: number; gx: number; gy: number; lines: string[]; width: number; height: number; alpha: number; color: string };
+type PlaceTile = { token: Token; x: number; y: number; gx: number; gy: number; nx: number; ny: number; lines: string[]; width: number; height: number; tether: boolean; alpha: number; color: string };
 
 export type ModelSource = { url: string; placement: ModelPlacement };
 
@@ -93,6 +93,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected modelLoad = 0;
   protected reliefSig = '';
   protected reliefTimer = 0;
+  alignArt = false;
   protected artImg: HTMLImageElement | null = null;
 
   // Overlay: the 2D renderer's output for the area in view, draped by world position.
@@ -258,6 +259,11 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.artImg = img;
     this.reliefSig = '';
     this.scheduleRelief();
+  }
+
+  setArtPlacement(placement: ArtPlacement) {
+    this.artPlacement = { ...placement };
+    this.scheduleRelief(); this.invalidate();
   }
 
   /** The world's 3D model, or null to raise relief from the hexes. */
@@ -504,7 +510,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected floatingPlace(token: Token) { return isNotableKind(token.kind); }
   protected placeTiles: PlaceTile[] = [];
 
-  /** Project the world-up anchor, then tile upright diamonds in camera-facing rows. */
+  /** A narrow staggered stack: neighboring diamonds share their diagonal edges. */
   protected layoutPlaces() {
     const groups = new Map<string, Token[]>();
     for (const token of this.tokens) {
@@ -529,7 +535,6 @@ export class HexMapRenderer3D extends HexMapRenderer {
       const foot = this.groundScreen(gx, gy, { x: 0, y: 0 });
       // Keep a small visible gap even in the straight-down overview.
       anchor.y = Math.min(anchor.y, foot.y - 30);
-      const columns = Math.min(3, Math.ceil(Math.sqrt(group.length)));
       const labels = group.map(token => {
         const lines: string[] = []; let line = '';
         for (const word of token.name.split(/\s+/)) {
@@ -539,16 +544,20 @@ export class HexMapRenderer3D extends HexMapRenderer {
         lines.push(line);
         return lines;
       });
-      const width = Math.max(72, ...labels.flat().map(line => ctx.measureText(line).width + 18));
-      const rowHeight = 62 + Math.max(...labels.map(lines => lines.length)) * 14;
-      const rows = Math.ceil(group.length / columns);
+      const width = Math.max(48, ...labels.flat().map(line => ctx.measureText(line).width + 26));
+      const nameHeight = labels.reduce((height, lines) => height + lines.length * 14 + 2, 0);
+      let nameY = anchor.y - nameHeight + 6;
+      const baseY = nameY - 36;
       group.forEach((token, index) => {
-        const row = Math.floor(index / columns), count = Math.min(columns, group.length - row * columns);
-        const x = anchor.x + (index % columns - (count - 1) / 2) * width;
-        const y = anchor.y - (rows - 1 - row) * rowHeight - rowHeight / 2;
-        tiles.push({ token, x, y, gx: foot.x, gy: foot.y, lines: labels[index], width, height: rowHeight,
+        // Rows alternate one diamond and two, forming a compact upright lattice.
+        const slot = index % 3, row = Math.floor(index / 3);
+        const x = anchor.x + (slot === 1 ? 24 : slot === 2 ? -24 : 0);
+        const y = baseY - row * 48 - (slot ? 24 : 0);
+        tiles.push({ token, x, y, gx: foot.x, gy: foot.y, nx: anchor.x - width / 2, ny: nameY,
+          lines: labels[index], width, height: labels[index].length * 14, tether: index === 0,
           alpha: this.tokenVisibility(token) * this.tokenAlpha(gx, gy),
           color: token.color ?? (token.factionId ? this.factionColor.get(token.factionId) : undefined) ?? '#d6b06a' });
+        nameY += labels[index].length * 14 + 2;
       });
     }
     ctx.restore(); this.placeTiles = tiles;
@@ -558,7 +567,11 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.layoutPlaces();
     for (const tile of [...this.placeTiles].reverse()) {
       if (tile.alpha < 0.05) continue;
-      if (Math.abs(sx - tile.x) <= tile.width / 2 && sy >= tile.y - 24 && sy <= tile.y + 30 + tile.lines.length * 14) return tile.token;
+      if (Math.abs(sx - tile.x) + Math.abs(sy - tile.y) <= 23) return tile.token;
+    }
+    for (const tile of [...this.placeTiles].reverse()) {
+      if (tile.alpha < 0.05) continue;
+      if (sx >= tile.nx && sx <= tile.nx + tile.width && sy >= tile.ny - 7 && sy <= tile.ny + tile.height - 7) return tile.token;
     }
     return super.tokenAt(sx, sy);
   }
@@ -571,10 +584,12 @@ export class HexMapRenderer3D extends HexMapRenderer {
     for (const tile of this.placeTiles) {
       if (tile.x < -tile.width || tile.x > this.w + tile.width || tile.y < -tile.height || tile.y > this.h + tile.height) continue;
       ctx.globalAlpha = tile.alpha;
-      ctx.strokeStyle = tile.color; ctx.lineWidth = 1;
-      const tether = ctx.createLinearGradient(tile.gx, tile.gy, tile.x, tile.y + 22);
-      tether.addColorStop(0, 'rgba(214,176,106,0.08)'); tether.addColorStop(1, 'rgba(214,176,106,0.5)');
-      ctx.strokeStyle = tether; ctx.beginPath(); ctx.moveTo(tile.gx, tile.gy); ctx.lineTo(tile.x, tile.y + 22); ctx.stroke();
+      if (tile.tether) {
+        ctx.lineWidth = 1;
+        const tether = ctx.createLinearGradient(tile.gx, tile.gy, tile.x, tile.y + 22);
+        tether.addColorStop(0, 'rgba(214,176,106,0.08)'); tether.addColorStop(1, 'rgba(214,176,106,0.5)');
+        ctx.strokeStyle = tether; ctx.beginPath(); ctx.moveTo(tile.gx, tile.gy); ctx.lineTo(tile.x, tile.y + 22); ctx.stroke();
+      }
       if (this.selectedTokenId === tile.token.id) {
         ctx.strokeStyle = '#8fe8e2'; ctx.lineWidth = 2; ctx.shadowColor = '#8fe8e2'; ctx.shadowBlur = 8;
         ctx.beginPath(); ctx.moveTo(tile.x, tile.y - 26); ctx.lineTo(tile.x + 26, tile.y); ctx.lineTo(tile.x, tile.y + 26); ctx.lineTo(tile.x - 26, tile.y); ctx.closePath(); ctx.stroke(); ctx.shadowBlur = 0;
@@ -582,11 +597,12 @@ export class HexMapRenderer3D extends HexMapRenderer {
       const sprite = placeDiamond(tile.token.kind, tile.color, this.dpr, isMajorCity(tile.token));
       ctx.drawImage(sprite, tile.x - 28, tile.y - 28, 56, 56);
       ctx.font = "600 12px 'EB Garamond Variable', Georgia, serif";
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
-      ctx.strokeStyle = 'rgba(6,12,17,0.95)'; ctx.lineWidth = 3; ctx.fillStyle = '#f4ead4';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+      ctx.strokeStyle = 'rgba(6,12,17,0.95)'; ctx.lineWidth = 3; ctx.fillStyle = this.selectedTokenId === tile.token.id ? '#8fe8e2' : '#f4ead4';
       tile.lines.forEach((line, index) => {
-        ctx.strokeText(line, tile.x, tile.y + 34 + index * 14); ctx.fillText(line, tile.x, tile.y + 34 + index * 14);
+        ctx.strokeText(line, tile.nx + 20, tile.ny + index * 14); ctx.fillText(line, tile.nx + 20, tile.ny + index * 14);
       });
+      drawPlaceGlyph(ctx, tile.token.kind, isMajorCity(tile.token), tile.nx + 7, tile.ny, 12, tile.color);
     }
     ctx.restore();
   }
@@ -977,7 +993,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected updateGrid() {
     const grid = this.gridProjection.uniforms, selected = this.stills ? undefined : this.byId.get(this.selectedId ?? '');
     grid.uGridEnabled.value = this.layers.grid ? 1 : 0;
-    grid.uGridOverview.value = this.overviewAlpha();
+    grid.uGridOverview.value = this.alignArt ? 1 : this.overviewAlpha();
     grid.uGridSelected.value = selected ? 1 : 0;
     grid.uGridPointy.value = this.o === 'pointy' ? 1 : 0;
     if (selected) grid.uGridCenter.value.set(selected.q, selected.r);
@@ -1125,7 +1141,9 @@ export class HexMapRenderer3D extends HexMapRenderer {
     for (const tile of this.placeTiles) {
       if (tile.alpha < 0.05) continue;
       const b = (this.blocked[nb++] ??= { x: 0, y: 0, w: 0, h: 0 });
-      b.x = tile.x - tile.width / 2; b.y = tile.y - 24; b.w = tile.width; b.h = 58 + tile.lines.length * 14;
+      b.x = tile.x - 24; b.y = tile.y - 24; b.w = 48; b.h = 48;
+      const name = (this.blocked[nb++] ??= { x: 0, y: 0, w: 0, h: 0 });
+      name.x = tile.nx; name.y = tile.ny - 7; name.w = tile.width; name.h = tile.height;
     }
     this.tetherN = 0;
     this.labelK = this.h / (2 * Math.tan(THREE.MathUtils.degToRad(FOV / 2)));
@@ -1287,7 +1305,15 @@ export class HexMapRenderer3D extends HexMapRenderer {
     // Hover is a small terrain mesh; moving across hexes must not upload the whole map texture.
     const hover = this.hoverId, selected = this.selectedId;
     this.hoverId = null; this.selectedId = null;
-    try { this.draw(now); } finally { this.hoverId = hover; this.selectedId = selected; this.cam = save.cam; this.w = save.w; this.h = save.h; this.dpr = save.dpr; this.layers = save.layers; this.lodZoom = null; }
+    try {
+      this.draw(now);
+      if (this.alignArt && this.artImg && this.artPlacement) {
+        const ctx = this.ctx, p = this.artPlacement;
+        ctx.save();
+        ctx.setTransform(dprO * z, 0, 0, dprO * z, dprO * (this.w / 2 - this.cam.x * z), dprO * (this.h / 2 - this.cam.y * z));
+        ctx.globalAlpha = p.opacity; ctx.drawImage(this.artImg, p.x, p.y, p.w, p.h); ctx.restore();
+      }
+    } finally { this.hoverId = hover; this.selectedId = selected; this.cam = save.cam; this.w = save.w; this.h = save.h; this.dpr = save.dpr; this.layers = save.layers; this.lodZoom = null; }
     this.gridProjection.draw(this.hexes, this.o, rect, W, H, z);
     this.ovUniforms.uOverlayRect.value.set(rect.x, rect.y, rect.w, rect.h);
     this.ovTex.needsUpdate = true;

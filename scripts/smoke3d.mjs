@@ -16,6 +16,8 @@ const b = await chromium.launch({
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
 });
 const p = await b.newPage({ viewport: { width: 1440, height: 900 } });
+// A saved preference from the retired fallback must not select a flat view.
+await p.addInitScript(() => localStorage.setItem('atlas.mapMode', JSON.stringify('2d')));
 // Software GL can take several seconds a frame; a screenshot waits for one.
 p.setDefaultTimeout(90000);
 const errs = [];
@@ -338,12 +340,8 @@ await step('frames-at-zoom-extremes', async () => {
   return out;
 });
 
-await step('2d-still-reachable', async () => {
-  await p.click('.mode-toggle');
-  await p.waitForSelector('.mapview[data-map-mode="2d"]');
-  await p.waitForTimeout(1500);
-  await p.screenshot({ path: S('10-flat-2d') });
-  await p.click('.mode-toggle');
+await step('3d-only', async () => {
+  expect(await p.locator('.mode-toggle').count() === 0, 'flat-map toggle remains');
   await p.waitForSelector('.mapview[data-map-mode="3d"]');
 });
 

@@ -55,20 +55,21 @@ try {
   for (const yaw of [0,1.6,3.2,4.8]) {
     const tiles=await page.evaluate(({hex,yaw,ids})=>{
       const r=window.__atlasMap;r.yaw=r.yawT=yaw;r.setCamera({x:hex.x,y:hex.y,zoom:1.7});r.frame(performance.now(),false);r.layoutPlaces();
-      return r.placeTiles.filter(t=>ids.includes(t.token.id)).map(t=>({id:t.token.id,x:t.x,y:t.y,width:t.width,height:58+t.lines.length*14,
-        top:t.y-24,bottom:t.y+34+(t.lines.length-1)*14,foot:t.gy,hit:r.tokenAt(t.x,t.y)?.id,nameHit:r.tokenAt(t.x,t.y+34)?.id}));
+      return r.placeTiles.filter(t=>ids.includes(t.token.id)).map(t=>({id:t.token.id,x:t.x,y:t.y,nx:t.nx,ny:t.ny,width:t.width,height:t.height,
+        top:t.ny-7,bottom:t.ny+t.height-7,foot:t.gy,hit:r.tokenAt(t.x,t.y)?.id,nameHit:r.tokenAt(t.nx+20,t.ny)?.id}));
     },{hex,yaw,ids});
     assert.equal(tiles.length,5);assert(tiles.every(t=>t.hit===t.id&&t.nameHit===t.id&&t.bottom<t.foot));
     for (let i=0;i<tiles.length;i++) for (let j=i+1;j<tiles.length;j++) {
       const a=tiles[i],b=tiles[j];
-      assert(Math.abs(a.x-b.x)>=(a.width+b.width)/2-0.01 || a.bottom<b.top || b.bottom<a.top,'same-hex labels must not overlap');
+      assert(Math.abs(a.x-b.x)+Math.abs(a.y-b.y)>=44,'stacked diamonds must not intersect');
+      assert(a.bottom<b.top || b.bottom<a.top,'name-list rows must not overlap');
     }
     tiling.push({yaw,tiles});await page.screenshot({path:`${shots}/diamonds-orbit-${yaw}.png`});
   }
   for (const [id,nameClick] of [[dungeon.id,false],[city.id,true]]) {
     const point=await page.evaluate(({id,nameClick})=>{
       const r=window.__atlasMap;r.layoutPlaces();const tile=r.placeTiles.find(t=>t.token.id===id),b=r.hud.getBoundingClientRect();
-      return {x:tile.x+b.x,y:tile.y+b.y+(nameClick?34:0)};
+      return {x:(nameClick?tile.nx+20:tile.x)+b.x,y:(nameClick?tile.ny:tile.y)+b.y};
     },{id,nameClick});
     await page.mouse.click(point.x,point.y);await page.waitForFunction(id=>window.__atlasMap.selectedTokenId===id,id);
     await page.getByRole('button',{name:'Close panel',exact:true}).last().click();await page.waitForFunction(()=>!window.__atlasMap.cameraMoving);
@@ -88,12 +89,12 @@ try {
   await page.waitForFunction(id=>window.__atlasMap.tokens.find(t=>t.id===id)?.data.majorCity===false,city.id);
   await page.reload();await page.waitForFunction(()=>window.__atlasMap?.hasGround);
   assert.equal((await api(`/api/worlds/${world.id}/map`)).tokens.find(t=>t.id===city.id).data.majorCity,false);
-  await page.locator('.mode-toggle').click();await page.waitForFunction(()=>document.querySelector('.mapview').dataset.mapMode==='2d');
-  const fallback=await page.evaluate(ids=>ids.every(id=>window.__atlasMap.tokenVisibility(window.__atlasMap.tokens.find(t=>t.id===id))===1),ids);assert(fallback);
+  assert.equal(await page.locator('.mode-toggle').count(),0);
+  assert.equal(await page.locator('.mapview').getAttribute('data-map-mode'),'3d');
   const after=await api(`/api/worlds/${world.id}/map`);assert.deepEqual(after.hexes,before.hexes);
   assert.equal(errors.length,0,errors.join('\n'));
-  writeFileSync(`${shots}/results.json`,JSON.stringify({types:icons.length,uniqueIcons:new Set(icons).size,tiling,variants,persisted:true,fallback,hexesUnchanged:true},null,2));
-  console.log('Place creation, icons, mode visibility, major-city persistence and 2D fallback passed');
+  writeFileSync(`${shots}/results.json`,JSON.stringify({types:icons.length,uniqueIcons:new Set(icons).size,tiling,variants,persisted:true,threeDOnly:true,hexesUnchanged:true},null,2));
+  console.log('Place creation, diagonal stacks, name-list picking, overview visibility, persistence and 3D-only view passed');
 } finally {
   for(const id of ids)await api(`/api/worlds/${world.id}/tokens/${id}`,'DELETE').catch(()=>{});
   await browser.close();

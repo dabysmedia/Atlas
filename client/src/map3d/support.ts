@@ -7,6 +7,6 @@ export function webgl2Available() {
 
 /** The 3D renderer and three.js load as their own chunk, fetched as soon as the map module loads. */
 let chunk: Promise<typeof import('./renderer3d')> | null = null;
-export const load3d = () => (chunk ??= import('./renderer3d'));
+export const load3d = () => (chunk ??= import('./renderer3d').catch((error) => { chunk = null; throw error; }));
 
 export const is3d = (r: HexMapRenderer | null | undefined): r is HexMapRenderer3D => !!r && 'focusOn' in r;

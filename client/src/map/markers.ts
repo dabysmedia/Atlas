@@ -68,6 +68,12 @@ export const MARKER_RADIUS: Record<TokenKind, number> = { city: 17, outpost: 13,
 
 const cache = new Map<string, HTMLCanvasElement>();
 
+export function drawPlaceGlyph(g: CanvasRenderingContext2D, kind: TokenKind, major: boolean, x: number, y: number, size: number, color: string) {
+  g.save(); g.translate(x - size / 2, y - size / 2); g.scale(size / 24, size / 24);
+  g.lineCap = 'round'; g.lineJoin = 'round'; g.strokeStyle = color; g.lineWidth = 1.8;
+  g.stroke(major ? MAJOR_CITY_ICON : ICONS[kind]); g.restore();
+}
+
 /** Upright place diamond, with the same SVG paths as the place picker. */
 export function placeDiamond(kind: TokenKind, color: string, dpr: number, major: boolean) {
   const k = `diamond|${kind}|${color}|${dpr}|${major}`;

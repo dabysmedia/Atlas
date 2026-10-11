@@ -70,12 +70,14 @@ Generic scouting, soldiers, envoy, caravan, fleet, character and party choices d
 Create factions in the Factions module; **Designate as player party** creates that faction's unique main party token.
 
 Token details allow a self-contained **GLB miniature** (10 MB limit), a model from the world's existing library,
-or a faction-colored 2D indicator. Models float slightly above sampled terrain. HUD indicators and names remain readable at
+or a faction-colored 2D indicator. Models float slightly above sampled terrain. Hover adds a silhouette border without tinting model materials.
+Picking uses cached model bounds and an 8px margin, avoiding per-frame triangle raycasts on dense GLBs. HUD indicators and names remain readable at
 every zoom; pieces sharing a hex get separate slots and can also be selected from the hex's contents or drawer. Overview uses 2D indicators sized to their projected hex; exploration restores assigned
 miniatures. Both use the same world slots, with model footprints fitted inside the hex. Exploration nameplates sit
 below their own model silhouettes, with a 20px icon. Names remain pinned to their markers; overlaps are allowed,
 and hovering brings that token and its nameplate to the front. Dense overview names appear on hover or selection.
 `scripts/smoke-token-zoom.mjs` checks zoom-mode switching, terrain anchors, shared-hex selection, and label clearance.
+`scripts/smoke-token-performance.mjs` checks picking with a 480,000-triangle fixture and guards against triangle raycasts returning.
 
 
 Use **Move to next hex** or drag a moving piece to an adjacent hex. The server stores ordered visits and appends

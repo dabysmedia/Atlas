@@ -238,9 +238,11 @@ export function MapView() {
   useEffect(() => { const r = rendererRef.current; if (r) { r.painting = tool === 'terrain' || tool === 'state'; r.invalidate(); } }, [tool, gen]);
   useEffect(() => { panelPrefs.set({ ...panelPrefs.get(), territories: territoriesOpen }); }, [territoriesOpen]);
   // One card at a time beside the control stack: opening one folds the others away.
-  useEffect(() => { if (layersOpen) { setTerritoriesOpen(false); setKeysOpen(false); } }, [layersOpen]);
-  useEffect(() => { if (territoriesOpen) { setLayersOpen(false); setKeysOpen(false); } }, [territoriesOpen]);
-  useEffect(() => { if (keysOpen) { setLayersOpen(false); setTerritoriesOpen(false); } }, [keysOpen]);
+  useEffect(() => { if (layersOpen) { setTerritoriesOpen(false); setKeysOpen(false); setDrawerOpen(false); } }, [layersOpen]);
+  useEffect(() => { if (territoriesOpen) { setLayersOpen(false); setKeysOpen(false); setDrawerOpen(false); } }, [territoriesOpen]);
+  useEffect(() => { if (keysOpen) { setLayersOpen(false); setTerritoriesOpen(false); setDrawerOpen(false); } }, [keysOpen]);
+
+  useEffect(() => { if (drawerOpen) { setLayersOpen(false); setTerritoriesOpen(false); setKeysOpen(false); } }, [drawerOpen]);
 
   /** Fly to a point, centered in the map area the focus panel leaves visible. */
   const centerOn = (x: number, y: number, zoom: number) => {
@@ -793,9 +795,12 @@ export function MapView() {
           <ToolDock tools={player ? TOOLS.slice(0, 1) : TOOLS} tool={tool} onTool={setTool} />
         </div>
       )}
-      {/* Cards that tile up beside the control stack: territories, layers, keys. */}
+      {/* Cards that open beside the control stack, including the wide token drawer. */}
       {data && !align && (
-        <div className="stack-cards">
+        <div className={`stack-cards ${drawerOpen ? 'with-pieces' : ''}`}>
+          <AnimatePresence>
+            {drawerOpen && <PieceDrawer data={data} startHexId={focusHex?.id ?? focusToken?.hexId} showTrails={showTrails} onShowTrails={setShowTrails} onClose={() => setDrawerOpen(false)} onSelect={id => { setFocus({ kind: 'token', id }); if (window.matchMedia('(max-width: 700px)').matches) setDrawerOpen(false); }} onDeployCopy={token => { setTool('select'); setPlacing({ ...token, deployCopy: true, reopenDrawer: true }); setDrawerOpen(false); }} onPlace={token => { setTool('select'); setPlacing({ ...token, reopenDrawer: true }); setDrawerOpen(false); }} />}
+          </AnimatePresence>
           <AnimatePresence>
             {layersOpen && (
               <motion.div key="layers" layout="position" className="panel layers" {...CARD}>
@@ -979,7 +984,6 @@ export function MapView() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {data && drawerOpen && <PieceDrawer data={data} startHexId={focusHex?.id ?? focusToken?.hexId} showTrails={showTrails} onShowTrails={setShowTrails} onClose={() => setDrawerOpen(false)} onSelect={id => { setFocus({ kind: 'token', id }); if (window.matchMedia('(max-width: 700px)').matches) setDrawerOpen(false); }} onDeployCopy={token => { setTool('select'); setPlacing({ ...token, deployCopy: true, reopenDrawer: true }); setDrawerOpen(false); }} onPlace={token => { setTool('select'); setPlacing({ ...token, reopenDrawer: true }); setDrawerOpen(false); }} />}
         {placing && <div className="piece-place-hint panel" role="status">{placing.deployCopy ? `Choose a hex for another ${placing.name}` : placing.hexId ? `Choose the next adjacent hex for ${placing.name}` : `Choose a hex to deploy ${placing.name}`}<button className="iconbtn" aria-label="Cancel token placement" onClick={() => setPlacing(null)}><X size={14} /></button></div>}
         {data && focusHex && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusHex.name || 'Hex'}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div>{data.tokens.filter(t => t.hexId === focusHex.id).map(t => <button className="poi" key={t.id} onClick={() => setFocus({ kind: 'token', id: t.id })}>{t.name}</button>)}</aside>}
         {data && focusToken && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusToken.name}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div><PieceControls token={focusToken} data={data} onMove={() => { setPlacing(focusToken); setDrawerOpen(false); }} /></aside>}

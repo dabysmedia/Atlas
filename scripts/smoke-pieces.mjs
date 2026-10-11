@@ -125,7 +125,7 @@ try {
   assert.equal(cards.length, 2); assert(Math.abs(cards[0].y - cards[1].y) < 1 && cards[1].x > cards[0].x);
   assert.equal(await dm.getByRole('button', { name: 'Return to drawer', exact: true }).count(), 0);
   assert(await dm.getByRole('checkbox', { name: 'Visible to players' }).isDisabled());
-  const panelsClear = await dm.evaluate(() => { const details = document.querySelector('.inspector').getBoundingClientRect(), tray = document.querySelector('.piece-drawer').getBoundingClientRect(); return tray.right < details.left && Math.abs(tray.bottom - innerHeight) < 2; });
+  const panelsClear = await dm.evaluate(() => { const details = document.querySelector('.inspector').getBoundingClientRect(), tray = document.querySelector('.piece-drawer').getBoundingClientRect(); const button = document.querySelector('button[aria-label="Token drawer"]').getBoundingClientRect(); return tray.right < button.left && button.right < details.left && Math.abs(tray.bottom - (innerHeight - 12)) < 2 && Math.abs(tray.left - 76) < 2; });
   assert(panelsClear, 'token tray stays clear of the selected piece inspector');
   await dm.screenshot({ path: `${shots}/drawer-and-miniature.png` });
   await dm.getByText('New piece', { exact: true }).first().click();
@@ -174,12 +174,31 @@ try {
   await playerPage.getByRole('button', { name: 'Token drawer', exact: true }).click();
   assert.equal(await playerPage.getByRole('checkbox', { name: 'Show party trail' }).isChecked(), false);
   assert(await dm.evaluate(() => window.__atlasMap === window.__piecesHeldMap));
-  assert.deepEqual(state.hexes, before.hexes);
+  assert.deepEqual([...state.hexes].sort((a,b) => a.id.localeCompare(b.id)), [...before.hexes].sort((a,b) => a.id.localeCompare(b.id)));
   await dm.reload(); await dm.waitForFunction(() => window.__atlasMap?.hasGround);
   state = await api(dm, `${path}/map`); scout = state.tokens.find(t => t.id === scout.id);
   assert.equal(scout.visibleToPlayers, false); assert(scout.modelId); assert.equal(state.tokens.find(t => t.id === copy.id).hexId, route[2]); assert.equal(scout.factionId, faction.id); assert.equal(scout.hexId, route[0]);
   assert.deepEqual(state.tokens.find(t => t.id === main.id).trail.map(v => v.hexId), route);
   await dm.evaluate(() => { const r = window.__atlasMap, c = r.fitCamera(); r.saved = null; r.setCamera(c); }); await dm.screenshot({ path: `${shots}/overview.png` });
+  // The wide drawer shares the control-stack popup behavior and stays left of its button.
+  await dm.getByRole('button', { name: 'Token drawer', exact: true }).click();
+  await dm.getByRole('button', { name: 'Territories', exact: true }).click();
+  await dm.locator('.piece-drawer').waitFor({ state: 'detached' });
+  await dm.locator('.territories').waitFor();
+  await dm.getByRole('button', { name: 'Layers', exact: true }).click();
+  await dm.locator('.territories').waitFor({ state: 'detached' });
+  await dm.locator('.layers').waitFor();
+  await dm.getByRole('button', { name: 'Token drawer', exact: true }).click();
+  await dm.locator('.layers').waitFor({ state: 'detached' });
+  const drawerFits = () => dm.evaluate(() => {
+    const tray = document.querySelector('.piece-drawer').getBoundingClientRect(), button = document.querySelector('button[aria-label="Token drawer"]').getBoundingClientRect();
+    return tray.left >= 0 && tray.right < button.left && tray.width > innerWidth - (innerWidth > 600 ? 180 : 100) && tray.bottom <= innerHeight;
+  });
+  await until(drawerFits);
+  await dm.screenshot({ path: `${shots}/wide-stack-drawer.png` });
+  await dm.setViewportSize({ width: 390, height: 844 });
+  await until(drawerFits);
+  await dm.screenshot({ path: `${shots}/mobile-stack-drawer.png` });
   await playerPage.setViewportSize({ width: 390, height: 844 });
   await playerPage.getByRole('button', { name: 'Select Reserve Scout', exact: true }).click();
   await playerPage.getByRole('complementary', { name: 'Faction token drawer' }).waitFor({ state: 'detached' });

@@ -495,7 +495,9 @@ mark { background: rgba(214,176,106,0.3); color: var(--text); border-radius: 2px
 .wiki-image { display: inline-block; max-width: 100%; height: auto; max-height: 600px; object-fit: contain; vertical-align: middle; border-radius: 8px; }
 .wiki-image.ProseMirror-selectednode { outline: 2px solid var(--gold); outline-offset: 3px; }
 .wiki-image-uploading { display: inline-block; padding: 6px 10px; border: 1px dashed var(--glass-edge); border-radius: 8px; font: 12px var(--font-ui); color: var(--gold); }
-.piece-drawer { position: absolute; z-index: 24; left: var(--chrome-left, 78px); right: 12px; bottom: var(--chrome-bottom, 0px); padding: 14px; display: flex; flex-direction: column; gap: 10px; border-radius: 22px; }
+.piece-drawer { position: relative; width: 100%; min-width: 0; padding: 8px 8px 10px; display: flex; flex-direction: column; gap: 10px; transform-origin: right bottom; }
+.piece-drawer > header { display: flex; align-items: center; gap: 8px; padding: 4px 4px 6px 8px; }
+.stack-cards.with-pieces { left: var(--chrome-left); z-index: 10; }
 .piece-factions, .piece-palette { display: flex; gap: 10px; overflow-x: auto; min-width: 0; }
 .piece-factions { flex-shrink: 0; }
 .piece-factions .btn { white-space: nowrap; }
@@ -507,9 +509,6 @@ mark { background: rgba(214,176,106,0.3); color: var(--text); border-radius: 2px
 .piece-row .poi span { overflow: hidden; text-overflow: ellipsis; }
 .piece-tools { display: flex; gap: 18px; }
 .piece-tool-content { position: absolute; bottom: calc(100% + 10px); left: 0; width: min(340px, 100%); max-height: 55vh; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-.mapview:has(.piece-drawer):has(.inspector) .piece-drawer { right: calc(var(--chrome-inset) + 372px); }
-.mapview:has(.piece-drawer) .dock-wrap { bottom: calc(var(--chrome-bottom) + 290px); }
-.shell:has(.piece-drawer) .world-module { bottom: calc(var(--chrome-bottom) + 290px); }
 .piece-instances .piece-tool-content { width: min(340px, 100%); }
 .piece-instance-list { max-height: 220px; overflow: auto; }
 .miniature-error { color: var(--danger); font-size: 12px; }
@@ -519,7 +518,7 @@ mark { background: rgba(214,176,106,0.3); color: var(--text); border-radius: 2px
 .piece-place-hint { position: absolute; z-index: 28; left: 50%; top: 80px; transform: translateX(-50%); padding: 10px 14px; display: flex; align-items: center; gap: 12px; }
 .player-inspector { padding: 18px; overflow: auto; }
 .player-inspector .piece-controls { margin-top: 18px; }
-@media (max-width: 700px) { .piece-drawer { left: 10px; right: 10px; bottom: var(--chrome-bottom, 0px); } .mapview:has(.piece-drawer):has(.inspector) .piece-drawer { right: 10px; } .mapview:has(.piece-drawer) .inspector { bottom: calc(var(--chrome-bottom, 0px) + 290px); height: 30vh; } .piece-place-hint { top: 70px; width: calc(100% - 30px); } }
+@media (max-width: 700px) { .piece-place-hint { top: 70px; width: calc(100% - 30px); } }
 .wiki-main { overflow: auto; min-height: 0; border-radius: 22px; }
 /* The article: a calm, nearly solid sheet under the prose. */
 .wiki-doc {
@@ -1178,5 +1177,12 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 .piece-picture img { width: 100%; height: 100%; object-fit: contain; }
 .piece-picture small { font-size: 10px; }
 .mapview:has(.piece-drawer) .dock-wrap { bottom: calc(var(--chrome-bottom) + 400px); }
-.shell:has(.piece-drawer) .world-module { bottom: calc(var(--chrome-bottom) + 400px); }
 @media (max-width: 700px) { .mapview:has(.piece-drawer) .inspector { bottom: calc(var(--chrome-bottom) + 400px); height: 26vh; } }
+@media (max-width: 600px) {
+  .stack-cards.with-pieces { bottom: calc(var(--chrome-bottom) + var(--chrome-inset)); }
+  .mapview:has(.inspector) .stack-cards.with-pieces { opacity: 1; pointer-events: none; }
+  .mapview:has(.piece-drawer) .stack-col { opacity: 1; pointer-events: auto; }
+}
+
+/* Leave the destination map clear while moving or deploying a piece. */
+.mapview:has(.piece-place-hint) .dock-wrap { visibility: hidden; }

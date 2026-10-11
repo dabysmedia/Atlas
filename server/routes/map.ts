@@ -13,6 +13,7 @@ import { changed } from '../live.js';
 import { TOKEN_KIND_KEYS, settlementSize } from '../../shared/markers.js';
 import { visibleTokens, accessFor, forbidden } from '../tokenAccess.js';
 import { validateTokenRefs } from './pieces.js';
+import { ensureSheets } from '../rules.js';
 
 type P = { w: string; id: string };
 
@@ -74,6 +75,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
       db.select(modelMeta).from(mapModel).where(eq(mapModel.mapId, map.id)),
     ]);
     const shown = await visibleTokens(db, req, w.id, tokenRows);
+    await ensureSheets(db,w.id);
     const access = req.userRole === 'player' ? await accessFor(db, req.userId!, w.id) : null;
     return { map: { ...map, art: artRows[0] ?? null, model: modelRows[0] ?? null }, hexes: hexRows, claims: claimRows, tokens: shown, settlements: req.userRole === 'player' ? settlementRows.filter(s => shown.some(t => t.settlementId === s.id)) : settlementRows, factions: factionRows, campaigns: access ? campaignRows.filter(c => c.id === access.campaignId) : campaignRows, playerFactionId: access?.factionId ?? null, playerCampaignId: access?.campaignId ?? null };
   });
@@ -237,7 +239,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
 
   // ---------------------------------------------------------------- tokens
   const TokenKind = z.enum(TOKEN_KIND_KEYS);
-  const TokenData = z.object({ majorCity: z.boolean().optional(), sheetPageId: Uuid.nullable().optional() }).catchall(z.unknown());
+  const TokenData = z.object({ majorCity: z.boolean().optional(), sheetPageId: Uuid.nullable().optional(), portraitId: Uuid.nullable().optional() }).catchall(z.unknown());
   const TokenCreate = z.object({
     kind: TokenKind, name: z.string().trim().min(1).max(120), hexId: Uuid.nullable().optional(),
     factionId: Uuid.nullable().optional(), campaignId: Uuid.nullable().optional(), color: z.string().max(20).nullable().optional(),
@@ -261,6 +263,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
       settlementId = s.id;
     }
     const [row] = await db.insert(tokens).values({ ...body, worldId: w.id, mapId: map.id, settlementId, trail: body.hexId ? [{ hexId: body.hexId, day: w.currentDay, at: new Date().toISOString() }] : [] }).returning();
+    await ensureSheets(db,w.id,row.id);
     // Settlement types bring a details row, so screens refetch the map for both.
     changed(req, settlementId ? { scopes: ['map'] } : { patches: [{ op: 'token', token: row }] });
     await logEvent(db, { worldId: w.id, kind: 'token.created', summary: `${cap(body.kind)} "${body.name}" placed`, payload: { tokenId: row.id, hexId: body.hexId } });

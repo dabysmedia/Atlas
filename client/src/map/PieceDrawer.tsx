@@ -9,7 +9,6 @@ import { useWorld } from '../world';
 import { toastError } from '../components/toast';
 import { MarkerIcon } from './panels';
 import { TokenPreview } from './TokenPreview';
-import { usePageIndex } from '../wiki/usePages';
 import { AddToken } from './AddToken';
 import { useMiniatureStatus, retryMiniature } from '../map3d/modelStatus';
 export const usePlayer = () => useQuery({ queryKey: qk.me, queryFn: () => api<{ username: string; role: 'gm' | 'player' }>('/api/auth/me'), staleTime: Infinity }).data?.role === 'player';
@@ -41,7 +40,7 @@ export function PieceDrawer({ data, onClose, onSelect, onPlace, onDeployCopy, st
     {faction && <>
       <div className="piece-palette scroll">
         {entries.map(t => <div className="piece-row" key={t.id}>
-          <button className="poi grow piece-card" aria-label={`Select ${t.name}`} onClick={() => { if(t.hexId) { onSelect(t.id); onClose(); } else onPlace(t); }}><TokenPreview token={t} color={t.color ?? faction.color} /><span className="grow">{t.name}<small>{t.mainParty ? 'Main party' : String(t.data.role ?? t.kind)} · {t.hexId ? 'On map · Select to move' : 'In drawer · Select to place'}{!t.visibleToPlayers ? ' · Hidden' : ''}</small></span></button>
+          <button className="poi grow piece-card" aria-label={`Select ${t.name}`} onClick={() => { onSelect(t.id); onClose(); }}><TokenPreview token={t} color={t.color ?? faction.color} /><span className="grow">{t.name}<small>{t.mainParty ? 'Main party' : String(t.data.role ?? t.kind)} · {t.hexId ? 'On map' : 'In reserve'} · Stat sheet{!t.visibleToPlayers ? ' · Hidden' : ''}</small></span></button>
           {!player && <button className="btn ghost sm" aria-label={`Edit ${t.name}`} onClick={()=>onSelect(t.id)}>Edit token</button>}
           {data.tokens.some(c => isCopyOf(c, t)) && <details className="piece-instances piece-tool"><summary>Copies · {data.tokens.filter(c => isCopyOf(c, t)).length}</summary><div className="panel piece-tool-content piece-instance-list">{data.tokens.filter(c => isCopyOf(c, t)).map(c => <button key={c.id} className="poi" aria-label={`Select ${c.name}`} onClick={() => onSelect(c.id)}>{c.name} · {c.hexId ? 'Deployed' : 'In reserve'}</button>)}</div></details>}
         </div>)}
@@ -71,9 +70,8 @@ function PlayerList() {
   const list = useQuery({ queryKey: key, queryFn: () => api<{ id: string; username: string }[]>(`/api/worlds/${world.id}/players`) });
   return <>{list.data?.map(u => <div className="row" key={u.id}><span className="grow">{u.username}</span><button className="btn ghost sm" onClick={async () => { try { await api(`/api/worlds/${world.id}/players/${u.id}`, { method: 'DELETE' }); qc.invalidateQueries({ queryKey: key }); } catch (e) { toastError(e); } }}>Revoke access</button></div>)}</>;
 }
-export function PieceControls({ token, data, onMove }: { token: Token; data: MapData; onMove: () => void }) {
+export function PieceControls({ token, data, onMove, mode = 'all' }: { token: Token; data: MapData; onMove: () => void; mode?: 'all' | 'appearance' | 'journey' }) {
   const world = useWorld(), qc = useQueryClient(), player = usePlayer(), [busy, setBusy] = useState(false);
-  const pages = usePageIndex(world.id, !player);
   const miniatureStatus = useMiniatureStatus(token.worldId, token.modelId);
   const [visibility, setVisibility] = useState<boolean | null>(null);
   const models = useQuery({ queryKey: ['w', world.id, 'tokenModels'], enabled: !player, queryFn: () => api<{ id: string; name: string }[]>(`/api/worlds/${world.id}/token-models`) });
@@ -85,22 +83,20 @@ export function PieceControls({ token, data, onMove }: { token: Token; data: Map
   };
   const canMove = !player || token.factionId === data.playerFactionId && ['party', 'unit', 'character', 'marker'].includes(token.kind);
   return <div className="piece-controls">
-    {canMove && !token.hexId && <button className="btn" onClick={onMove}><Footprints size={14} />{token.hexId ? 'Move to next hex' : 'Deploy on a hex'}</button>}
-    {canMove && token.hexId && <p className="faint">Select the token, then click a highlighted hex or drag it there.</p>}
-    {!player && <>
+    {mode !== 'appearance' && canMove && !token.hexId && <button className="btn" onClick={onMove}><Footprints size={14} />{token.hexId ? 'Move to next hex' : 'Deploy on a hex'}</button>}
+    {mode !== 'appearance' && canMove && token.hexId && <p className="faint">Select the token, then click a highlighted hex or drag it there.</p>}
+    {!player && mode !== 'journey' && <>
       <label className="toggle"><input type="checkbox" aria-label="Visible to players" disabled={token.mainParty || visibility !== null} checked={visibility ?? token.visibleToPlayers} onChange={e => { const visible = e.target.checked; setVisibility(visible); void patch({ visibleToPlayers: visible }).finally(() => setVisibility(null)); }} />{(visibility ?? token.visibleToPlayers) ? <Eye size={14} /> : <EyeOff size={14} />} Visible to players</label>
       <div className="field">Appearance<div className="token-appearance-grid"><button className={`token-preset ${!token.modelId?'on':''}`} aria-label="Use 2D indicator" aria-pressed={!token.modelId} onClick={()=>void patch({modelId:null})}><MarkerIcon kind={token.kind} color={data.factions.find(f=>f.id===token.factionId)?.color??'#d6b06a'} size={30}/><span>2D indicator</span></button>{models.data?.map(m=><button key={m.id} className={`token-preset ${token.modelId===m.id?'on':''}`} aria-label={`Use miniature ${m.name}`} aria-pressed={token.modelId===m.id} onClick={()=>void patch({modelId:m.id})}><TokenPreview token={{...token,modelId:m.id,name:m.name}} color={data.factions.find(f=>f.id===token.factionId)?.color??'#d6b06a'}/><span>{m.name.replace(/\.glb$/i,'')}</span></button>)}</div></div>
       {token.modelId && <div className={miniatureStatus?.state === 'error' ? 'miniature-error' : 'faint'} role="status">{!token.hexId ? 'Miniature will load when deployed.' : miniatureStatus?.state === 'ready' ? '3D miniature ready' : miniatureStatus?.state === 'error' ? <>{miniatureStatus.message}<button className="btn ghost sm" onClick={() => retryMiniature(token.worldId, token.modelId!)}>Retry miniature</button></> : 'Loading 3D miniature…'}</div>}
-      <label className="field">Token sheet<select className="select" aria-label="Token sheet" value={String(token.data.sheetPageId ?? '')} onChange={e => patch({ data: { ...token.data, sheetPageId: e.target.value || null } })}><option value="">No sheet assigned</option>{pages.data?.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}</select></label>
-      {pages.data?.some(p => p.id === token.data.sheetPageId) && <Link className="btn ghost sm" to={`/w/${world.id}/wiki/${token.data.sheetPageId}`}>Open token sheet</Link>}
-      <span className="faint">Link a wiki page for this token’s sheet. New copies use the same sheet.</span>
       <label className="btn"><Box size={14} />{busy ? 'Uploading…' : 'Upload GLB miniature'}<input type="file" accept=".glb" hidden disabled={busy} onChange={async e => {
         const file = e.target.files?.[0]; e.target.value = ''; if (!file) return; setBusy(true);
         try { if (file.size > 10 * 1024 * 1024) throw new Error('Miniatures must be under 10 MB.'); const response = await pendingWrites.track(fetch(`/api/worlds/${world.id}/token-models?name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { ...clientHeaders, 'content-type': 'model/gltf-binary' }, body: file })); const model = await response.json(); if (!response.ok) throw new Error(model.error); await patch({ modelId: model.id }); qc.invalidateQueries({ queryKey: ['w', world.id, 'tokenModels'] }); } catch (e) { toastError(e); } finally { setBusy(false); }
       }} /></label>
-      {token.hexId && !token.mainParty && <button className="btn ghost sm" onClick={() => patch({ hexId: null })}>Return to drawer</button>}
+      {mode === 'all' && token.hexId && !token.mainParty && <button className="btn ghost sm" onClick={() => patch({ hexId: null })}>Return to drawer</button>}
     </>}
-    {!!token.trail?.length && <details open={token.mainParty}><summary>Movement log · {token.trail.filter(v => v.hexId).length} visits</summary><ol className="piece-history">{token.trail.map((v, i) => {
+    {!player && mode === 'journey' && token.hexId && !token.mainParty && <button className="btn ghost sm" onClick={() => patch({ hexId: null })}>Return to drawer</button>}
+    {mode !== 'appearance' && !!token.trail?.length && <details open={token.mainParty}><summary>Movement log · {token.trail.filter(v => v.hexId).length} visits</summary><ol className="piece-history">{token.trail.map((v, i) => {
       const h = data.hexes.find(h => h.id === v.hexId); return <li key={i}>{h ? h.name || `Hex ${h.q}, ${h.r}` : 'Trail break / off-map'} <span className="faint">· Day {v.day}</span></li>;
     })}</ol></details>}
   </div>;

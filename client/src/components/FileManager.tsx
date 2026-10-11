@@ -8,7 +8,7 @@ import { TokenPreview } from '../map/TokenPreview';
 import { Dialog } from './Dialog';
 import { toastError } from './toast';
 export type UploadedFile = { id: string; name: string; size: number; kind: string; mime: string; date: string; uses: string[]; blocked: string | null };
-const kinds: Record<string, string> = { interior: 'Interior maps', miniature: 'Miniatures', 'wiki-image': 'Wiki images', 'map-art': 'Map art', terrain: 'Terrain', 'terrain-archive': 'Archived terrain' };
+const kinds: Record<string, string> = { 'token-art': 'Token portraits', interior: 'Interior maps', miniature: 'Miniatures', 'wiki-image': 'Wiki images', 'map-art': 'Map art', terrain: 'Terrain', 'terrain-archive': 'Archived terrain' };
 const sizeLabel = (size: number) => size < 1024 * 1024 ? `${(size / 1024).toFixed(1)} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
 export function FileManager() {
   const world = useWorld(), qc = useQueryClient(), location = useLocation(), section = useRef<HTMLElement>(null);

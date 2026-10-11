@@ -1,4 +1,5 @@
 import { FileManager } from './FileManager';
+import { RulesSettings } from './RulesSettings';
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Check, Plus, X } from 'lucide-react';
@@ -45,6 +46,7 @@ export function SettingsView() {
           <div className="spacer" />
           <button className="btn primary" disabled={!dirty || !name.trim()} onClick={save}><Check size={14} /> Save changes</button>
         </div>
+        <RulesSettings />
         <div className="card"><div className="card-body">
           <div className="row" style={{ gap: 16, alignItems: 'flex-start' }}>
             <div className="grow">

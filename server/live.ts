@@ -16,7 +16,7 @@ import { z } from 'zod';
 
 /** Parts of a screen's cache a change can make stale. The client maps each onto its query keys (client/src/live.ts). */
 export const SCOPES = [
-  'worlds', 'world', 'map', 'pages', 'page', 'search', 'factions', 'meters', 'mh', 'rolls', 'campaigns', 'events', 'fog', 'modelArchive', 'files', 'tokenModels', 'interiors',
+  'worlds', 'world', 'map', 'pages', 'page', 'search', 'factions', 'meters', 'mh', 'rolls', 'campaigns', 'events', 'fog', 'modelArchive', 'files', 'tokenModels', 'interiors', 'rules', 'sheets', 'portraits',
 ] as const;
 export type Scope = (typeof SCOPES)[number];
 
@@ -126,8 +126,14 @@ export const ROUTE_SCOPES: Record<string, Scope[]> = {
   'POST /api/worlds/:w/interiors/:id/enter': ['interiors', 'events'],
   'POST /api/worlds/:w/interiors/:id/move': ['interiors', 'events'],
   'POST /api/worlds/:w/interiors/:id/leave': ['interiors', 'events'],
-  'PATCH /api/worlds/:w/files/:kind/:id': ['files', 'map', 'modelArchive', 'tokenModels', 'events', 'interiors'],
-  'DELETE /api/worlds/:w/files/:kind/:id': ['files', 'map', 'modelArchive', 'tokenModels', 'events', 'interiors'],
+  'PATCH /api/worlds/:w/files/:kind/:id': ['files', 'map', 'modelArchive', 'tokenModels', 'events', 'interiors', 'portraits'],
+  'DELETE /api/worlds/:w/files/:kind/:id': ['files', 'map', 'modelArchive', 'tokenModels', 'events', 'interiors', 'portraits'],
+  'POST /api/worlds/:w/rules': ['rules'],
+  'PATCH /api/worlds/:w/rules/:id': ['rules', 'sheets'],
+  'PUT /api/worlds/:w/rules/active': ['rules', 'sheets', 'events'],
+  'PATCH /api/worlds/:w/tokens/:id/sheet': ['sheets'],
+  'POST /api/worlds/:w/tokens/:id/sheet/roll': ['events'],
+  'POST /api/worlds/:w/token-portraits': ['portraits', 'files'],
   'POST /api/worlds/:w/players': ['map'],
   'DELETE /api/worlds/:w/players/:id': ['map'],
   'PUT /api/worlds/:w/map/art': ['events', 'worlds', 'files'],
@@ -275,7 +281,7 @@ export class LiveHub {
     if (c.role === 'player') {
       if (m.t === 'drag') return;
       if (m.t === 'change') {
-        if (ev.world === null || ev.world === c.world) this.send(c, { ...m, scopes: ['map', 'world', 'worlds', 'fog', 'interiors'], patches: undefined });
+        if (ev.world === null || ev.world === c.world) this.send(c, { ...m, scopes: ['map', 'world', 'worlds', 'fog', 'interiors', 'rules', 'sheets', 'portraits'], patches: undefined });
         return;
       }
     }

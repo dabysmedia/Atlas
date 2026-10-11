@@ -34,7 +34,8 @@ try {
   await page.goto(`${base}/w/${world.id}/map`); await page.waitForFunction(()=>window.__atlasMap?.hasGround);
   await page.evaluate(id=>{const r=window.__atlasMap,h=r.hexById(id);r.saved=null;r.setCamera({x:h.cx,y:h.cy,zoom:1.5});},origin.id);
   await page.getByRole('button',{name:'Token drawer',exact:true}).click(); await page.getByRole('button',{name:'Select Swaying scout',exact:true}).click();
-  await page.locator('.token-panel input[type=file]').setInputFiles({name:'scout.glb',mimeType:'model/gltf-binary',buffer:miniature()});
+  await page.getByRole('button',{name:'Appearance',exact:true}).click();
+  await page.locator('.token-panel input[accept=".glb"]').setInputFiles({name:'scout.glb',mimeType:'model/gltf-binary',buffer:miniature()});
   await page.waitForFunction(id=>window.__atlasMap.miniatures.has(id),token.id);
   if(await page.getByRole('button',{name:'Close token drawer',exact:true}).count()) await page.getByRole('button',{name:'Close token drawer',exact:true}).click();
   await page.mouse.move(80,50); await page.waitForTimeout(800);

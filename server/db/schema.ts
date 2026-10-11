@@ -14,6 +14,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import type { MeterBand } from '../../shared/meters.js';
 import type { Weather } from '../../shared/weather.js';
+import type { RulesDefinition, SheetKind, SheetValues } from '../../shared/rulesets.js';
 
 export type { MeterBand };
 
@@ -400,3 +401,22 @@ export const interiorPositions = pgTable('interior_positions', {
   interiorId: uuid('interior_id').notNull().references(() => interiors.id,{onDelete:'cascade'}),
   x: integer('x').notNull(), y: integer('y').notNull(), revision: integer('revision').notNull().default(1), updatedAt: updated(),
 });
+
+// Rules and sheets are independent of wiki pages and preserve values for each system.
+export const rulesets = pgTable('rulesets', {
+  id: id(), worldId: worldRef(), key: text('key').notNull(), name: text('name').notNull(),
+  definition: jsonb('definition').$type<RulesDefinition>().notNull(), revision: integer('revision').notNull().default(1), updatedAt: updated(),
+}, t=>[uniqueIndex('rulesets_world_key_uq').on(t.worldId,t.key)]);
+export const worldRules = pgTable('world_rules', {
+  worldId: uuid('world_id').primaryKey().references(()=>worlds.id,{onDelete:'cascade'}),
+  activeId: uuid('active_id').notNull().references(()=>rulesets.id,{onDelete:'cascade'}),
+});
+export const tokenSheets = pgTable('token_sheets', {
+  id: id(), worldId: worldRef(), tokenId: uuid('token_id').notNull().references(()=>tokens.id,{onDelete:'cascade'}),
+  rulesetId: uuid('ruleset_id').notNull().references(()=>rulesets.id,{onDelete:'cascade'}),
+  kind: text('kind').$type<SheetKind>().notNull(), values: jsonb('values').$type<SheetValues>().notNull().default({}),
+  revision: integer('revision').notNull().default(1), updatedAt: updated(),
+}, t=>[uniqueIndex('token_sheets_token_rules_uq').on(t.tokenId,t.rulesetId),index('token_sheets_world_idx').on(t.worldId)]);
+export const tokenPortraits = pgTable('token_portraits', {
+  id: id(), worldId: worldRef(), name: text('name').notNull(), mime: text('mime').notNull(), bytes: bytea('bytes').notNull(), createdAt: created(),
+}, t=>[index('token_portraits_world_idx').on(t.worldId)]);

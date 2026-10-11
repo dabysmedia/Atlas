@@ -54,6 +54,87 @@ afterAll(async () => { await app?.close(); });
 const pastMidnight = (id: string) =>
   db.update(worlds).set({ daylight: { hour: 23.9, speed: 'fast', at: new Date(Date.now() - 1000).toISOString() } }).where(eq(worlds.id, id));
 
+describe('world rules and token stat sheets', () => {
+  it('assigns independent sheets, switches systems without data loss, copies stats and preserves lore/hexes', async () => {
+    const w=(await call('POST','/api/worlds',{name:'Sheets test',cols:4,rows:4})).body,path=`/api/worlds/${w.id}`;
+    const before=(await call('GET',`${path}/map`)).body;
+    const faction=(await call('POST',`${path}/factions`,{name:'Test company'})).body;
+    const page=(await call('POST',`${path}/pages`,{title:'Lore remains lore'})).body;
+    const t=(await call('POST',`${path}/tokens`,{name:'Test scout',kind:'character',hexId:before.hexes[0].id,factionId:faction.id,data:{sheetPageId:page.id}})).body;
+    const endpoint=`${path}/tokens/${t.id}/sheet`;
+    let bundle=(await call('GET',endpoint)).body;
+    const pack=bundle.ruleset;
+    expect(bundle.sheet.kind).toBe('character');expect(bundle.sheet.id).not.toBe(page.id);
+    let result=await call('PATCH',endpoint,{rulesetId:pack.id,revision:bundle.sheet.revision,values:{hp:17,hpMax:30,dex:4,level:5,reflexRank:'2'}});
+    expect(result.status).toBe(200);
+    expect((await call('PATCH',endpoint,{rulesetId:pack.id,revision:bundle.sheet.revision,values:{hp:18}})).status).toBe(409);
+    expect((await call('PATCH',endpoint,{rulesetId:pack.id,revision:result.body.revision,values:{ac:50}})).status).toBe(400);
+    expect((await call('PATCH',endpoint,{rulesetId:pack.id,revision:result.body.revision,values:{hp:-1}})).status).toBe(400);
+    const custom=(await call('POST',`${path}/rules`,{preset:'generic',name:'Another system'})).body;
+    expect((await call('PUT',`${path}/rules/active`,{id:custom.id})).status).toBe(200);
+    bundle=(await call('GET',endpoint)).body;expect(bundle.sheet.values.hp).toBe(0);expect(bundle.ruleset.id).toBe(custom.id);
+    expect((await call('PATCH',endpoint,{rulesetId:pack.id,revision:result.body.revision,values:{hp:9}})).status).toBe(409);
+    await call('PATCH',endpoint,{rulesetId:custom.id,revision:bundle.sheet.revision,values:{hp:8}});
+    await call('PUT',`${path}/rules/active`,{id:pack.id});
+    bundle=(await call('GET',endpoint)).body;expect(bundle.sheet.values.hp).toBe(17);
+    const copy=(await call('POST',`${path}/tokens/${t.id}/deploy`,{hexId:before.hexes[1].id})).body;
+    const copied=(await call('GET',`${path}/tokens/${copy.id}/sheet`)).body;
+    expect(copied.sheet.values.hp).toBe(17);expect(copied.sheet.id).not.toBe(bundle.sheet.id);
+    await call('PATCH',`${path}/tokens/${copy.id}/sheet`,{rulesetId:pack.id,revision:copied.sheet.revision,values:{hp:3}});
+    expect((await call('GET',endpoint)).body.sheet.values.hp).toBe(17);
+    await call('PUT',`${path}/rules/active`,{id:custom.id});
+    expect((await call('GET',`${path}/tokens/${copy.id}/sheet`)).body.sheet.values.hp).toBe(8);
+    await call('PUT',`${path}/rules/active`,{id:pack.id});
+    const definition=structuredClone(pack.definition);definition.proficiency.addLevel=false;
+    expect((await call('PATCH',`${path}/rules/${pack.id}`,{name:pack.name,definition,revision:pack.revision})).status).toBe(200);
+    expect((await call('PATCH',`${path}/rules/${pack.id}`,{name:pack.name,definition,revision:pack.revision})).status).toBe(409);
+    expect((await call('GET',`${path}/pages/${page.id}`)).body.title).toBe('Lore remains lore');
+    expect((await call('GET',`${path}/map`)).body.hexes).toEqual(before.hexes);
+    await app.close();const restarted=await boot();app=restarted.app;db=restarted.db;
+    expect((await call('GET',endpoint)).body.sheet.values.hp).toBe(17);
+  });
+  it('keeps sheets, rulesets and roster references isolated between worlds', async()=>{
+    const w=(await call('POST','/api/worlds',{name:'Rules isolation',cols:4,rows:4})).body,path=`/api/worlds/${w.id}`;
+    const other=(await call('POST','/api/worlds',{name:'Other rules',cols:4,rows:4})).body,otherPath=`/api/worlds/${other.id}`;
+    const faction=(await call('POST',`${path}/factions`,{name:'Party'})).body;
+    const t=(await call('POST',`${path}/tokens`,{name:'Party',kind:'party',factionId:faction.id})).body;
+    const foreign=(await call('POST',`${otherPath}/tokens`,{name:'Foreign character',kind:'character'})).body;
+    const bundle=(await call('GET',`${path}/tokens/${t.id}/sheet`)).body;
+    const rules=(await call('GET',`${otherPath}/rules`)).body;
+    expect((await call('PUT',`${path}/rules/active`,{id:rules.activeId})).status).toBe(400);
+    expect((await call('GET',`${otherPath}/tokens/${t.id}/sheet`)).status).toBe(404);
+    expect((await call('PATCH',`${path}/tokens/${t.id}/sheet`,{rulesetId:bundle.ruleset.id,revision:bundle.sheet.revision,values:{members:[foreign.id]}})).status).toBe(400);
+    const malformed=structuredClone(bundle.ruleset.definition);malformed.templates[0].sections[0].fields[0].formula='level';
+    expect((await call('POST',`${path}/rules`,{definition:malformed})).status).toBe(400);
+  });
+  it('allows players to edit their visible faction sheets while protecting enemy/hidden sheets and art',async()=>{
+    const w=(await call('POST','/api/worlds',{name:'Sheet access',cols:4,rows:4})).body,path=`/api/worlds/${w.id}`;
+    const map=(await call('GET',`${path}/map`)).body;
+    const own=(await call('POST',`${path}/factions`,{name:'Own'})).body,enemy=(await call('POST',`${path}/factions`,{name:'Enemy'})).body;
+    const t=(await call('POST',`${path}/tokens`,{name:'Own character',kind:'character',hexId:map.hexes[0].id,factionId:own.id})).body;
+    const hidden=(await call('POST',`${path}/tokens`,{name:'Hidden',kind:'unit',hexId:map.hexes[1].id,factionId:own.id,visibleToPlayers:false})).body;
+    const foe=(await call('POST',`${path}/tokens`,{name:'Enemy',kind:'unit',hexId:map.hexes[1].id,factionId:enemy.id})).body;
+    const artUpload=await app.inject({method:'POST',url:`${path}/token-portraits?name=Portrait.png`,headers:{cookie,'content-type':'image/png'},payload:png(48,48)});
+    expect(artUpload.statusCode).toBe(200);const art=artUpload.json();
+    await call('PATCH',`${path}/tokens/${hidden.id}`,{data:{portraitId:art.id}});
+    await call('POST',`${path}/players`,{username:'sheet-player',password:'test-player-password',factionId:own.id});
+    const gmCookie=cookie,login=await app.inject({method:'POST',url:'/api/auth/login',payload:{username:'sheet-player',password:'test-player-password'}});cookie=String(login.headers['set-cookie']).split(';')[0];
+    const endpoint=`${path}/tokens/${t.id}/sheet`,bundle=(await call('GET',endpoint)).body;
+    expect((await call('PATCH',endpoint,{rulesetId:bundle.ruleset.id,revision:bundle.sheet.revision,values:{hp:10}})).status).toBe(200);
+    expect((await call('GET',`${path}/tokens/${hidden.id}/sheet`)).status).toBe(404);
+    expect((await call('GET',`${path}/tokens/${foe.id}/sheet`)).status).toBe(403);
+    expect((await call('POST',`${path}/rules`,{preset:'generic'})).status).toBe(403);
+    expect((await app.inject({method:'GET',url:`${path}/token-portraits/${art.id}`,headers:{cookie}})).statusCode).toBe(404);
+    expect((await call('POST',`${endpoint}/roll`,{rulesetId:bundle.ruleset.id,field:'reflex',dc:15})).status).toBe(200);
+    cookie=gmCookie;
+    expect((await call('GET',endpoint)).body.sheet.values.hp).toBe(10);
+    expect((await call('GET',`${path}/events`)).body.some(e=>e.kind==='sheet.roll')).toBe(true);
+    expect((await call('PATCH',`${path}/files/token-art/${art.id}`,{name:'Renamed.png'})).status).toBe(200);
+    expect((await call('DELETE',`${path}/files/token-art/${art.id}?confirm=delete`)).status).toBe(200);
+    expect((await call('GET',`${path}/map`)).body.tokens.find(t=>t.id===hidden.id).data.portraitId).toBeUndefined();
+  });
+});
+
 describe('hex interiors', () => {
   it('persists maps and tactical positions, guards concurrent movement, and leaves hex data and world trails unchanged', async () => {
     const w=(await call('POST','/api/worlds',{name:'Interior test',cols:4,rows:4})).body;

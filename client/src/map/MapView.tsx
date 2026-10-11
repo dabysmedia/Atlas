@@ -1,3 +1,4 @@
+import { TokenInspector } from './TokenInspector';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -1006,7 +1007,7 @@ export function MapView() {
       <AnimatePresence>
         {placing && <div className="piece-place-hint panel" role="status">{placing.deployCopy ? `Choose a hex for another ${placing.name}` : placing.hexId ? `Choose the next adjacent hex for ${placing.name}` : `Choose a hex to deploy ${placing.name}`}<button className="iconbtn" aria-label="Cancel token placement" onClick={() => setPlacing(null)}><X size={14} /></button></div>}
         {data && focusHex && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusHex.name || 'Hex'}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div>{data.tokens.filter(t => t.hexId === focusHex.id).map(t => <button className="poi" key={t.id} onClick={() => setFocus({ kind: 'token', id: t.id })}>{t.name}</button>)}{interiors.sidebar(focusHex.id)}</aside>}
-        {data && focusToken && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusToken.name}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div><PieceControls token={focusToken} data={data} onMove={() => { setPlacing(focusToken); setDrawerOpen(false); }} /></aside>}
+        {data && focusToken && player && !placing && <TokenInspector token={focusToken} data={data} onClose={() => setFocus(null)} onMove={() => { setPlacing(focusToken); setDrawerOpen(false); }} onLocate={() => { const p = r?.tokenPos(focusToken); if (p && r) centerOn(p.x,p.y,r.target.zoom); }}/> }
         {data && focusHex && !align && !player && !placing && (
           <HexPanel key={`hex-${focusHex.id}`} hex={focusHex} data={data} fogCampaignId={fogCamp} explored={fogQ.data?.includes(focusHex.id) ?? false}
             interiorFooter={interiors.sidebar(focusHex.id)} label={r?.label(focusHex) ?? ''} onClose={() => setFocus(null)} onFocus={setFocus}

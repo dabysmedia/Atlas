@@ -5,9 +5,10 @@ import type { Db, DbOrTx } from '../db/index.js';
 import { badRequest, logEvent, notFound } from '../history.js';
 import { getWorld, Uuid } from './worlds.js';
 
-const Kind = z.enum(['miniature', 'wiki-image', 'map-art', 'terrain', 'terrain-archive','interior']);
+const Kind = z.enum(['miniature', 'wiki-image', 'map-art', 'terrain', 'terrain-archive','interior','token-art']);
 type Kind = z.infer<typeof Kind>;
 const specs = {
+  'token-art': ['token_portraits','id',true],
   interior: ['interior_assets','id',true],
   miniature: ['token_models', 'id', true], 'wiki-image': ['wiki_images', 'id', true],
   'map-art': ['map_art', 'map_id', false], terrain: ['map_model', 'map_id', false],
@@ -34,12 +35,15 @@ export async function listFiles(db: DbOrTx, world: string) {
     union all select a.map_id, a.name, octet_length(a.bytes), 'terrain', 'model/gltf-binary', a.updated_at from map_model a join maps m on m.id = a.map_id where m.world_id = ${world}
     union all select a.id, a.name, octet_length(a.bytes), 'terrain-archive', 'model/gltf-binary', a.archived_at from map_model_archive a join maps m on m.id = a.map_id where m.world_id = ${world}
     union all select a.id, a.name, octet_length(a.bytes), 'interior', a.mime, a.updated_at from interior_assets a where a.world_id = ${world}
+    union all select id, name, octet_length(bytes), 'token-art', mime, created_at from token_portraits where world_id = ${world}
     order by date desc, id`);
   const pieces = await db.execute(sql`select model_id, name from tokens where world_id = ${world} and model_id is not null`);
   const pages = await db.execute(sql`select title, content from wiki_pages where world_id = ${world}`);
+  const portraits = await db.execute(sql`select name, data->>'portraitId' as portrait_id from tokens where world_id = ${world}`);
   return result.rows.map(row => {
     const file = row as { id: string; name: string; size: number; kind: Kind; mime: string; date: Date };
     const uses = file.kind === 'miniature' ? pieces.rows.filter(t => t.model_id === file.id).map(t => String(t.name))
+      : file.kind === 'token-art' ? portraits.rows.filter(t=>t.portrait_id===file.id).map(t=>String(t.name))
       : file.kind === 'wiki-image' ? pages.rows.filter(p => containsImage(p.content, world, file.id)).map(p => String(p.title))
       : file.kind === 'map-art' || file.kind === 'terrain' ? ['Current map'] : [];
     const blocked = file.kind === 'terrain' ? 'Remove the current terrain model in Layers first; it will become an archived file here.'
@@ -72,6 +76,7 @@ export function fileRoutes(app: FastifyInstance, db: Db) {
       if (!file) throw notFound('File');
       if (file.blocked) throw Object.assign(new Error(file.blocked), { statusCode: 409 });
       // FK ON DELETE SET NULL makes assigned pieces use their existing 2D indicator.
+      if(kind === 'token-art') await tx.execute(sql`update tokens set data = data - 'portraitId' where world_id = ${world} and data->>'portraitId' = ${id}`);
       await tx.execute(sql`delete from ${src.table} where ${src.where}`);
       await logEvent(tx, { worldId: world, kind: 'file.deleted', summary: `Deleted uploaded file "${file.name}"`, payload: { kind, id, affected: file.uses.length } });
     });
@@ -80,7 +85,7 @@ export function fileRoutes(app: FastifyInstance, db: Db) {
   app.get('/api/worlds/:w/files/:kind/:id/content', async (req, reply) => {
     const p = req.params as { w: string; kind: string; id: string }, world = (await getWorld(db, p.w)).id;
     const kind = Kind.parse(p.kind), src = source(kind, world, Uuid.parse(p.id));
-    const result = await db.execute(sql`select name, bytes, ${kind === 'wiki-image' || kind === 'map-art' || kind === 'interior' ? sql`mime` : sql`'model/gltf-binary' as mime`} from ${src.table} where ${src.where}`);
+    const result = await db.execute(sql`select name, bytes, ${kind === 'wiki-image' || kind === 'map-art' || kind === 'interior' || kind === 'token-art' ? sql`mime` : sql`'model/gltf-binary' as mime`} from ${src.table} where ${src.where}`);
     const file = result.rows[0]; if (!file) throw notFound('File');
     return reply.header('cache-control', 'private, no-store').header('x-content-type-options', 'nosniff')
       .header('content-disposition', `attachment; filename*=UTF-8''${encodeURIComponent(String(file.name)).replace(/['()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`).type(String(file.mime)).send(file.bytes);

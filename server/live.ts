@@ -16,7 +16,7 @@ import { z } from 'zod';
 
 /** Parts of a screen's cache a change can make stale. The client maps each onto its query keys (client/src/live.ts). */
 export const SCOPES = [
-  'worlds', 'world', 'map', 'pages', 'page', 'search', 'factions', 'meters', 'mh', 'rolls', 'campaigns', 'events', 'fog', 'modelArchive', 'files', 'tokenModels',
+  'worlds', 'world', 'map', 'pages', 'page', 'search', 'factions', 'meters', 'mh', 'rolls', 'campaigns', 'events', 'fog', 'modelArchive', 'files', 'tokenModels', 'interiors',
 ] as const;
 export type Scope = (typeof SCOPES)[number];
 
@@ -117,9 +117,17 @@ export const ROUTE_SCOPES: Record<string, Scope[]> = {
   'DELETE /api/worlds/:w/tokens/:id': ['events', 'files'],
   'POST /api/worlds/:w/tokens/:id/move': ['events'],
   'POST /api/worlds/:w/tokens/:id/deploy': ['events', 'files'],
-  'POST /api/worlds/:w/token-models': ['map', 'files', 'tokenModels'],
-  'PATCH /api/worlds/:w/files/:kind/:id': ['files', 'map', 'modelArchive', 'tokenModels', 'events'],
-  'DELETE /api/worlds/:w/files/:kind/:id': ['files', 'map', 'modelArchive', 'tokenModels', 'events'],
+  'POST /api/worlds/:w/token-models': ['map', 'files', 'tokenModels', 'interiors'],
+  'POST /api/worlds/:w/interiors': ['interiors'],
+  'PATCH /api/worlds/:w/interiors/:id': ['interiors'],
+  'DELETE /api/worlds/:w/interiors/:id': ['interiors', 'files'],
+  'PUT /api/worlds/:w/interiors/:id/asset': ['interiors', 'files'],
+  'DELETE /api/worlds/:w/interiors/:id/asset': ['interiors', 'files'],
+  'POST /api/worlds/:w/interiors/:id/enter': ['interiors', 'events'],
+  'POST /api/worlds/:w/interiors/:id/move': ['interiors', 'events'],
+  'POST /api/worlds/:w/interiors/:id/leave': ['interiors', 'events'],
+  'PATCH /api/worlds/:w/files/:kind/:id': ['files', 'map', 'modelArchive', 'tokenModels', 'events', 'interiors'],
+  'DELETE /api/worlds/:w/files/:kind/:id': ['files', 'map', 'modelArchive', 'tokenModels', 'events', 'interiors'],
   'POST /api/worlds/:w/players': ['map'],
   'DELETE /api/worlds/:w/players/:id': ['map'],
   'PUT /api/worlds/:w/map/art': ['events', 'worlds', 'files'],
@@ -267,7 +275,7 @@ export class LiveHub {
     if (c.role === 'player') {
       if (m.t === 'drag') return;
       if (m.t === 'change') {
-        if (ev.world === null || ev.world === c.world) this.send(c, { ...m, scopes: ['map', 'world', 'worlds', 'fog'], patches: undefined });
+        if (ev.world === null || ev.world === c.world) this.send(c, { ...m, scopes: ['map', 'world', 'worlds', 'fog', 'interiors'], patches: undefined });
         return;
       }
     }

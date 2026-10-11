@@ -1217,3 +1217,29 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 .preset-check { position: absolute; top: 8px; right: 8px; color: var(--gold); }
 .token-appearance-grid { grid-template-columns: repeat(2,minmax(0,1fr)); max-height: 230px; overflow: auto; }
 @media(max-width:700px) { .piece-drawer > header { flex-wrap: wrap; } .token-composer .actions { flex-wrap: wrap; } .token-preset-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+
+/* Interiors are an overlay, leaving the island renderer and its camera mounted underneath. */
+.hex-interiors { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.hex-interiors h4 { font-family: var(--font-display); color: var(--gold-hi); }
+.interior-link { margin-top: 8px; } .interior-link .btn { text-align: left; } .interior-link small { font-size: 10px; color: var(--text-faint); }
+.dialog:has(.interior-editor) { width: min(740px,calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
+.interior-editor { display: flex; flex-direction: column; gap: 12px; } .interior-editor p { margin: 0; }
+.interior-entry-preview { height: 280px; position: relative; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.interior-board { position: absolute; inset: 0; background: #101b23; }
+.interior-gl, .interior-grid { position: absolute; inset: 0; width: 100%; height: 100%; } .interior-grid { touch-action: none; }
+.interior-loading, .interior-error { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); padding: 12px 18px; border-radius: 12px; background: rgba(6,12,17,.94); color: var(--text); max-width: min(420px,90%); }
+.interior-error { display: flex; flex-direction: column; gap: 12px; }
+.interior-shell { position: absolute; inset: 0; z-index: 100; }
+.interior-stage { position: absolute; inset: 0; opacity: 0; transform: scale(.94); transition: opacity .45s ease .2s,transform .65s ease; }
+.interior-shell.ready .interior-stage { opacity: 1; transform: scale(1); }
+.interior-shell.exiting .interior-stage { opacity: 0; transform: scale(.94); transition-delay: 0s; pointer-events: none; }
+.interior-header { position: absolute; left: 16px; right: 16px; top: 16px; padding: 12px; display: flex; align-items: center; gap: 16px; }
+.interior-header b { font-family: var(--font-display); color: var(--gold-hi); } .interior-header small { display: block; font-size: 11px; color: var(--text-faint); margin-top: 4px; }
+.interior-hint { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); padding: 10px 16px; text-align: center; font-size: 12px; max-width: calc(100% - 32px); pointer-events: none; }
+.interior-hint small { display: block; color: var(--text-faint); margin-top: 4px; }
+.mapview > canvas.map { transform-origin: var(--interior-origin,50% 50%); transition: transform .65s cubic-bezier(.3,0,.2,1),opacity .65s ease; }
+.mapview.interior-diving > canvas.map { transform: scale(2.8); opacity: 0; }
+.mapview.interior-active > :not(canvas):not(.interior-shell):not([hidden]) { visibility: hidden; pointer-events: none; }
+.shell:has(.interior-shell) > .topbar, .shell:has(.interior-shell) > .rail, .shell:has(.interior-shell) .world-module { visibility: hidden; pointer-events: none; }
+.interior-confirm { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+@media(max-width:700px) { .interior-header { left: 8px; right: 8px; top: 8px; gap: 8px; padding: 8px; } .interior-header b { font-size: 13px; } .interior-header .btn { font-size: 11px; white-space: nowrap; } .interior-entry-preview { height: 220px; } }

@@ -379,3 +379,24 @@ export const appMeta = pgTable('app_meta', {
   value: text('value').notNull(),
   updatedAt: updated(),
 });
+
+// Interior links and tactical locations never alter the source hex records.
+export const interiors = pgTable('interiors', {
+  id: id(), worldId: worldRef(), hexId: uuid('hex_id').notNull().references(() => hexes.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(), mode: text('mode').$type<'2d' | '3d'>().notNull().default('2d'),
+  cols: integer('cols').notNull().default(24), rows: integer('rows').notNull().default(18),
+  entryX: integer('entry_x').notNull().default(0), entryY: integer('entry_y').notNull().default(0),
+  visibleToPlayers: boolean('visible_to_players').notNull().default(false),
+  assetVersion: integer('asset_version').notNull().default(0), createdAt: created(), updatedAt: updated(),
+}, t => [index('interiors_world_hex_idx').on(t.worldId,t.hexId),
+  check('interior_grid_ck',sql`${t.cols} between 1 and 200 and ${t.rows} between 1 and 200 and ${t.entryX} >= 0 and ${t.entryX} < ${t.cols} and ${t.entryY} >= 0 and ${t.entryY} < ${t.rows}`),
+  check('interior_mode_ck',sql`${t.mode} in ('2d','3d')`)]);
+export const interiorAssets = pgTable('interior_assets', {
+  id: uuid('id').primaryKey().references(() => interiors.id,{onDelete:'cascade'}), worldId: worldRef(),
+  name: text('name').notNull(), mime: text('mime').notNull(), bytes: bytea('bytes').notNull(), version: integer('version').notNull(), updatedAt: updated(),
+});
+export const interiorPositions = pgTable('interior_positions', {
+  tokenId: uuid('token_id').primaryKey().references(() => tokens.id,{onDelete:'cascade'}), worldId: worldRef(),
+  interiorId: uuid('interior_id').notNull().references(() => interiors.id,{onDelete:'cascade'}),
+  x: integer('x').notNull(), y: integer('y').notNull(), revision: integer('revision').notNull().default(1), updatedAt: updated(),
+});

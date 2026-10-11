@@ -21,6 +21,7 @@ import { seedDemoWorld, upgradeDemo } from './worlds.js';
 import { recoverRemovedIsland, seedNewWorldOnce, upgradeNewWorldIsland } from './lore/newworld.js';
 import { worlds } from './db/schema.js';
 import { fileRoutes } from './routes/files.js';
+import { interiorRoutes } from './routes/interiors.js';
 import { pieceRoutes } from './routes/pieces.js';
 import { accessFor, forbidden } from './tokenAccess.js';
 
@@ -62,9 +63,9 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
       if (req.method === 'GET' && (path === '/api/live' || path === '/api/worlds')) return;
       const world = (req.params as { w?: string }).w;
       if (!world || !await accessFor(db, req.userId!, world)) throw forbidden();
-      const read = new Set(['/api/worlds/:w', '/api/worlds/:w/map', '/api/worlds/:w/map/art', '/api/worlds/:w/map/model', '/api/worlds/:w/token-models/:id', '/api/worlds/:w/campaigns/:id/fog']);
+      const read = new Set(['/api/worlds/:w', '/api/worlds/:w/map', '/api/worlds/:w/map/art', '/api/worlds/:w/map/model', '/api/worlds/:w/token-models/:id', '/api/worlds/:w/campaigns/:id/fog', '/api/worlds/:w/interiors', '/api/worlds/:w/interiors/:id/asset']);
       if (req.method === 'GET' && read.has(path)) return;
-      if (req.method === 'POST' && (path === '/api/worlds/:w/tokens/:id/move' || path === '/api/worlds/:w/tokens/:id/deploy')) return;
+      if (req.method === 'POST' && (path === '/api/worlds/:w/tokens/:id/move' || path === '/api/worlds/:w/tokens/:id/deploy' || ['/api/worlds/:w/interiors/:id/enter','/api/worlds/:w/interiors/:id/move','/api/worlds/:w/interiors/:id/leave'].includes(path))) return;
       throw forbidden();
     });
     // First, so every mutating route below is held to broadcasting its changes.
@@ -81,6 +82,7 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
     mapRoutes(api, db);
     modelRoutes(api, db);
     pieceRoutes(api, db);
+    interiorRoutes(api, db);
     fileRoutes(api, db);
     factionRoutes(api, db);
     chronicleRoutes(api, db);

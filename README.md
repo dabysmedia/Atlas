@@ -40,6 +40,28 @@ The hub delivers in-process, which suits the single Railway replica. Its `LiveBu
 `LISTEN/NOTIFY` or Redis would go for more than one. Player sockets receive cache invalidations rather than raw
 GM patches, and never receive ephemeral drag coordinates. Their map reads filter hidden tokens and campaign fog.
 
+## Hex interiors
+
+Select a hex and use **Interiors → Link** at the bottom of its sidebar. Name the interior, choose a
+**2D image** or **3D model**, set its grid dimensions, and upload a PNG/JPEG/WebP/GIF or self-contained
+GLB (40 MB maximum). Every square represents 5 feet. Click a square in the preview to set the party's
+entry point, then save. Several interiors can be linked to the same hex; no locations are seeded.
+
+**Enter** carries the faction's main party into its entry square. With no party on the hex, GMs can
+preview the map. Click or drag to move the party on the tactical grid. **Back to world** saves its exit
+and reverses the zoom-fade, returning to the same selected hex. The island renderer remains mounted
+and keeps its camera and resources; world overlays and weather controls are hidden inside.
+
+Links, uploaded bytes and tactical positions live in separate Postgres tables, survive redeploys,
+and synchronize between DM and player screens. Tactical movement does not edit hex data or add world
+trail visits. Players can enter only with their own main party, on its parent hex, into a map marked
+**Visible to players**; campaign fog also limits discoverable interiors. There is no tactical fog,
+collision, pathfinding, or multi-floor navigation yet. Use open-floor/cutaway GLBs: the grid and party
+footing follow the highest visible surface. Uploaded interior files also appear in the GM file manager.
+
+`scripts/smoke-interiors.mjs` checks linking, upload, entry-square selection, both map formats, party
+miniatures, live movement, reload recovery, mobile exit, and reuse of the world camera and renderer.
+
 ## Faction token drawers and party movement
 
 Open **Token drawer**, choose a faction, give a piece a name and create it. Each entry is one persistent token;

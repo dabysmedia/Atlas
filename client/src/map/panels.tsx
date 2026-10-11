@@ -147,8 +147,8 @@ function useMapCache() {
 }
 
 // ---------------------------------------------------------------- hex
-export function HexPanel({ hex, data, fogCampaignId, explored, label, onClose, onFocus, snap }: {
-  hex: Hex; data: MapData; fogCampaignId: string | null; explored: boolean; label: string;
+export function HexPanel({ hex, data, fogCampaignId, explored, label, onClose, onFocus, snap, interiorFooter }: {
+  interiorFooter?: ReactNode; hex: Hex; data: MapData; fogCampaignId: string | null; explored: boolean; label: string;
   onClose: () => void; onFocus: (f: Focus) => void; snap: () => string | null;
 }) {
   const { world, qc, patch, touch } = useMapCache();
@@ -312,6 +312,7 @@ export function HexPanel({ hex, data, fogCampaignId, explored, label, onClose, o
         <Section title="GM notes">
           <Notes value={hex.notes} placeholder="What's here? Encounters, secrets, weather…" onSave={(v) => patchHex({ notes: v })} />
         </Section>
+        {interiorFooter}
       </div>
     </Panel>
   );

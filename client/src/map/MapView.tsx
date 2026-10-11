@@ -227,7 +227,7 @@ export function MapView() {
       if (p) r.selectAt(p.x, p.y, r.viewport.w > 900 ? 185 : 0);
     } else if (!focus) r.restoreView();
   }, [focus?.kind, focus?.id, gen]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { const r = rendererRef.current; if (is3d(r)) { r.showPartyTrails = showTrails; r.invalidate(); } partyTrailPref(world.id).set(showTrails); }, [showTrails, gen, world.id]);
+  useEffect(() => { const r = rendererRef.current; if (is3d(r)) { r.showTokenTrails = showTrails; r.invalidate(); } partyTrailPref(world.id).set(showTrails); }, [showTrails, gen, world.id]);
   useEffect(() => { const r = rendererRef.current; if (r) { r.showFog = showFog; r.invalidate(); } }, [showFog, gen]);
   useEffect(() => { fogCampaign(world.id).set(fogCamp); }, [fogCamp, world.id]);
   useEffect(() => {

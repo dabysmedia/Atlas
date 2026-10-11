@@ -112,6 +112,8 @@ try {
   await dm.getByRole('combobox', { name: 'Token miniature', exact: true }).selectOption(goodModel);
   await dm.waitForFunction(({ id, model }) => window.__atlasMap.miniatures.pieces.get(id)?.modelId === model, { id: scout.id, model: goodModel });
 
+  if (!await dm.getByRole('complementary', { name: 'Faction token drawer' }).count()) await dm.getByRole('button', { name: 'Token drawer', exact: true }).click();
+  if (!await dm.getByRole('button', { name: 'Designate as player party', exact: true }).isVisible()) await dm.getByText('New piece', { exact: true }).first().click();
   await dm.getByRole('button', { name: 'Designate as player party', exact: true }).click();
   await until(async () => (await api(dm, `${path}/map`)).tokens.some(t => t.mainParty));
   const main = (await api(dm, `${path}/map`)).tokens.find(t => t.mainParty);
@@ -166,13 +168,13 @@ try {
   await dm.getByRole('checkbox', { name: 'Visible to players' }).uncheck();
   await playerPage.waitForFunction(id => !window.__atlasMap.tokens.some(t => t.id === id), scout.id);
   assert(await dm.evaluate(id => window.__atlasMap.tokens.some(t => t.id === id), scout.id));
-  await playerPage.getByRole('checkbox', { name: 'Show party trail' }).uncheck();
-  await playerPage.waitForFunction(() => window.__atlasMap.showPartyTrails === false);
+  await playerPage.getByRole('checkbox', { name: 'Show token trails' }).uncheck();
+  await playerPage.waitForFunction(() => window.__atlasMap.showTokenTrails === false);
   assert.deepEqual((await api(playerPage, `${path}/map`)).tokens.find(t => t.id === main.id).trail.map(v => v.hexId), route);
   await playerPage.screenshot({ path: `${shots}/player-trail.png` });
-  await playerPage.reload(); await playerPage.waitForFunction(() => window.__atlasMap?.hasGround && window.__atlasMap.showPartyTrails === false);
+  await playerPage.reload(); await playerPage.waitForFunction(() => window.__atlasMap?.hasGround && window.__atlasMap.showTokenTrails === false);
   await playerPage.getByRole('button', { name: 'Token drawer', exact: true }).click();
-  assert.equal(await playerPage.getByRole('checkbox', { name: 'Show party trail' }).isChecked(), false);
+  assert.equal(await playerPage.getByRole('checkbox', { name: 'Show token trails' }).isChecked(), false);
   assert(await dm.evaluate(() => window.__atlasMap === window.__piecesHeldMap));
   assert.deepEqual([...state.hexes].sort((a,b) => a.id.localeCompare(b.id)), [...before.hexes].sort((a,b) => a.id.localeCompare(b.id)));
   await dm.reload(); await dm.waitForFunction(() => window.__atlasMap?.hasGround);

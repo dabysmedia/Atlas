@@ -18,6 +18,7 @@
  * the horizon. World x is three.js x, world y is three.js z, height is three.js y.
  */
 import * as THREE from 'three';
+import { recentTokenTrail } from '../../../shared/tokenTrail';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { HexMapRenderer, HEX_SIZE, MAX_ZOOM, clamp, type Camera, type RenderInput } from '../map/renderer';
@@ -663,18 +664,28 @@ export class HexMapRenderer3D extends HexMapRenderer {
     return super.tokenAt(sx, sy);
   }
 
-  showPartyTrails = true;
+  showTokenTrails = true;
   protected drawTokens(now: number, z: number, still?: boolean) {
     super.drawTokens(now, z, still);
     this.layoutPieces();
     const hud = this.ctx;
     hud.save(); hud.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    // The party's actual ordered visits; a null visit breaks repositioning/return-to-drawer paths.
-    for (const token of this.tokens.filter(t => this.showPartyTrails && t.mainParty && t.hexId)) {
-      hud.strokeStyle = token.color ?? this.factionColor.get(token.factionId ?? '') ?? '#d6b06a'; hud.lineWidth = 2.5; hud.globalAlpha = 0.85; hud.setLineDash([5, 4]);
-      hud.beginPath(); let previous: { x: number; y: number } | null = null;
-      for (const visit of token.trail ?? []) { const h = this.byId.get(visit.hexId ?? ''); if (!h) { previous = null; continue; } const p = this.worldToScreen(h.cx, h.cy); if (previous) hud.lineTo(p.x, p.y); else hud.moveTo(p.x, p.y); previous = p; }
-      hud.stroke(); hud.setLineDash([]);
+    // Every deployed token uses its actual recent visits, with no routes across placement breaks.
+    for (const token of this.tokens.filter(t => this.showTokenTrails && t.hexId)) {
+      const visits = recentTokenTrail(token.trail ?? [], id => this.byId.get(id));
+      const color = new THREE.Color(token.color ?? this.factionColor.get(token.factionId ?? '') ?? '#d6b06a');
+      const css = color.getStyle();
+      const rgba = (alpha: number) => css.replace('rgb(', 'rgba(').replace(')', `,${alpha})`);
+      hud.lineWidth = 2.5; hud.globalAlpha = token.visibleToPlayers ? 1 : 0.62; hud.setLineDash([5, 4]);
+      for (let i = 1; i < visits.length; i++) {
+        const from = visits[i - 1], to = visits[i];
+        const a = this.worldToScreen(from.point.cx, from.point.cy), b = this.worldToScreen(to.point.cx, to.point.cy);
+        if (Math.hypot(b.x - a.x, b.y - a.y) < 0.01) continue;
+        const fade = hud.createLinearGradient(a.x, a.y, b.x, b.y);
+        fade.addColorStop(0, rgba(from.opacity)); fade.addColorStop(1, rgba(to.opacity));
+        hud.strokeStyle = fade; hud.beginPath(); hud.moveTo(a.x, a.y); hud.lineTo(b.x, b.y); hud.stroke();
+      }
+      hud.setLineDash([]);
     }
     for (const tile of this.pieceTiles) {
       const t = tile.token, color = t.color ?? this.factionColor.get(t.factionId ?? '') ?? '#d6b06a';

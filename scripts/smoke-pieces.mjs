@@ -70,8 +70,8 @@ try {
   await dm.getByRole('tab', { name: 'Test rival', exact: true }).click();
   assert.equal(await dm.locator('.piece-row').count(), 0);
   await dm.getByRole('tab', { name: 'Test party', exact: true }).click();
-  await dm.getByText('New piece', { exact: true }).first().click();
-  await dm.getByRole('textbox', { name: 'Piece name' }).fill('Scout Alpha'); await dm.getByRole('button', { name: 'Create piece', exact: true }).click();
+  await dm.getByRole('button', { name: 'Add token', exact: true }).click();
+  await dm.getByRole('textbox', { name: 'Token name' }).fill('Scout Alpha'); await dm.getByRole('button', { name: 'Save to drawer', exact: true }).click();
   await until(async () => (await api(dm, `${path}/map`)).tokens.some(t => t.name === 'Scout Alpha'));
   let scout = (await api(dm, `${path}/map`)).tokens.find(t => t.name === 'Scout Alpha'); assert.equal(scout.hexId, null);
   await dm.locator('.token-panel input[type=file]').setInputFiles({ name: 'test-miniature.glb', mimeType: 'model/gltf-binary', buffer: miniature() });
@@ -84,7 +84,6 @@ try {
   assert(Math.abs(footing.y - footing.terrain - 5) <= .61);
   await dm.getByText('3D miniature ready', { exact: true }).waitFor();
   await dm.getByRole('button', { name: 'Token drawer', exact: true }).click();
-  await dm.getByText('New piece', { exact: true }).first().click();
   await dm.getByRole('img', { name: 'Scout Alpha miniature preview', exact: true }).waitFor();
   assert(await dm.getByRole('img', { name: 'Scout Alpha miniature preview', exact: true }).evaluate(img => img.complete && img.naturalWidth === 240));
   const plainPixels = await visibleMiniature(dm);
@@ -109,15 +108,15 @@ try {
   await dm.getByRole('button', { name: 'Retry miniature', exact: true }).click();
   await until(() => modelRequests > requestsBefore);
   await dm.getByText('This GLB has no visible geometry.', { exact: false }).waitFor();
-  await dm.getByRole('combobox', { name: 'Token miniature', exact: true }).selectOption(goodModel);
+  await dm.getByRole('button', { name: 'Use miniature test-draco-miniature.glb', exact: true }).click();
   await dm.waitForFunction(({ id, model }) => window.__atlasMap.miniatures.pieces.get(id)?.modelId === model, { id: scout.id, model: goodModel });
 
   if (!await dm.getByRole('complementary', { name: 'Faction token drawer' }).count()) await dm.getByRole('button', { name: 'Token drawer', exact: true }).click();
-  if (!await dm.getByRole('button', { name: 'Designate as player party', exact: true }).isVisible()) await dm.getByText('New piece', { exact: true }).first().click();
+  if (!await dm.getByRole('button', { name: 'Designate as player party', exact: true }).isVisible()) await dm.getByText('Party setup', { exact: true }).click();
   await dm.getByRole('button', { name: 'Designate as player party', exact: true }).click();
   await until(async () => (await api(dm, `${path}/map`)).tokens.some(t => t.mainParty));
   const main = (await api(dm, `${path}/map`)).tokens.find(t => t.mainParty);
-  await dm.getByRole('button', { name: `Select ${main.name}`, exact: true }).click();
+  await dm.getByRole('button', { name: `Edit ${main.name}`, exact: true }).click();
   await dm.waitForFunction(name => { const panels = document.querySelectorAll('.token-panel'); return panels.length === 1 && panels[0].querySelector('input[aria-label="Marker name"]')?.value === name; }, main.name);
   await until(async () => (await api(dm, `${path}/map`)).tokens.find(t => t.id === main.id).hexId === route[0]);
   await dm.evaluate(() => window.__atlasMap.frame(performance.now(), false));
@@ -130,7 +129,6 @@ try {
   const panelsClear = await dm.evaluate(() => { const details = document.querySelector('.inspector').getBoundingClientRect(), tray = document.querySelector('.piece-drawer').getBoundingClientRect(); const button = document.querySelector('button[aria-label="Token drawer"]').getBoundingClientRect(); return tray.right < button.left && button.right < details.left && Math.abs(tray.bottom - (innerHeight - 12)) < 2 && Math.abs(tray.left - 76) < 2; });
   assert(panelsClear, 'token tray stays clear of the selected piece inspector');
   await dm.screenshot({ path: `${shots}/drawer-and-miniature.png` });
-  await dm.getByText('New piece', { exact: true }).first().click();
   await dm.getByText('Player access', { exact: true }).click();
   const username = `qa-player-${Date.now()}`;
   await dm.getByRole('textbox', { name: 'Player username' }).fill(username); await dm.getByRole('textbox', { name: 'Player password' }).fill('atlas-player-test');
@@ -142,18 +140,21 @@ try {
   assert.equal(await playerPage.getByRole('link', { name: 'World settings', exact: true }).count(), 0);
   await playerPage.evaluate(id => { const r = window.__atlasMap, h = r.hexById(id); r.saved = null; r.setCamera({ x: h.cx, y: h.cy, zoom: 1.5 }); }, route[1]);
   await playerPage.getByRole('button', { name: 'Token drawer', exact: true }).click(); await playerPage.getByRole('button', { name: `Select ${main.name}`, exact: true }).click();
+  await playerPage.waitForFunction(()=>!window.__atlasMap.cameraMoving);
   for (const id of route.slice(1)) {
-    await playerPage.getByRole('button', { name: 'Move to next hex', exact: true }).click(); await clickHex(playerPage, id);
+    await clickHex(playerPage, id);
     await until(async () => (await api(playerPage, `${path}/map`)).tokens.find(t => t.id === main.id).hexId === id);
     await dm.waitForFunction(({ token, hex }) => window.__atlasMap.tokens.find(t => t.id === token)?.hexId === hex, { token: main.id, hex: id });
   }
   let state = await api(dm, `${path}/map`); assert.deepEqual(state.tokens.find(t => t.id === main.id).trail.map(v => v.hexId), route);
   const log = await api(dm, `${path}/events?kind=token.moved`); assert.equal(log.filter(e => e.actor === 'player').length, 3);
   if (!await playerPage.getByRole('complementary', { name: 'Faction token drawer' }).count()) await playerPage.getByRole('button', { name: 'Token drawer', exact: true }).click();
-  await playerPage.getByRole('button', { name: 'Deploy', exact: true }).click(); await clickHex(playerPage, route[2]);
+  await playerPage.getByRole('button', { name: 'Select Reserve Scout', exact: true }).click(); await clickHex(playerPage, route[2]);
   await until(async () => (await api(playerPage, `${path}/map`)).tokens.find(t => t.id === reserve.id).hexId === route[2]);
   assert(!await playerPage.evaluate(id => window.__atlasMap.miniatures.has(id), reserve.id), 'unassigned pieces use a 2D indicator');
-  await dm.getByRole('button', { name: 'Deploy another Scout Alpha', exact: true }).click();
+  await dm.getByRole('button', { name: 'Add token', exact: true }).click();
+  await dm.getByRole('button', { name: 'Preset Scout Alpha', exact: true }).click();
+  await dm.getByRole('button', { name: 'Place token', exact: true }).click();
   await clickHex(dm, route[2]);
   await until(async () => (await api(dm, `${path}/map`)).tokens.some(t => t.name === 'Scout Alpha #2'));
   const copy = (await api(dm, `${path}/map`)).tokens.find(t => t.name === 'Scout Alpha #2');
@@ -163,7 +164,7 @@ try {
   await dm.waitForFunction(id => window.__atlasMap.miniatures.has(id), copy.id);
   assert.equal(copy.data.sheetPageId, sheet.id);
   assert.equal(await dm.locator('.piece-row').count(), 3, 'copies do not replace or duplicate the persistent drawer entry');
-  await dm.getByRole('button', { name: 'Select Scout Alpha', exact: true }).click();
+  await dm.getByRole('button', { name: 'Edit Scout Alpha', exact: true }).click();
   await dm.waitForFunction(() => { const panels = document.querySelectorAll('.token-panel'); return panels.length === 1 && panels[0].querySelector('input[aria-label="Marker name"]')?.value === 'Scout Alpha'; });
   await dm.getByRole('checkbox', { name: 'Visible to players' }).uncheck();
   await playerPage.waitForFunction(id => !window.__atlasMap.tokens.some(t => t.id === id), scout.id);
@@ -204,10 +205,9 @@ try {
   await playerPage.setViewportSize({ width: 390, height: 844 });
   await playerPage.getByRole('button', { name: 'Select Reserve Scout', exact: true }).click();
   await playerPage.getByRole('complementary', { name: 'Faction token drawer' }).waitFor({ state: 'detached' });
-  await playerPage.getByRole('button', { name: 'Move to next hex', exact: true }).click();
-  await playerPage.locator('.inspector').waitFor({ state: 'detached' });
+  assert.equal(await playerPage.getByRole('button', { name: 'Move to next hex', exact: true }).count(),0);
+  assert.equal(await playerPage.evaluate(()=>window.__atlasMap.moveHexIds.size),6);
   await playerPage.screenshot({ path: `${shots}/mobile-movement.png` });
-  await playerPage.getByRole('button', { name: 'Cancel token placement' }).click();
   assert.deepEqual(errors, []); console.log(JSON.stringify({ plainPixels, compressedPixels, drawer: true, modelFooting: footing, twoTokensSelectable: true, playerMovedThree: true, dmLive: true, hiddenServerAndLive: true, persists: true, hexesUnchanged: true, errors }));
 } finally {
   if (playerPage) await playerPage.close();

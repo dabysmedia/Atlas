@@ -36,7 +36,7 @@ try {
   await page.getByRole('button',{name:'Token drawer',exact:true}).click(); await page.getByRole('button',{name:'Select Swaying scout',exact:true}).click();
   await page.locator('.token-panel input[type=file]').setInputFiles({name:'scout.glb',mimeType:'model/gltf-binary',buffer:miniature()});
   await page.waitForFunction(id=>window.__atlasMap.miniatures.has(id),token.id);
-  await page.getByRole('button',{name:'Close token drawer',exact:true}).click();
+  if(await page.getByRole('button',{name:'Close token drawer',exact:true}).count()) await page.getByRole('button',{name:'Close token drawer',exact:true}).click();
   await page.mouse.move(80,50); await page.waitForTimeout(800);
   const idle=await inspect(token.id); await page.waitForTimeout(700); const idle2=await inspect(token.id);
   assert(Math.abs(idle.y-idle2.y)>.01); assert.notDeepEqual(idle.rotation,idle2.rotation);

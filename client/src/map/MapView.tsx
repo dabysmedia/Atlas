@@ -574,7 +574,7 @@ export function MapView() {
         r().invalidate();
         canvas.style.cursor = 'grabbing';
       } else {
-        canvas.style.cursor = toolRef.current.align ? 'move' : toolRef.current.tool === 'select' ? (r().tokenAt(p.x, p.y) ? 'pointer' : 'default') : 'crosshair';
+        canvas.style.cursor = toolRef.current.align ? 'move' : toolRef.current.tool === 'select' ? (r().hoveredTokenId ? 'pointer' : 'default') : 'crosshair';
       }
       lastMove = { ...p, t: now };
     };

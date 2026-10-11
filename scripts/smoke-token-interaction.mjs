@@ -23,7 +23,7 @@ const modelPoint = id => page.evaluate(id => {
   for (let y = bounds.y + 2; y < bounds.y + bounds.height; y += 3) for (let x = bounds.x + 2; x < bounds.x + bounds.width; x += 3) if (r.miniatures.hit(x,y,r.viewport.w,r.viewport.h,r.camera) === id) return { x:x+b.x, y:y+b.y };
   throw Error('No model intersection');
 }, id);
-const inspect = id => page.evaluate(id => { const r = window.__atlasMap, o = r.miniatures.group.children.find(o => o.userData.tokenId === id); let emissive; o.traverse(mesh => { if (mesh.isMesh) emissive = mesh.material.emissive?.getHex(); }); return { y:o.position.y, rotation:o.rotation.toArray().slice(0,3), grow:o.userData.grow, emissive, neighbors:[...r.moveHexIds], hex:r.tokens.find(t => t.id === id).hexId }; }, id);
+const inspect = id => page.evaluate(id => { const r = window.__atlasMap, o = r.miniatures.group.children.find(o => o.userData.tokenId === id); let emissive; o.traverse(mesh => { if (mesh.isMesh && mesh.material.emissive) emissive = mesh.material.emissive.getHex(); }); return { y:o.position.y, rotation:o.rotation.toArray().slice(0,3), grow:o.userData.grow, emissive, outline:o.children[1].visible, neighbors:[...r.moveHexIds], hex:r.tokens.find(t => t.id === id).hexId }; }, id);
 let world;
 try {
   await page.goto(base); await page.locator('#u').fill('gm'); await page.locator('#p').fill(process.env.ATLAS_PASS ?? 'atlas-local-playtest'); await page.getByRole('button', { name:'Sign in' }).click(); await page.waitForSelector('canvas.map');
@@ -41,8 +41,10 @@ try {
   const idle=await inspect(token.id); await page.waitForTimeout(700); const idle2=await inspect(token.id);
   assert(Math.abs(idle.y-idle2.y)>.01); assert.notDeepEqual(idle.rotation,idle2.rotation);
   const p=await modelPoint(token.id); await page.mouse.move(p.x,p.y); await page.waitForTimeout(450);
-  const hover=await inspect(token.id); assert(hover.grow>1.1); assert.notEqual(hover.emissive,idle.emissive);
-  await page.mouse.click(p.x,p.y); await page.waitForTimeout(600);
+  const hover=await inspect(token.id); assert(hover.grow>1.1); assert.equal(hover.emissive,idle.emissive); assert(hover.outline);
+  const generous=await page.evaluate(id=>{const r=window.__atlasMap;r.layoutPieces();const b=r.pieceTiles.find(t=>t.token.id===id).modelBounds,c=r.hud.getBoundingClientRect();return {x:b.x-6+c.x,y:b.y+b.height/2+c.y};},token.id);
+  await page.mouse.move(generous.x,generous.y);await page.waitForTimeout(150);assert.equal(await page.evaluate(()=>window.__atlasMap.hoveredTokenId),token.id,'six-pixel margin is hoverable');
+  await page.mouse.click(generous.x,generous.y); await page.waitForTimeout(600);
   assert.equal((await inspect(token.id)).neighbors.length,6);
   await page.screenshot({path:'shots/token-interaction/selected.png'});
   const destination=await hexPoint(next.id); await page.mouse.click(destination.x,destination.y);
@@ -57,5 +59,5 @@ try {
   state=await api(`${path}/map`); assert.equal(state.tokens.find(t=>t.id===token.id).hexId,third.id,'invalid drag stays home');
   assert.deepEqual(state.tokens.find(t=>t.id===token.id).trail.map(v=>v.hexId),[origin.id,next.id,third.id]);
   assert.deepEqual(state.hexes,before.hexes); assert.deepEqual(errors,[]);
-  console.log('PASS: idle bob/sway, actual model hover growth/highlight, six destinations, click move, drag move, invalid drop, saved trail, unchanged hex data');
+  console.log('PASS: idle bob/sway, actual model hover growth/border without material tint, six destinations, click move, drag move, invalid drop, saved trail, unchanged hex data');
 } finally { if(world) await api(`/api/worlds/${world.id}`,'DELETE').catch(()=>{}); await browser.close(); }

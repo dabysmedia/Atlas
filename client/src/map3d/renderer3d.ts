@@ -626,7 +626,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
 
   tokenAt(sx: number, sy: number): Token | undefined {
     this.layoutPieces();
-    const flat = this.pieceTiles.filter(t => !t.modeled && Math.hypot(sx-t.x,sy-t.y) <= t.radius+3).sort((a,b) => Math.hypot(sx-a.x,sy-a.y)-Math.hypot(sx-b.x,sy-b.y));
+    const flat = this.pieceTiles.filter(t => !t.modeled && Math.hypot(sx-t.x,sy-t.y) <= Math.max(10,t.radius+6)).sort((a,b) => Math.hypot(sx-a.x,sy-a.y)-Math.hypot(sx-b.x,sy-b.y));
     if (flat.length) return flat[0].token;
     const miniature = this.miniatures.hit(sx, sy, this.w, this.h, this.camera);
     if (miniature) return this.tokens.find(t => t.id === miniature);
@@ -634,6 +634,12 @@ export class HexMapRenderer3D extends HexMapRenderer {
       const p = tile.plate;
       if (p && sx >= p.x && sx <= p.x+p.width && sy >= p.y && sy <= p.y+p.height) return tile.token;
     }
+    // A small screen-space margin makes thin limbs and small miniatures comfortable to click.
+    const near = this.pieceTiles.filter(t => t.modeled && t.modelBounds).map(t => {
+      const b=t.modelBounds!,dx=Math.max(b.x-sx,0,sx-b.x-b.width),dy=Math.max(b.y-sy,0,sy-b.y-b.height);
+      return { token:t.token,distance:Math.hypot(dx,dy) };
+    }).filter(t => t.distance<=8).sort((a,b)=>a.distance-b.distance);
+    if(near.length)return near[0].token;
     this.layoutPlaces();
     for (const tile of [...this.placeTiles].reverse()) {
       if (tile.alpha < 0.05) continue;
@@ -675,7 +681,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
       if (!tile.modeled) {
         const sprite = markerSprite(t.kind,color,tile.radius,this.dpr), size = sprite.canvas.width/this.dpr;
         hud.drawImage(sprite.canvas,tile.x-size/2,tile.y-size/2,size,size);
-        if (this.selectedTokenId === t.id) { hud.strokeStyle = '#8fe8e2'; hud.lineWidth = 2; hud.beginPath(); hud.arc(tile.x,tile.y,tile.radius+2,0,Math.PI*2); hud.stroke(); }
+        if (this.selectedTokenId === t.id || this.hoveredTokenId === t.id) { hud.strokeStyle = '#8fe8e2'; hud.lineWidth = 2; hud.beginPath(); hud.arc(tile.x,tile.y,tile.radius+2,0,Math.PI*2); hud.stroke(); }
       }
       const plate = tile.plate; if (!plate) continue;
       if (tile.modeled) {
@@ -1092,9 +1098,9 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.sky.mesh.position.copy(this.camera.position);
     this.sky.mesh.scale.setScalar(this.camera.far * 0.9);
     this.water.update(this.gl, now / 1000, this.camera, this.light);
+    this.miniatures.group.visible = this.miniatureMode();
     if (this.pointer && !this.stills) this.hoveredTokenId = this.tokenAt(this.pointer.x, this.pointer.y)?.id ?? null;
     else this.hoveredTokenId = null;
-    this.miniatures.group.visible = this.miniatureMode();
     this.miniatures.update(this.tokens, t => this.tokenPos(t), (x, y) => this.groundAt(x, y), () => this.invalidate(), { now, hovered: this.hoveredTokenId, selected: this.selectedTokenId, dragging: this.dragToken?.token.id ?? null, still: this.stills });
     this.gl.render(this.scene, this.camera);
     this.layoutLabels(now);

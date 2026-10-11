@@ -31,7 +31,10 @@ try {
     for(const p of state.positions){assert(p.drift<.001,'one shared world position');assert(p.fit<=40*Math.sqrt(3)/2,'footprint stays in its hex');assert(Math.abs(p.lift-5)<=.61);}
     if(!modeled) for(const tile of state.tiles) for(const other of state.tiles) if(tile.id!==other.id) assert(Math.hypot(tile.x-other.x,tile.y-other.y)>=tile.radius+other.radius,'overview glyphs do not overlap');
     for(const tile of state.tiles){assert(Math.hypot(tile.x-tile.foot.x,tile.y-tile.foot.y)<.001,'2D marker anchor matches terrain');if(modeled)assert(tile.plate.y>=tile.modelBottom+8);}
-    const picks=await page.evaluate(()=>{const r=window.__atlasMap;return r.pieceTiles.map(t=>{const p=t.plate,x=p?p.x+p.width/2:t.x,y=p?p.y+p.height/2:t.y;return {id:t.token.id,picked:r.tokenAt(x,y)?.id};});});assert(picks.every(t=>t.id===t.picked),`each shared-hex piece is selectable at ratio ${ratio}: ${JSON.stringify(picks)}`);
+    const picks=await page.evaluate(()=>{const r=window.__atlasMap;return r.pieceTiles.map(t=>{r.hoveredTokenId=t.token.id;const p=t.plate,x=t.modeled?p.x+p.width/2:t.x,y=t.modeled?p.y+p.height-2:t.y;const picked=r.tokenAt(x,y)?.id;return {id:t.token.id,picked};});});assert(picks.every(t=>t.id===t.picked),`each shared-hex piece is selectable at ratio ${ratio}: ${JSON.stringify(picks)}`);
+    const pinned=await page.evaluate(()=>{const r=window.__atlasMap;r.layoutPieces();return r.pieceTiles.every(t=>!t.plate||Math.abs(t.plate.x+t.plate.width/2-t.x)<.001&&Math.abs(t.plate.y-(t.modeled?t.modelBottom+10:t.y+t.radius+5))<.001);});assert(pinned,'names remain pinned to their own icons/models');
+    const hoverOrder=await page.evaluate(id=>{const r=window.__atlasMap;r.hoveredTokenId=id;r.layoutPieces();return r.pieceTiles.at(-1).token.id;},tokens[0].id);assert.equal(hoverOrder,tokens[0].id,'hovered icon and nameplate draw on top');
+
   }
   await inspect(1);await page.mouse.move(720,450);
   for(let i=0;i<8;i++)await page.mouse.wheel(0,-200);
@@ -46,5 +49,5 @@ try {
   }
   await page.setViewportSize({width:390,height:844});await inspect(4);await page.screenshot({path:`${shots}/mobile-models.png`});
   const after=await api(`${path}/map`);assert.deepEqual(after.hexes.sort((a,b)=>a.id.localeCompare(b.id)),before.hexes.sort((a,b)=>a.id.localeCompare(b.id)));
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({overview2D:true,exploration3D:true,repeatZoom:true,positionsMatch:true,footprintsFit:true,platesClear:true,sharedHexPicking:true,hexesUnchanged:true,errors}));
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({overview2D:true,exploration3D:true,repeatZoom:true,positionsMatch:true,footprintsFit:true,platesClear:true,namesPinned:true,hoverOnTop:true,sharedHexPicking:true,hexesUnchanged:true,errors}));
 } finally {if(world)await api(`/api/worlds/${world.id}`,'DELETE');await browser.close();}

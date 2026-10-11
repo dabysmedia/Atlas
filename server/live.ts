@@ -115,6 +115,10 @@ export const ROUTE_SCOPES: Record<string, Scope[]> = {
   'POST /api/worlds/:w/tokens': ['events'],
   'PATCH /api/worlds/:w/tokens/:id': ['events'],
   'DELETE /api/worlds/:w/tokens/:id': ['events'],
+  'POST /api/worlds/:w/tokens/:id/move': ['events'],
+  'POST /api/worlds/:w/token-models': ['map'],
+  'POST /api/worlds/:w/players': ['map'],
+  'DELETE /api/worlds/:w/players/:id': ['map'],
   'PUT /api/worlds/:w/map/art': ['events', 'worlds'],
   'PATCH /api/worlds/:w/map/art': [],
   'DELETE /api/worlds/:w/map/art': ['events', 'worlds'],
@@ -257,6 +261,13 @@ export class LiveHub {
     // request can't keep that tab from hearing about it.
     if (ev.origin && ev.origin.client === c.client && ev.origin.session === c.session) return;
     const m = ev.msg;
+    if (c.role === 'player') {
+      if (m.t === 'drag') return;
+      if (m.t === 'change') {
+        if (ev.world === null || ev.world === c.world) this.send(c, { ...m, scopes: ['map', 'world', 'worlds', 'fog'], patches: undefined });
+        return;
+      }
+    }
     if (ev.world === null || ev.world === c.world) return this.send(c, m);
     // Screens on other worlds still keep the world list fresh.
     if (m.t === 'change' && m.scopes.includes('worlds')) this.send(c, { ...m, scopes: ['worlds'], patches: undefined });
@@ -339,7 +350,7 @@ export class LiveHub {
       return;
     }
     // A marker being dragged: relayed to the others on the world, never stored. The drop commits through PATCH.
-    if (!c.world) return;
+    if (!c.world || c.role === 'player') return;
     if (parsed.end ? ++c.budget.ends > ENDS_PER_SECOND : ++c.budget.drags > DRAGS_PER_SECOND) return;
     const { t: _t, ...drag } = parsed;
     this.publish({ world: c.world, from: c.id, msg: { t: 'drag', world: c.world, conn: c.id, ...drag } });
@@ -448,6 +459,6 @@ export function liveRoutes(app: FastifyInstance, hub: LiveHub, auth: {
     },
   }, (ws, req) => {
     const client = ClientId.safeParse((req.query as { client?: string }).client);
-    hub.attach(ws, { userId: req.userId!, name: req.liveUser!.name, role: 'gm', token: req.liveUser!.token, client: client.success ? client.data : null });
+    hub.attach(ws, { userId: req.userId!, name: req.liveUser!.name, role: req.userRole ?? 'gm', token: req.liveUser!.token, client: client.success ? client.data : null });
   });
 }

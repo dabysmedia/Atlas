@@ -1091,7 +1091,7 @@ export class HexMapRenderer {
     if (!h) return null;
     const here = this.tokens.filter((x) => x.hexId === t.hexId && x.id !== this.dragToken?.token.id);
     const fixed = here.filter((x) => isNotableKind(x.kind));
-    const movers = here.filter((x) => !isNotableKind(x.kind));
+    const movers = here.filter((x) => !isNotableKind(x.kind)).sort((a, b) => a.id.localeCompare(b.id));
     if (fixed.includes(t)) {
       const i = fixed.indexOf(t);
       return { x: h.cx + (fixed.length > 1 ? (i - (fixed.length - 1) / 2) * 20 : 0), y: h.cy - (movers.length ? 4 : 0) };

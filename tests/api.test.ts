@@ -113,6 +113,73 @@ describe('notable places', () => {
   });
 });
 
+describe('faction pieces and player movement', () => {
+  it('keeps drawers, exact ordered trails and permissions across a restart without changing hex data', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Living map test', cols: 6, rows: 4 })).body;
+    const path = `/api/worlds/${w.id}`;
+    const party = (await call('POST', `${path}/factions`, { name: 'Test players', isParty: true })).body;
+    const enemy = (await call('POST', `${path}/factions`, { name: 'Test rival' })).body;
+    const campaign = (await call('POST', `${path}/campaigns`, { name: 'Test campaign' })).body;
+    const before = (await call('GET', `${path}/map`)).body;
+    const route = [0, 1, 2, 3].map(q => before.hexes.find((h: { q: number; r: number }) => h.q === q && h.r === 0).id);
+    const main = (await call('POST', `${path}/tokens`, { kind: 'party', name: 'Test main party', factionId: party.id, mainParty: true, campaignId: campaign.id })).body;
+    const reserve = (await call('POST', `${path}/tokens`, { kind: 'unit', name: 'Test scout', factionId: party.id })).body;
+    const secret = (await call('POST', `${path}/tokens`, { kind: 'unit', name: 'Secret scout', factionId: enemy.id, visibleToPlayers: false, hexId: route[0] })).body;
+    const fogged = (await call('POST', `${path}/tokens`, { kind: 'unit', name: 'Unexplored rival', factionId: enemy.id, hexId: route[3] })).body;
+    expect((await call('POST', `${path}/tokens`, { kind: 'party', name: 'Duplicate main', factionId: party.id, mainParty: true })).status).toBe(400);
+    expect((await call('POST', `${path}/tokens/${main.id}/move`, { from: null, path: [route[0]] })).status).toBe(200);
+    await call('POST', `${path}/players`, { username: 'test-piece-player', password: 'test-player-123', factionId: party.id, campaignId: campaign.id });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'test-piece-player', password: 'test-player-123' } });
+    const playerCookie = String(login.headers['set-cookie']).split(';')[0];
+    const asPlayer = async (method: string, url: string, body?: unknown) => {
+      const response = await app.inject({ method: method as 'GET', url, headers: { cookie: playerCookie }, ...(body !== undefined ? { payload: body } : {}) });
+      return { status: response.statusCode, body: response.json() };
+    };
+    expect((await asPlayer('GET', '/api/auth/me')).body.role).toBe('player');
+    expect((await asPlayer('GET', '/api/worlds')).body.map((x: { id: string }) => x.id)).toEqual([w.id]);
+    let view = (await asPlayer('GET', `${path}/map`)).body;
+    expect(view.tokens.map((t: { id: string }) => t.id).sort()).toEqual([main.id, reserve.id].sort());
+    expect((await asPlayer('POST', '/api/worlds', { name: 'Unauthorized' })).status).toBe(403);
+    expect((await asPlayer('PATCH', `${path}/tokens/${main.id}`, { visibleToPlayers: false })).status).toBe(403);
+    expect((await asPlayer('GET', `${path}/events`)).status).toBe(403);
+    expect((await asPlayer('POST', `${path}/tokens/${secret.id}/move`, { from: route[0], path: [route[1]] })).status).toBe(403);
+    expect((await asPlayer('POST', `${path}/tokens/${main.id}/move`, { from: route[0], path: [route[3]] })).status).toBe(400);
+    expect((await asPlayer('POST', `${path}/tokens/${main.id}/move`, { from: route[0], path: route.slice(1) })).status).toBe(200);
+    expect((await asPlayer('POST', `${path}/tokens/${main.id}/move`, { from: route[0], path: [route[1]] })).status).toBe(409);
+    view = (await asPlayer('GET', `${path}/map`)).body;
+    expect(view.tokens.find((t: { id: string }) => t.id === main.id).trail.map((v: { hexId: string }) => v.hexId)).toEqual(route);
+    expect(view.tokens.some((t: { id: string }) => t.id === fogged.id)).toBe(true);
+    expect(view.tokens.some((t: { id: string }) => t.id === secret.id)).toBe(false);
+    expect((await call('GET', `${path}/events?kind=token.moved`)).body.filter((e: { actor: string }) => e.actor === 'player')).toHaveLength(3);
+    await app.close(); const rebooted = await boot(); app = rebooted.app; db = rebooted.db;
+    const after = (await call('GET', `${path}/map`)).body;
+    expect(after.hexes).toEqual(before.hexes);
+    expect(after.tokens.find((t: { id: string }) => t.id === reserve.id)).toMatchObject({ factionId: party.id, hexId: null });
+    expect(after.tokens.find((t: { id: string }) => t.id === main.id).trail.map((v: { hexId: string }) => v.hexId)).toEqual(route);
+    await call('PATCH', `${path}/tokens/${main.id}`, { visibleToPlayers: false });
+    expect((await asPlayer('GET', `${path}/map`)).body.tokens.some((t: { id: string }) => t.id === main.id)).toBe(false);
+    await call('DELETE', `${path}`);
+  });
+
+  it('isolates miniature assets and faction/campaign assignments between worlds', async () => {
+    const w = (await call('POST', '/api/worlds', { name: 'Miniature test', cols: 4, rows: 4 })).body;
+    const other = (await call('POST', '/api/worlds', { name: 'Other miniature test', cols: 4, rows: 4 })).body;
+    const path = `/api/worlds/${w.id}`;
+    const json = Buffer.from(JSON.stringify({ asset: { version: '2.0' }, scenes: [{ nodes: [] }], scene: 0 }).padEnd(96, ' '));
+    const bytes = Buffer.alloc(20 + json.length); bytes.write('glTF'); bytes.writeUInt32LE(2, 4); bytes.writeUInt32LE(bytes.length, 8); bytes.writeUInt32LE(json.length, 12); bytes.writeUInt32LE(0x4e4f534a, 16); json.copy(bytes, 20);
+    const upload = await app.inject({ method: 'POST', url: `${path}/token-models?name=test.glb`, headers: { cookie, 'content-type': 'model/gltf-binary' }, payload: bytes });
+    expect(upload.statusCode).toBe(200); const model = upload.json();
+    const t = (await call('POST', `${path}/tokens`, { kind: 'unit', name: 'Miniature piece', modelId: model.id })).body;
+    expect(t.modelId).toBe(model.id);
+    const downloaded = await app.inject({ method: 'GET', url: `${path}/token-models/${model.id}`, headers: { cookie } }); expect(downloaded.rawPayload).toEqual(bytes);
+    expect((await call('POST', `/api/worlds/${other.id}/tokens`, { kind: 'unit', name: 'Foreign model', modelId: model.id })).status).toBe(400);
+    const foreignFaction = (await call('POST', `/api/worlds/${other.id}/factions`, { name: 'Other faction' })).body;
+    expect((await call('PATCH', `${path}/tokens/${t.id}`, { factionId: foreignFaction.id })).status).toBe(400);
+    expect((await app.inject({ method: 'POST', url: `${path}/token-models`, headers: { cookie, 'content-type': 'model/gltf-binary' }, payload: Buffer.from('Invalid') })).statusCode).toBe(400);
+    await call('DELETE', path); await call('DELETE', `/api/worlds/${other.id}`);
+  });
+});
+
 describe('wiki', () => {
   it('orders and moves children, rejects cycles and keeps children when a parent is deleted', async () => {
     const w = (await call('POST', '/api/worlds', { name: 'Wiki tree', cols: 4, rows: 4 })).body;

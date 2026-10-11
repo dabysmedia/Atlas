@@ -53,7 +53,7 @@ const Terrain = z.object({ key: z.string().min(1).max(40), name: z.string().min(
 const HexState = z.object({ key: z.string().min(1).max(40), name: z.string().min(1).max(60), color: z.string().max(20).optional() });
 
 export function worldRoutes(app: FastifyInstance, db: Db) {
-  app.get('/api/worlds', async () => {
+  app.get('/api/worlds', async (req) => {
     const rows = await db.execute(sql`
       select w.id, w.name, w.description, w.accent, w.current_day as "currentDay", w.updated_at as "updatedAt", w.created_at as "createdAt",
         (select count(*)::int from wiki_pages p where p.world_id = w.id) as "pageCount",
@@ -66,7 +66,7 @@ export function worldRoutes(app: FastifyInstance, db: Db) {
         (select a.version from map_art a join maps m on m.id = a.map_id
            where m.world_id = w.id and m.parent_hex_id is null limit 1) as "artVersion",
         w.terrain_types as "terrainTypes"
-      from worlds w order by w.sort_order, w.created_at`);
+      from worlds w where ${req.userRole === 'player' ? sql`exists (select 1 from player_access p where p.world_id = w.id and p.user_id = ${req.userId})` : sql`true`} order by w.sort_order, w.created_at`);
     return rows.rows;
   });
 

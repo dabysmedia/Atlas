@@ -20,6 +20,8 @@ import { chronicleRoutes } from './routes/chronicle.js';
 import { seedDemoWorld, upgradeDemo } from './worlds.js';
 import { recoverRemovedIsland, seedNewWorldOnce, upgradeNewWorldIsland } from './lore/newworld.js';
 import { worlds } from './db/schema.js';
+import { pieceRoutes } from './routes/pieces.js';
+import { accessFor, forbidden } from './tokenAccess.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -31,7 +33,7 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
   // One process, so the hub's bus is in-process (see server/live.ts for running several).
   const live = new LiveHub(new LocalBus(), {
     stillSignedIn: async (token) => !!(await sessionUser(db, token)),
-    canView: async (_who, world) => !!(await db.query.worlds.findFirst({ where: eq(worlds.id, world), columns: { id: true } })),
+    canView: async (who, world) => who.role === 'player' ? !!await accessFor(db, who.userId, world) : !!(await db.query.worlds.findFirst({ where: eq(worlds.id, world), columns: { id: true } })),
   });
   app.addHook('onClose', async () => { live.close(); await pool.end(); });
   await app.register(cookie);
@@ -53,6 +55,17 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
   // Everything else under /api requires the owner's session.
   await app.register(async (api) => {
     api.addHook('preHandler', app.requireUser);
+    api.addHook('preHandler', async req => {
+      if (req.userRole !== 'player') return;
+      const path = req.routeOptions.url ?? '';
+      if (req.method === 'GET' && (path === '/api/live' || path === '/api/worlds')) return;
+      const world = (req.params as { w?: string }).w;
+      if (!world || !await accessFor(db, req.userId!, world)) throw forbidden();
+      const read = new Set(['/api/worlds/:w', '/api/worlds/:w/map', '/api/worlds/:w/map/art', '/api/worlds/:w/map/model', '/api/worlds/:w/token-models/:id', '/api/worlds/:w/campaigns/:id/fog']);
+      if (req.method === 'GET' && read.has(path)) return;
+      if (req.method === 'POST' && path === '/api/worlds/:w/tokens/:id/move') return;
+      throw forbidden();
+    });
     // First, so every mutating route below is held to broadcasting its changes.
     liveRoutes(api, live, {
       user: async (req) => {
@@ -66,6 +79,7 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
     wikiRoutes(api, db);
     mapRoutes(api, db);
     modelRoutes(api, db);
+    pieceRoutes(api, db);
     factionRoutes(api, db);
     chronicleRoutes(api, db);
   });

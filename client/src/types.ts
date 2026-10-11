@@ -36,11 +36,12 @@ export type Token = {
   id: string; worldId: string; mapId: string; hexId: string | null; kind: TokenKind; name: string;
   factionId: string | null; campaignId: string | null; settlementId: string | null; color: string | null;
   icon: string | null; visibleToPlayers: boolean; data: Record<string, unknown>;
+  mainParty: boolean; modelId: string | null; trail: { hexId: string | null; day: number; at: string }[];
 };
 export type Settlement = {
   id: string; name: string; size: string; population: number | null; factionId: string | null; wikiPageId: string | null; notes: string;
 };
-export type FactionLite = { id: string; name: string; color: string };
+export type FactionLite = { id: string; name: string; color: string; isParty?: boolean };
 export type CampaignLite = { id: string; name: string };
 export type ArtPlacement = { x: number; y: number; w: number; h: number; opacity: number };
 export type ModelPlacement = { x: number; y: number; w: number; h: number; heightScale: number };
@@ -51,6 +52,7 @@ export type MapArt = { version: number; width: number; height: number; mime: str
 export type MapData = {
   map: { id: string; name: string; layout: MapLayout; art: MapArt | null; model: MapModel | null };
   hexes: Hex[]; claims: Claim[]; tokens: Token[]; settlements: Settlement[]; factions: FactionLite[]; campaigns: CampaignLite[];
+  playerFactionId?: string | null; playerCampaignId?: string | null;
 };
 
 export type MeterDef = {

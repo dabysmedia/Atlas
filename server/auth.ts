@@ -47,13 +47,13 @@ export async function ensureOwner(db: Db, username: string, password: string) {
 }
 
 declare module 'fastify' {
-  interface FastifyRequest { userId?: string }
+  interface FastifyRequest { userId?: string; userRole?: 'gm' | 'player' }
 }
 
 /** The user a session cookie belongs to, while the session lasts. */
 export async function sessionUser(db: Db, token: string | undefined) {
   if (!token) return null;
-  const [row] = await db.select({ id: users.id, username: users.username }).from(sessions).innerJoin(users, eq(users.id, sessions.userId))
+  const [row] = await db.select({ id: users.id, username: users.username, role: users.role }).from(sessions).innerJoin(users, eq(users.id, sessions.userId))
     .where(and(eq(sessions.tokenHash, sha256(token)), gt(sessions.expiresAt, new Date())));
   return row ?? null;
 }
@@ -72,6 +72,8 @@ export function registerAuth(app: FastifyInstance, db: Db, opts: { secureCookies
     });
     if (!row) return reply.code(401).send({ error: 'unauthenticated' });
     req.userId = row.userId;
+    const user = await db.query.users.findFirst({ where: eq(users.id, row.userId) });
+    req.userRole = user?.role === 'player' ? 'player' : 'gm';
     // Rolling session: refresh when more than a day has passed since issue.
     if (Date.now() - row.createdAt.getTime() > 86400_000) {
       const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400_000);
@@ -115,7 +117,7 @@ export function registerAuth(app: FastifyInstance, db: Db, opts: { secureCookies
     await app.requireUser(req, reply);
     if (reply.sent) return;
     const user = await db.query.users.findFirst({ where: eq(users.id, req.userId!) });
-    return { username: user?.username };
+    return { username: user?.username, role: req.userRole };
   });
 }
 

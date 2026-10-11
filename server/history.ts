@@ -10,7 +10,7 @@ export async function worldDay(tx: DbOrTx, worldId: string): Promise<number> {
 
 export async function logEvent(tx: DbOrTx, e: {
   worldId: string; kind: string; summary: string; payload?: unknown;
-  gameDay?: number; campaignId?: string | null; actor?: 'gm' | 'sim' | 'system';
+  gameDay?: number; campaignId?: string | null; actor?: 'gm' | 'player' | 'sim' | 'system';
 }) {
   const gameDay = e.gameDay ?? await worldDay(tx, e.worldId);
   const [row] = await tx.insert(events).values({

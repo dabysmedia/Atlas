@@ -78,6 +78,34 @@ beforeAll(async () => {
 afterAll(async () => { await app?.close(); });
 
 describe('live socket', () => {
+  it('uses trusted player roles and never sends hidden token rows or drag coordinates to players', async () => {
+    const faction = (await call('GET', `/api/worlds/${worldA}/factions`)).body[0];
+    await call('POST', `/api/worlds/${worldA}/players`, { username: 'live-player-test', password: 'live-player-password', factionId: faction.id });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'live-player-test', password: 'live-player-password' } });
+    const player = await connect({ cookie: String(login.headers['set-cookie']).split(';')[0] });
+    const gm = await connect();
+    try {
+      const hello = await player.next(m => m.t === 'hello');
+      expect(hello.t === 'hello' && hello.you.role).toBe('player');
+      player.send({ t: 'sub', world: worldB });
+      const denied = await player.next(m => m.t === 'subbed'); expect(denied.t === 'subbed' && denied.world).toBeNull();
+      player.send({ t: 'sub', world: worldA }); gm.send({ t: 'sub', world: worldA });
+      await player.next(m => m.t === 'subbed' && m.world === worldA); await gm.next(m => m.t === 'subbed' && m.world === worldA);
+      const token = (await call('POST', `/api/worlds/${worldA}/tokens`, { kind: 'unit', name: 'Do not leak this secret', visibleToPlayers: false, factionId: faction.id })).body;
+      const message = await player.next(isChange(worldA));
+      expect(message.t === 'change' && message.patches).toBeUndefined();
+      expect(JSON.stringify(message)).not.toContain(token.id);
+      expect(JSON.stringify(message)).not.toContain(token.name);
+      player.msgs.length = 0; gm.msgs.length = 0;
+      gm.send({ t: 'drag', token: token.id, x: 88, y: 44 });
+      player.send({ t: 'drag', token: token.id, x: 12, y: 13 });
+      await quiet();
+      expect(player.msgs.filter(m => m.t === 'drag')).toHaveLength(0);
+      expect(gm.msgs.filter(m => m.t === 'drag')).toHaveLength(0);
+      await call('DELETE', `/api/worlds/${worldA}/tokens/${token.id}`);
+    } finally { player.close(); gm.close(); }
+  });
+
   it('refuses anyone not signed in', async () => {
     await expect(connect({ cookie: 'atlas_session=nope' })).rejects.toThrow('status 401');
     await expect(connect({ cookie: '' })).rejects.toThrow('status 401');

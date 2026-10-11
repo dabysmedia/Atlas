@@ -6,7 +6,7 @@ a wiki, factions with meters, campaigns with party fog, and an append-only chron
 ## Stack
 
 - **Server:** Node 22, Fastify 5, Drizzle ORM on PostgreSQL. One process serves the API and the built client.
-- **Client:** React 19 + Vite, TanStack Query, TipTap (wiki editor), Motion (animation), Canvas 2D hex renderer.
+- **Client:** React 19 + Vite, TanStack Query, TipTap (wiki editor), Motion (animation), Three.js terrain with a canvas HUD.
 - **Search:** Postgres full-text search (weighted title + body, prefix matching) plus trigram fuzzy title matching.
 - **Live sync:** a WebSocket per open screen (`@fastify/websocket`), so every edit reaches everyone viewing the world at once.
 
@@ -30,15 +30,41 @@ and subscribed to the world it shows. The server half is `server/live.ts`, the c
 - **Limits.** Per socket, drags, let-gos and subscriptions have budgets; presence updates are gathered per world; a
   socket that stops reading is dropped rather than buffered for; a session holds at most 10 sockets; signing out
   closes the session's sockets at once.
-- **Marker drags** stream positions (about 25 a second, never stored) so others see the marker move; the drop saves
-  through the usual `PATCH`, and remote moves glide rather than jump.
+- **Marker drags** stream GM positions (about 25 a second, never stored) to other GMs. Moving pieces commit through
+  the movement endpoint; place markers use `PATCH`. Player movement reaches the DM when committed, and remote moves glide.
 - **Presence.** The top bar shows who has the world open, one avatar per screen, and whether this one is live.
 - **Reconnects.** Heartbeats drop dead sockets on both ends; screens reconnect with backoff and refetch the world they
   show. While disconnected, the world (clock and weather) is polled every 30 s.
 
 The hub delivers in-process, which suits the single Railway replica. Its `LiveBus` interface is where Postgres
-`LISTEN/NOTIFY` or Redis would go for more than one, and its `deliver` is where player accounts will filter what each
-connection receives.
+`LISTEN/NOTIFY` or Redis would go for more than one. Player sockets receive cache invalidations rather than raw
+GM patches, and never receive ephemeral drag coordinates. Their map reads filter hidden tokens and campaign fog.
+
+## Faction token drawers and party movement
+
+Open **Token drawer**, choose a faction, give a piece a name and create it. Each entry is one persistent token;
+**Deploy** places it on the next clicked hex, and **Return to drawer** keeps its identity and model assignment.
+Generic scouting, soldiers, envoy, caravan, fleet, character and party choices do not seed any lore or locations.
+Create factions in the Factions module; **Designate as player party** creates that faction's unique main party token.
+
+Token details allow a self-contained **GLB miniature** (10 MB limit), a model from the world's existing library,
+or a faction-colored 2D indicator. Models stand on sampled terrain. HUD indicators and names remain readable at
+every zoom; pieces sharing a hex get separate slots and can also be selected from the hex's contents or drawer.
+
+Use **Move to next hex** or drag a moving piece to an adjacent hex. The server stores ordered visits and appends
+each movement to the chronicle atomically. Main-party trails draw on the map and reveal their campaign's visited
+hexes. The movement endpoint accepts explicit paths of up to 100 adjacent hexes and rejects stale starting positions.
+Direct GM repositioning/returning a piece to its drawer creates a trail break instead of inventing travel.
+
+Under a faction drawer's **Player access**, choose an optional fog campaign and create a separate player login.
+Players can view assigned worlds, deploy and move their own visible faction pieces, and see movement logs. They
+cannot edit lore, terrain, factions, models or visibility. Player access can be revoked from the same drawer.
+Explicitly hidden tokens are omitted from player API responses. With a fog campaign, other factions' tokens are
+shown only on explored hexes; with no campaign, all deployed non-hidden tokens are public. Own visible pieces
+remain available regardless of fog. GM credentials always see all pieces; do not share GM credentials with players.
+
+`scripts/smoke-pieces.mjs` verifies deployment, miniature footing, shared-hex picking, player movement, DM live
+updates, hiding, reload persistence and unchanged hex rows in a disposable local world.
 
 ## Run locally
 

@@ -17,6 +17,7 @@ import { bandFor } from '../../../shared/meters';
 import { markerSprite } from './markers';
 import { useDraft } from '../live';
 import { TOKEN_KINDS, isNotableKind, isMajorCity } from '../../../shared/markers';
+import { PieceControls } from './PieceDrawer';
 export { TOKEN_KINDS } from '../../../shared/markers';
 
 const KIND_LABEL = Object.fromEntries(TOKEN_KINDS.map((k) => [k.kind, k.label])) as Record<TokenKind, string>;
@@ -97,7 +98,7 @@ export function Diamond({ color, size = 10 }: { color: string; size?: number }) 
   return <span className="diamond" style={{ background: color, width: size, height: size }} />;
 }
 
-function MarkerIcon({ kind, color, size = 26, major = false }: { kind: TokenKind; color: string; size?: number; major?: boolean }) {
+export function MarkerIcon({ kind, color, size = 26, major = false }: { kind: TokenKind; color: string; size?: number; major?: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const c = ref.current;
@@ -365,8 +366,9 @@ function AddToken({ hexId, data, onPlaced }: { hexId: string; data: MapData; onP
 }
 
 // ---------------------------------------------------------------- token
-export function TokenPanel({ token, data, onClose, onFocus, onLocate, snap }: {
+export function TokenPanel({ token, data, onClose, onFocus, onLocate, snap, onMove }: {
   token: Token; data: MapData; onClose: () => void; onFocus: (f: Focus) => void; onLocate: () => void; snap: () => string | null;
+  onMove: () => void;
 }) {
   const { world, qc, patch, touch } = useMapCache();
   const navigate = useNavigate();
@@ -415,6 +417,7 @@ export function TokenPanel({ token, data, onClose, onFocus, onLocate, snap }: {
         </div>
       </div>
       <div className="panel-body scroll">
+        <PieceControls token={token} data={data} onMove={onMove} />
         {token.kind === 'city' && <Section title="Map visibility"><label className="toggle"><input type="checkbox" checked={isMajorCity(token)} onChange={e => patchToken({ data: { ...token.data, majorCity: e.target.checked } })} /> Major city — visible in world overview</label></Section>}
         <Section title="Allegiance">
           <Prop label="Faction" value={faction ? <span className="row" style={{ gap: 7 }}><Diamond color={faction.color} size={9} />{faction.name}</span> : <span className="faint">None</span>}>

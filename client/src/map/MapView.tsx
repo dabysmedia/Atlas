@@ -22,6 +22,8 @@ import { is3d, load3d, webgl2Available } from '../map3d/support';
 import { daySweep } from '../daylight';
 import { live } from '../live';
 import type { Weather } from '../../../shared/weather';
+import { PieceControls, PieceDrawer, usePlayer } from './PieceDrawer';
+import { isNotableKind } from '../../../shared/markers';
 
 const HAS_WEBGL2 = typeof document !== 'undefined' && webgl2Available();
 if (HAS_WEBGL2) void load3d().catch(() => {});
@@ -41,6 +43,9 @@ const DEFAULT_LAYERS: RLayers = { terrainOverlay: 0, grid: true, territory: true
 
 export function MapView() {
   const world = useWorld();
+  const player = usePlayer();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [placing, setPlacing] = useState<Token | null>(null);
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
   const location = useLocation();
@@ -74,6 +79,7 @@ export function MapView() {
 
   const mapQ = useQuery({ queryKey: qk.map(world.id), queryFn: () => api<MapData>(`/api/worlds/${world.id}/map`) });
   const data = mapQ.data;
+  const dataRef = useRef(data); dataRef.current = data;
   // Default the fog campaign to the first campaign the first time.
   const fogCamp = campaignId === undefined ? data?.campaigns[0]?.id ?? null : campaignId;
   const fogQ = useQuery({
@@ -324,7 +330,10 @@ export function MapView() {
   const moveToken = async (t: Token, hexId: string) => {
     patchCache((d) => ({ ...d, tokens: d.tokens.map((x) => (x.id === t.id ? { ...x, hexId } : x)) }));
     try {
-      await api(`/api/worlds/${world.id}/tokens/${t.id}`, { method: 'PATCH', body: { hexId } });
+      if (isNotableKind(t.kind)) await api(`/api/worlds/${world.id}/tokens/${t.id}`, { method: 'PATCH', body: { hexId } });
+      else await api(`/api/worlds/${world.id}/tokens/${t.id}/move`, { body: { path: [hexId], from: t.hexId } });
+      await qc.invalidateQueries({ queryKey: qk.map(world.id) });
+      qc.invalidateQueries({ queryKey: ['w', world.id, 'fog'] });
       qc.invalidateQueries({ queryKey: qk.events(world.id) });
     } catch (e) { toastError(e); mapQ.refetch(); }
   };
@@ -406,8 +415,8 @@ export function MapView() {
   useEffect(() => { const r = rendererRef.current; if (r && align) { if (is3d(r)) r.setArtPlacement(align); else { r.artPlacement = { ...align }; r.invalidate(); } } }, [align]);
 
   // ---- input
-  const toolRef = useRef({ tool, brush, radius, fogCamp, align });
-  toolRef.current = { tool, brush, radius, fogCamp, align };
+  const toolRef = useRef({ tool, brush, radius, fogCamp, align, player, placing });
+  toolRef.current = { tool, brush, radius, fogCamp, align, player, placing };
   const handlers = useRef({ commitStroke, moveToken, brushArea, setAlign });
   handlers.current = { commitStroke, moveToken, brushArea, setAlign };
 
@@ -484,8 +493,9 @@ export function MapView() {
       if (toolRef.current.align) { mode = 'art'; return; }
       const t = toolRef.current.tool;
       if (t === 'select') {
+        if (toolRef.current.placing) { mode = 'maybe-click'; return; }
         const tok = r().tokenAt(p.x, p.y);
-        if (tok) { dragTok = tok; mode = 'token'; hold(); return; }
+        if (tok) { if (toolRef.current.player && tok.factionId !== dataRef.current?.playerFactionId) { setFocus({ kind: 'token', id: tok.id }); mode = 'none'; return; } dragTok = tok; mode = 'token'; hold(); return; }
         mode = 'maybe-click';
       } else {
         if (t === 'fog' && !toolRef.current.fogCamp) { mode = 'maybe-click'; return; }
@@ -554,7 +564,8 @@ export function MapView() {
         if (performance.now() - lastMove.t < 80 && Math.hypot(vel.x, vel.y) > 120) r().fling(vel.x, vel.y);
       } else if (mode === 'maybe-click') {
         const h = r().hexAt(p.x, p.y);
-        setFocus(h ? { kind: 'hex', id: h.id } : null);
+        if (h && toolRef.current.placing) { void handlers.current.moveToken(toolRef.current.placing, h.id); setFocus({ kind: 'token', id: toolRef.current.placing.id }); setPlacing(null); }
+        else setFocus(h ? { kind: 'hex', id: h.id } : null);
       } else if (mode === 'stroke') {
         saving = handlers.current.commitStroke([...stroke]);
         stroke = new Set();
@@ -613,15 +624,15 @@ export function MapView() {
       if (e.code === 'Space') { space = e.type === 'keydown'; canvas.style.cursor = space ? 'grab' : ''; if (space) e.preventDefault(); return; }
       if (e.type !== 'keydown' || e.metaKey || e.ctrlKey || e.altKey) return;
       const idx = ['1', '2', '3', '4', '5'].indexOf(e.key);
-      if (idx >= 0) setTool(TOOLS[idx].id);
-      else if (e.key === 'Escape') { setFocus(null); setLayersOpen(false); setKeysOpen(false); }
+      if (idx >= 0 && (!toolRef.current.player || idx === 0)) setTool(TOOLS[idx].id);
+      else if (e.key === 'Escape') { setFocus(null); setLayersOpen(false); setKeysOpen(false); setPlacing(null); }
       else if (e.key === '?') setKeysOpen((o) => !o);
       else if (e.key === '+' || e.key === '=') r().zoomAt(r().viewport.w / 2, r().viewport.h / 2, 1.5);
       else if (e.key === '-') r().zoomAt(r().viewport.w / 2, r().viewport.h / 2, 1 / 1.5);
       else if (e.key === 'f') { const c = r().fitCamera(); r().flyTo(c.x, c.y, c.zoom); }
       else if (e.key === '[') setRadius((x) => Math.max(0, x - 1));
       else if (e.key === ']') setRadius((x) => Math.min(3, x + 1));
-      else if (e.key === 'l') setLayersOpen((o) => !o);
+      else if (e.key === 'l' && !toolRef.current.player) setLayersOpen((o) => !o);
       else if (is3d(r())) {
         const rr = r() as HexMapRenderer3D;
         if (e.key === 'q') rr.rotate(Math.PI / 8);
@@ -631,10 +642,11 @@ export function MapView() {
       }
     };
     // Drop an image anywhere on the map to use it as map art.
-    const onDragOver = (e: DragEvent) => { if (e.dataTransfer?.types.includes('Files')) { e.preventDefault(); setDropping(true); } };
+    const onDragOver = (e: DragEvent) => { if (!toolRef.current.player && e.dataTransfer?.types.includes('Files')) { e.preventDefault(); setDropping(true); } };
     const onDragLeave = () => setDropping(false);
     const onDrop = (e: DragEvent) => {
       e.preventDefault(); setDropping(false);
+      if (toolRef.current.player) return;
       const f = e.dataTransfer?.files?.[0];
       if (f) void uploadRef.current(f);
     };
@@ -767,7 +779,7 @@ export function MapView() {
               </motion.div>
             )}
           </AnimatePresence>
-          <ToolDock tools={TOOLS} tool={tool} onTool={setTool} />
+          <ToolDock tools={player ? TOOLS.slice(0, 1) : TOOLS} tool={tool} onTool={setTool} />
         </div>
       )}
       {/* Cards that tile up beside the control stack: territories, layers, keys. */}
@@ -891,7 +903,8 @@ export function MapView() {
               <Flag size={16} strokeWidth={1.7} />
               {!territoriesOpen && !!data.factions.length && <span className="stack-dots" aria-hidden>{data.factions.slice(0, 4).map((f) => <Diamond key={f.id} color={f.color} size={4} />)}</span>}
             </StackButton>
-            <StackButton label="Layers" tip="Layers and map art" keys="L" expanded={layersOpen} onClick={() => setLayersOpen((o) => !o)}><Layers size={16} strokeWidth={1.7} /></StackButton>
+            <StackButton label="Token drawer" expanded={drawerOpen} onClick={() => setDrawerOpen(o => !o)}><Box size={16} /></StackButton>
+            {!player && <StackButton label="Layers" tip="Layers and map art" keys="L" expanded={layersOpen} onClick={() => setLayersOpen((o) => !o)}><Layers size={16} strokeWidth={1.7} /></StackButton>}
             <span className="stack-sep" aria-hidden />
           </>
         )}
@@ -955,17 +968,22 @@ export function MapView() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {data && focusHex && !align && (
+        {data && drawerOpen && <PieceDrawer data={data} onClose={() => setDrawerOpen(false)} onSelect={id => { setFocus({ kind: 'token', id }); if (window.matchMedia('(max-width: 700px)').matches) setDrawerOpen(false); }} onPlace={token => { setTool('select'); setPlacing(token); if (window.matchMedia('(max-width: 700px)').matches) setDrawerOpen(false); }} />}
+        {placing && <div className="piece-place-hint panel" role="status">{placing.hexId ? `Choose the next adjacent hex for ${placing.name}` : `Choose a hex to deploy ${placing.name}`}<button className="iconbtn" aria-label="Cancel token placement" onClick={() => setPlacing(null)}><X size={14} /></button></div>}
+        {data && focusHex && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusHex.name || 'Hex'}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div>{data.tokens.filter(t => t.hexId === focusHex.id).map(t => <button className="poi" key={t.id} onClick={() => setFocus({ kind: 'token', id: t.id })}>{t.name}</button>)}</aside>}
+        {data && focusToken && player && !placing && <aside className="panel inspector player-inspector"><div className="row"><b className="grow">{focusToken.name}</b><button className="iconbtn" onClick={() => setFocus(null)}><X size={14} /></button></div><PieceControls token={focusToken} data={data} onMove={() => setPlacing(focusToken)} /></aside>}
+        {data && focusHex && !align && !player && !placing && (
           <HexPanel key={`hex-${focusHex.id}`} hex={focusHex} data={data} fogCampaignId={fogCamp} explored={fogQ.data?.includes(focusHex.id) ?? false}
             label={r?.label(focusHex) ?? ''} onClose={() => setFocus(null)} onFocus={setFocus}
             snap={(() => { const h = r?.hexById(focusHex.id); return h ? snapAt(h.cx, h.cy, 2.1) : () => null; })()} />
         )}
-        {data && focusToken && !align && (
+        {data && focusToken && !align && !player && !placing && (
           <TokenPanel key={`tok-${focusToken.id}`} token={focusToken} data={data} onClose={() => setFocus(null)} onFocus={setFocus}
+            onMove={() => { setTool('select'); setPlacing(focusToken); }}
             onLocate={() => { const p = r?.tokenPos(focusToken); if (p && r) centerOn(p.x, p.y, Math.max(r.target.zoom, 1.5)); }}
             snap={(() => { const p = r?.tokenPos(focusToken); return p ? snapAt(p.x, p.y, 2.1) : () => null; })()} />
         )}
-        {data && focus?.kind === 'faction' && !align && (
+        {data && focus?.kind === 'faction' && !align && !player && !placing && (
           <FactionPanel key={`fac-${focus.id}`} factionId={focus.id} data={data} onClose={() => setFocus(null)} onFocus={setFocus} snap={factionSnap(focus.id)} />
         )}
       </AnimatePresence>

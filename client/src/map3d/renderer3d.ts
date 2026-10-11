@@ -38,6 +38,8 @@ import { isNotableKind, isMajorCity } from '../../../shared/markers';
 import { FactionLabels, type LabelPlace, type LabelSpot } from './labels3d';
 import type { CardAnchor, FactionArea } from '../map/FactionCard';
 import { drawPlaceGlyph, placeDiamond } from '../map/markers';
+import { markerSprite } from '../map/markers';
+import { Miniatures } from './miniatures';
 
 const FOV = 24; // degrees, vertical; narrow so the overhead view stays close to a flat map
 const MAX_TILT = 1.32;
@@ -56,6 +58,8 @@ export class HexMapRenderer3D extends HexMapRenderer {
   readonly hud: HTMLCanvasElement;
   protected hudCtx: CanvasRenderingContext2D;
   protected scene = new THREE.Scene();
+  readonly miniatures = new Miniatures();
+  protected pieceTiles: { token: Token; x: number; y: number; foot: { x: number; y: number } }[] = [];
   protected camera = new THREE.PerspectiveCamera(FOV, 1, 1, 1e5);
   protected key = new THREE.DirectionalLight(0xffffff, 2);
   protected hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
@@ -181,6 +185,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.water.uniforms.uOverlayRect = this.ovUniforms.uOverlayRect;
     this.water.uniforms.uOverlayGlow = this.ovUniforms.uOverlayGlow;
     this.scene.add(this.neon.group, this.beacon.group, this.hoverMask.mesh, this.selectionMask.mesh);
+    this.scene.add(this.miniatures.group);
     this.labels.wheelTarget = hud;
     this.labels.onHover = (id) => { if (!id) { this.hoverArea = null; this.onFactionHover?.(null, null); } this.dirty = true; };
     this.labels.onClick = (id) => this.onFactionClick?.(id);
@@ -211,7 +216,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.ovTex.dispose(); this.gridProjection.texture.dispose(); this.depthTex?.dispose(); this.glowTex.dispose();
     this.labels.destroy();
     this.water.dispose();
-    this.gl.dispose();
+    this.miniatures.dispose(); this.gl.dispose();
     this.gl.forceContextLoss();
   }
 
@@ -507,14 +512,31 @@ export class HexMapRenderer3D extends HexMapRenderer {
   }
 
   protected tokenLift(kind: TokenKind, r: number) { return r * (kind === 'city' || kind === 'outpost' ? 1.15 : 1.35); }
-  protected floatingPlace(token: Token) { return isNotableKind(token.kind); }
+  protected floatingPlace(_token: Token) { return true; }
+  private layoutPieces() {
+    this.pieceTiles = [];
+    const groups = new Map<string, Token[]>();
+    for (const token of this.tokens) if (!isNotableKind(token.kind) && token.hexId) { const key = this.dragToken?.token.id === token.id ? token.id : token.hexId; const group = groups.get(key) ?? []; group.push(token); groups.set(key, group); }
+    for (const group of groups.values()) {
+      group.sort((a, b) => a.id.localeCompare(b.id));
+      const first = group[0], hex = this.byId.get(first.hexId!), drag = this.dragToken?.token.id === first.id ? this.dragToken : null;
+      if (!hex) continue;
+      const moving = group.length === 1 ? this.tokenPos(first) : null;
+      const anchor = this.worldToScreen(drag?.x ?? moving?.x ?? hex.cx, drag?.y ?? moving?.y ?? hex.cy);
+      group.forEach((token, i) => {
+        const p = this.tokenPos(token); if (!p) return;
+        const col = i % 3, count = Math.min(3, group.length - Math.floor(i / 3) * 3);
+        this.pieceTiles.push({ token, x: anchor.x + (col - (count - 1) / 2) * 82, y: anchor.y - 30 - Math.floor(i / 3) * 49, foot: this.worldToScreen(p.x, p.y) });
+      });
+    }
+  }
   protected placeTiles: PlaceTile[] = [];
 
   /** A narrow staggered stack: neighboring diamonds share their diagonal edges. */
   protected layoutPlaces() {
     const groups = new Map<string, Token[]>();
     for (const token of this.tokens) {
-      if (!this.floatingPlace(token) || !token.hexId || this.tokenVisibility(token) < 0.01) continue;
+      if (!isNotableKind(token.kind) || !token.hexId || this.tokenVisibility(token) < 0.01) continue;
       const key = this.dragToken?.token.id === token.id ? `drag:${token.id}` : token.hexId;
       const group = groups.get(key) ?? [];
       group.push(token); groups.set(key, group);
@@ -564,6 +586,10 @@ export class HexMapRenderer3D extends HexMapRenderer {
   }
 
   tokenAt(sx: number, sy: number): Token | undefined {
+    this.layoutPieces();
+    for (const tile of [...this.pieceTiles].reverse()) if (Math.abs(sx - tile.x) <= 38 && sy >= tile.y - 19 && sy <= tile.y + 24) return tile.token;
+    const miniature = this.miniatures.hit(sx, sy, this.w, this.h, this.camera);
+    if (miniature) return this.tokens.find(t => t.id === miniature);
     this.layoutPlaces();
     for (const tile of [...this.placeTiles].reverse()) {
       if (tile.alpha < 0.05) continue;
@@ -578,6 +604,27 @@ export class HexMapRenderer3D extends HexMapRenderer {
 
   protected drawTokens(now: number, z: number, still?: boolean) {
     super.drawTokens(now, z, still);
+    this.layoutPieces();
+    const hud = this.ctx;
+    hud.save(); hud.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    // The party's actual ordered visits; a null visit breaks repositioning/return-to-drawer paths.
+    for (const token of this.tokens.filter(t => t.mainParty && t.hexId)) {
+      hud.strokeStyle = token.color ?? this.factionColor.get(token.factionId ?? '') ?? '#d6b06a'; hud.lineWidth = 2.5; hud.globalAlpha = 0.85; hud.setLineDash([5, 4]);
+      hud.beginPath(); let previous: { x: number; y: number } | null = null;
+      for (const visit of token.trail ?? []) { const h = this.byId.get(visit.hexId ?? ''); if (!h) { previous = null; continue; } const p = this.worldToScreen(h.cx, h.cy); if (previous) hud.lineTo(p.x, p.y); else hud.moveTo(p.x, p.y); previous = p; }
+      hud.stroke(); hud.setLineDash([]);
+    }
+    for (const tile of this.pieceTiles) {
+      const t = tile.token, color = t.color ?? this.factionColor.get(t.factionId ?? '') ?? '#d6b06a';
+      hud.globalAlpha = t.visibleToPlayers ? 1 : 0.62;
+      hud.strokeStyle = color; hud.lineWidth = 1; hud.beginPath(); hud.moveTo(tile.foot.x, tile.foot.y); hud.lineTo(tile.x, tile.y + 17); hud.stroke();
+      const radius = this.miniatures.has(t.id) && this.overviewAlpha() < 0.5 ? 12 : 18;
+      const sprite = markerSprite(t.kind, color, radius, this.dpr); const size = sprite.canvas.width / this.dpr; hud.drawImage(sprite.canvas, tile.x - size / 2, tile.y - size / 2, size, size);
+      if (this.selectedTokenId === t.id) { hud.strokeStyle = '#8fe8e2'; hud.lineWidth = 2; hud.beginPath(); hud.arc(tile.x, tile.y, radius + 3, 0, Math.PI * 2); hud.stroke(); }
+      hud.font = '600 10px Inter, sans-serif'; hud.textAlign = 'center'; hud.textBaseline = 'middle'; hud.fillStyle = 'rgba(6,12,17,.92)'; hud.beginPath(); hud.roundRect(tile.x - 38, tile.y + 17, 76, 15, 5); hud.fill(); hud.fillStyle = '#f4ead4';
+      let name = `${!t.visibleToPlayers ? '◌ ' : ''}${t.name}`; while (hud.measureText(name).width > 70 && name.length > 2) name = name.slice(0, -2) + '…'; hud.fillText(name, tile.x, tile.y + 24);
+    }
+    hud.restore();
     this.layoutPlaces();
     const ctx = this.ctx;
     ctx.save(); ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -982,6 +1029,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.sky.mesh.position.copy(this.camera.position);
     this.sky.mesh.scale.setScalar(this.camera.far * 0.9);
     this.water.update(this.gl, now / 1000, this.camera, this.light);
+    this.miniatures.update(this.tokens, t => this.tokenPos(t), (x, y) => this.groundAt(x, y), () => this.invalidate());
     this.gl.render(this.scene, this.camera);
     this.layoutLabels(now);
     this.drawHud(now);

@@ -30,6 +30,7 @@ export const users = pgTable('users', {
   id: id(),
   username: text('username').notNull().unique(),
   passwordHash: text('password_hash').notNull(),
+  role: text('role').notNull().default('gm'),
   createdAt: created(),
 });
 
@@ -209,6 +210,7 @@ export const factions = pgTable('factions', {
   description: text('description').notNull().default(''),
   /** Emblem key from the client's small sigil set (null shows the plain diamond). */
   sigil: text('sigil'),
+  isParty: boolean('is_party').notNull().default(false),
   /** Exactly one signature meter per faction (null until the GM picks one). */
   signatureMeterId: uuid('signature_meter_id').references(() => meterDefinitions.id, { onDelete: 'set null' }),
   wikiPageId: uuid('wiki_page_id').references(() => wikiPages.id, { onDelete: 'set null' }),
@@ -278,6 +280,17 @@ export const claims = pgTable('claims', {
 ]);
 
 // ---------------------------------------------------------------- tokens & settlements
+export const playerAccess = pgTable('player_access', {
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  worldId: worldRef(),
+  factionId: uuid('faction_id').notNull().references(() => factions.id, { onDelete: 'cascade' }),
+  campaignId: uuid('campaign_id').references(() => campaigns.id, { onDelete: 'set null' }),
+}, t => [primaryKey({ columns: [t.userId, t.worldId] })]);
+
+export const tokenModels = pgTable('token_models', {
+  id: id(), worldId: worldRef(), name: text('name').notNull(), bytes: bytea('bytes').notNull(), createdAt: created(),
+});
+export type TokenVisit = { hexId: string | null; day: number; at: string };
 /**
  * Anything with a position on a hex. City/outpost tokens point at a settlement
  * row that holds the place's details.
@@ -295,9 +308,12 @@ export const tokens = pgTable('tokens', {
   color: text('color'),
   icon: text('icon'),
   visibleToPlayers: boolean('visible_to_players').notNull().default(true),
+  mainParty: boolean('main_party').notNull().default(false),
+  modelId: uuid('model_id').references(() => tokenModels.id, { onDelete: 'set null' }),
+  trail: jsonb('trail').$type<TokenVisit[]>().notNull().default([]),
   data: jsonb('data').notNull().default({}),
   updatedAt: updated(),
-}, (t) => [index('tokens_map_idx').on(t.mapId)]);
+}, (t) => [index('tokens_map_idx').on(t.mapId), uniqueIndex('tokens_main_party_uq').on(t.factionId).where(sql`${t.mainParty} = true`)]);
 
 export const settlements = pgTable('settlements', {
   id: id(),

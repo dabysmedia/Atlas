@@ -27,6 +27,7 @@ import { daySweep, formatHour, useHour } from '../daylight';
 import { DAY_SPEEDS, hoursNow, type Daylight, type DaySpeed } from '../../../shared/daylight';
 import { WEATHER, WEATHER_KINDS, type Weather, type WeatherKind } from '../../../shared/weather';
 import { partOfDay } from '../map3d/sky';
+import { usePlayer } from '../map/PieceDrawer';
 
 // The editor is the heaviest dependency; load it on first visit to the wiki.
 const WikiView = lazy(() => import('../wiki/WikiView').then((m) => ({ default: m.WikiView })));
@@ -41,6 +42,7 @@ const NAV = [
 ];
 
 export function Shell({ noWorld }: { noWorld?: boolean }) {
+  const player = usePlayer();
   const { worldId } = useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -71,11 +73,11 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
   }, [world.data]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette((p) => !p); }
+      if (!player && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette((p) => !p); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [player]);
 
   // A poll on its way could land after a change and put the old world back, so a change drops it first.
   const hold = () => qc.cancelQueries({ queryKey: qk.world(worldId!), exact: true });
@@ -195,7 +197,7 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
           <ChevronsUpDown size={13} className="faint" />
         </motion.button>
         <div className="spacer" />
-        {w && (
+        {w && !player && (
           <motion.button className="searchbox glass" onClick={() => setPalette(true)} aria-label="Search the atlas" aria-keyshortcuts="Control+K" {...rise(1)}>
             <Search size={15} /> <span className="grow">Search the atlas</span> <span className="kbd">Ctrl K</span>
           </motion.button>
@@ -203,11 +205,11 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
         <div className="spacer" />
         {w && (
           <motion.div className="clock glass" role="group" aria-label="World clock" {...rise(2)}>
-            <button onClick={() => day.mutate(-1)} aria-label="Previous day" data-tip="Previous day"><ChevronLeft size={14} /></button>
+            {!player && <button onClick={() => day.mutate(-1)} aria-label="Previous day" data-tip="Previous day"><ChevronLeft size={14} /></button>}
             <span className="day"><small>Day</small> {w.currentDay}</span>
-            <TimeOfDay daylight={w.daylight} onChange={(b) => daylight.mutate(b)} />
-            <WeatherControl weather={w.weather} daylight={w.daylight} onChange={(b) => weather.mutate(b)} onRoll={() => rollWeather.mutate()} rolling={rollWeather.isPending} />
-            <button onClick={() => day.mutate(1)} aria-label="Next day" data-tip="Next day"><ChevronRight size={14} /></button>
+            {player ? <span className="faint">{formatHour(hoursNow(w.daylight))} · {w.weather.kind}</span> : <><TimeOfDay daylight={w.daylight} onChange={(b) => daylight.mutate(b)} />
+            <WeatherControl weather={w.weather} daylight={w.daylight} onChange={(b) => weather.mutate(b)} onRoll={() => rollWeather.mutate()} rolling={rollWeather.isPending} /></>}
+            {!player && <button onClick={() => day.mutate(1)} aria-label="Next day" data-tip="Next day"><ChevronRight size={14} /></button>}
           </motion.div>
         )}
         {w && <Presence {...rise(3)} />}
@@ -215,7 +217,7 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
       </header>
       {w && (
         <motion.nav className="rail glass" aria-label="Sections" data-tip-side="right" {...rise(1, { x: -12 })}>
-          {NAV.map((n, i) => (
+          {NAV.filter(n => !player || n.to === 'map').map((n, i) => (
             <span key={n.to} className="rail-slot">
               {i === NAV.length - 1 && <span className="rail-sep" aria-hidden />}
               <NavLink to={`/w/${w.id}/${n.to}`} onClick={(e) => {
@@ -240,7 +242,7 @@ export function Shell({ noWorld }: { noWorld?: boolean }) {
             <WorldCtx.Provider value={w}>
               {/* Keyed by world: switching worlds remounts instead of cross-animating two worlds' routes. */}
               <WorldRoutes key={w.id} />
-              <CommandPalette open={palette} onClose={() => setPalette(false)} />
+              {!player && <CommandPalette open={palette} onClose={() => setPalette(false)} />}
             </WorldCtx.Provider>
           )}
         </main>

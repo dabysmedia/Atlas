@@ -11,6 +11,8 @@ import { fitModelPlacement } from '../placement.js';
 import { archiveModel, installModel, listArchive, restoreModel } from '../modelArchive.js';
 import { changed } from '../live.js';
 import { TOKEN_KIND_KEYS, settlementSize } from '../../shared/markers.js';
+import { visibleTokens, accessFor, forbidden } from '../tokenAccess.js';
+import { validateTokenRefs } from './pieces.js';
 
 type P = { w: string; id: string };
 
@@ -66,12 +68,14 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
         .from(claims).innerJoin(hexes, eq(hexes.id, claims.hexId)).where(eq(hexes.mapId, map.id)),
       db.select().from(tokens).where(eq(tokens.mapId, map.id)),
       db.select().from(settlements).where(eq(settlements.worldId, w.id)),
-      db.select({ id: factions.id, name: factions.name, color: factions.color }).from(factions).where(eq(factions.worldId, w.id)),
+      db.select({ id: factions.id, name: factions.name, color: factions.color, isParty: factions.isParty }).from(factions).where(eq(factions.worldId, w.id)),
       db.select({ id: campaigns.id, name: campaigns.name }).from(campaigns).where(eq(campaigns.worldId, w.id)),
       db.select(artMeta).from(mapArt).where(eq(mapArt.mapId, map.id)),
       db.select(modelMeta).from(mapModel).where(eq(mapModel.mapId, map.id)),
     ]);
-    return { map: { ...map, art: artRows[0] ?? null, model: modelRows[0] ?? null }, hexes: hexRows, claims: claimRows, tokens: tokenRows, settlements: settlementRows, factions: factionRows, campaigns: campaignRows };
+    const shown = await visibleTokens(db, req, w.id, tokenRows);
+    const access = req.userRole === 'player' ? await accessFor(db, req.userId!, w.id) : null;
+    return { map: { ...map, art: artRows[0] ?? null, model: modelRows[0] ?? null }, hexes: hexRows, claims: claimRows, tokens: shown, settlements: req.userRole === 'player' ? settlementRows.filter(s => shown.some(t => t.settlementId === s.id)) : settlementRows, factions: factionRows, campaigns: access ? campaignRows.filter(c => c.id === access.campaignId) : campaignRows, playerFactionId: access?.factionId ?? null, playerCampaignId: access?.campaignId ?? null };
   });
 
   const HexPatch = z.object({
@@ -202,6 +206,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const w = await getWorld(db, wid);
     const camp = await db.query.campaigns.findFirst({ where: and(eq(campaigns.id, Uuid.parse(id)), eq(campaigns.worldId, w.id)) });
     if (!camp) throw notFound('Campaign');
+    if (req.userRole === 'player' && (await accessFor(db, req.userId!, w.id))?.campaignId !== camp.id) throw forbidden();
     const rows = await db.select({ hexId: campaignFog.hexId }).from(campaignFog).where(eq(campaignFog.campaignId, camp.id));
     return rows.map((r) => r.hexId);
   });
@@ -237,11 +242,14 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     kind: TokenKind, name: z.string().trim().min(1).max(120), hexId: Uuid.nullable().optional(),
     factionId: Uuid.nullable().optional(), campaignId: Uuid.nullable().optional(), color: z.string().max(20).nullable().optional(),
     visibleToPlayers: z.boolean().optional(),
+    mainParty: z.boolean().optional(), modelId: Uuid.nullable().optional(),
     data: TokenData.optional(),
   });
   app.post('/api/worlds/:w/tokens', async (req) => {
     const w = await getWorld(db, (req.params as P).w);
     const body = TokenCreate.parse(req.body);
+    await validateTokenRefs(db, w.id, body);
+    if (body.mainParty && await db.query.tokens.findFirst({ where: and(eq(tokens.factionId, body.factionId!), eq(tokens.mainParty, true)) })) throw badRequest('This faction already has its main party token.');
     const map = await rootMap(db, w.id);
     if (body.hexId) await worldHexes(db, w.id, [body.hexId]);
     let settlementId: string | undefined;
@@ -251,7 +259,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
       }).returning();
       settlementId = s.id;
     }
-    const [row] = await db.insert(tokens).values({ ...body, worldId: w.id, mapId: map.id, settlementId }).returning();
+    const [row] = await db.insert(tokens).values({ ...body, worldId: w.id, mapId: map.id, settlementId, trail: body.hexId ? [{ hexId: body.hexId, day: w.currentDay, at: new Date().toISOString() }] : [] }).returning();
     // Settlement types bring a details row, so screens refetch the map for both.
     changed(req, settlementId ? { scopes: ['map'] } : { patches: [{ op: 'token', token: row }] });
     await logEvent(db, { worldId: w.id, kind: 'token.created', summary: `${cap(body.kind)} "${body.name}" placed`, payload: { tokenId: row.id, hexId: body.hexId } });
@@ -265,8 +273,11 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const tok = await db.query.tokens.findFirst({ where: and(eq(tokens.id, Uuid.parse(id)), eq(tokens.worldId, w.id)) });
     if (!tok) throw notFound('Token');
     const body = TokenPatch.parse(req.body);
+    await validateTokenRefs(db, w.id, { ...tok, ...body });
     if (body.hexId) await worldHexes(db, w.id, [body.hexId]);
-    const [row] = await db.update(tokens).set({ ...body, updatedAt: new Date() }).where(eq(tokens.id, tok.id)).returning();
+    // Direct GM repositioning is recorded as a break, never an invented path.
+    const trail = body.hexId !== undefined && body.hexId !== tok.hexId ? [...tok.trail, { hexId: null, day: w.currentDay, at: new Date().toISOString() }, ...(body.hexId ? [{ hexId: body.hexId, day: w.currentDay, at: new Date().toISOString() }] : [])] : tok.trail;
+    const [row] = await db.update(tokens).set({ ...body, trail, updatedAt: new Date() }).where(eq(tokens.id, tok.id)).returning();
     if (body.hexId !== undefined && body.hexId !== tok.hexId) {
       const [from, to] = await Promise.all([tok.hexId, body.hexId].map(async (h) => (h ? (await worldHexes(db, w.id, [h]))[0] : undefined)));
       await logEvent(db, {

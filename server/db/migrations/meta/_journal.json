@@ -57,6 +57,13 @@
       "when": 1791678699839,
       "tag": "0007_wiki_media_tree",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791679666374,
+      "tag": "0008_faction_pieces",
+      "breakpoints": true
     }
   ]
 }

@@ -18,6 +18,7 @@ import { markerSprite } from './markers';
 import { useDraft } from '../live';
 import { TOKEN_KINDS, isNotableKind, isMajorCity } from '../../../shared/markers';
 import { PieceControls } from './PieceDrawer';
+import { TokenInspector } from './TokenInspector';
 export { TOKEN_KINDS } from '../../../shared/markers';
 
 const KIND_LABEL = Object.fromEntries(TOKEN_KINDS.map((k) => [k.kind, k.label])) as Record<TokenKind, string>;
@@ -367,7 +368,10 @@ function AddToken({ hexId, data, onPlaced }: { hexId: string; data: MapData; onP
 }
 
 // ---------------------------------------------------------------- token
-export function TokenPanel({ token, data, onClose, onFocus, onLocate, snap, onMove }: {
+export function TokenPanel(props: Parameters<typeof MarkerPanel>[0]) {
+  return isNotableKind(props.token.kind) ? <MarkerPanel {...props}/> : <TokenInspector {...props}/>;
+}
+function MarkerPanel({ token, data, onClose, onFocus, onLocate, snap, onMove }: {
   token: Token; data: MapData; onClose: () => void; onFocus: (f: Focus) => void; onLocate: () => void; snap: () => string | null;
   onMove: () => void;
 }) {

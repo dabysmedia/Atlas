@@ -2,7 +2,8 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Db } from '../db/index.js';
-import { campaigns, campaignFog, interiorPositions, factions, hexes, playerAccess, tokenModels, tokens, users, wikiPages } from '../db/schema.js';
+import { campaigns, campaignFog, interiorPositions, factions, hexes, playerAccess, tokenModels, tokenPortraits, tokens, users, wikiPages } from '../db/schema.js';
+import { ensureSheets, copySheets } from '../rules.js';
 import { hashPassword } from '../auth.js';
 import { badRequest, logEvent, notFound, worldDay } from '../history.js';
 import { changed } from '../live.js';
@@ -17,6 +18,8 @@ export async function validateTokenRefs(db: Db, worldId: string, body: { faction
   if (body.modelId && !await db.query.tokenModels.findFirst({ where: and(eq(tokenModels.id, body.modelId), eq(tokenModels.worldId, worldId)) })) throw badRequest('Model must belong to this world.');
   const sheetId = (body.data as { sheetPageId?: string } | undefined)?.sheetPageId;
   if (sheetId && !await db.query.wikiPages.findFirst({ where: and(eq(wikiPages.id, Uuid.parse(sheetId)), eq(wikiPages.worldId, worldId)) })) throw badRequest('Token sheet must belong to this world.');
+  const portraitId = (body.data as { portraitId?: string } | undefined)?.portraitId;
+  if (portraitId && !await db.query.tokenPortraits.findFirst({where:and(eq(tokenPortraits.id,Uuid.parse(portraitId)),eq(tokenPortraits.worldId,worldId))})) throw badRequest('Art must belong to this world.');
   if (body.mainParty && (!body.factionId || body.kind !== 'party')) throw badRequest('A main party must be a party token belonging to a faction.');
 }
 
@@ -94,6 +97,8 @@ export function pieceRoutes(app: FastifyInstance, db: Db) {
         data: { ...data, drawerName: baseName, drawerSourceId: data.drawerSourceId ?? source.id },
         trail: [{ hexId: hex.id, day, at: new Date().toISOString() }],
       }).returning();
+      await copySheets(tx,source.id,copy.id);
+      await ensureSheets(tx,w,copy.id);
       await logEvent(tx, { worldId: w, campaignId: copy.campaignId, kind: 'token.created', actor: req.userRole ?? 'gm', summary: `${copy.name} deployed`, payload: { tokenId: copy.id, sourceTokenId: source.id, hexId: hex.id } });
       changed(req, { scopes: ['map'] });
       return copy;

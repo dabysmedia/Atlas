@@ -64,12 +64,33 @@ miniatures, live movement, reload recovery, mobile exit, and reuse of the world 
 
 ## Faction token drawers and party movement
 
-Open **Token drawer**, choose a faction, give a piece a name and create it. Each entry is one persistent token;
-**Deploy** places it on the next clicked hex; **Deploy another** creates a separate piece. The original entry stays in the drawer.
+Open **Token drawer**, choose a faction, and use **Add token** to select a role, model or saved-piece preset.
+Selecting a drawer card opens its sheet. **Deploy on map** places a reserve piece; choosing a deployed saved-piece
+preset adds an independent copy. The original entry stays in the drawer.
 Generic scouting, soldiers, envoy, caravan, fleet, character and party choices do not seed any lore or locations.
 Create factions in the Factions module; **Designate as player party** creates that faction's unique main party token.
 
-Token details allow a self-contained **GLB miniature** (10 MB limit), a model from the world's existing library,
+Token selection opens a portrait-led dossier with **Sheet**, **Appearance**, and **Journey** tabs. Drawer pieces
+automatically receive actual stat sheets, independent of wiki pages. Portrait art can be uploaded (PNG/JPEG/WebP/GIF,
+8 MB limit), selected from a world gallery, and renamed/deleted in Uploaded files. Existing wiki links are retained
+as legacy data, never parsed as statistics. Models and portraits persist in Railway Postgres across redeploys.
+
+**World settings → Rules & stat sheets** starts with an editable PF2e Remastered + Kingmaker mechanics pack:
+character/creature sheets, attributes, proficiency, AC, saves, skills, spell checks, dice checks with degrees of
+success, party roster/travel pacing, and kingdom statistics/control DC/resource tiers. Source references are
+linked in the pack. The rules implementation and UI labels are original; rulebook text, artwork and adventure
+lore are not bundled. This is a mechanics/sheet foundation, not a complete compendium or automated character builder.
+Feats, spells, conditions, inventory effects, camping/forced-march exceptions and kingdom turns are manual in this pass.
+The party travel planner uses roster speeds; activities used are recorded by the GM, without forcing map moves.
+
+Worlds can create custom rulesets, edit fields/defaults/check dice/proficiency/travel tables, and import/export JSON.
+Definitions use bounded declarative expressions; no code evaluation. Each token keeps an independent sheet for each
+ruleset, so hot swapping restores its previous stats. New copies inherit all source sheets but edit independently.
+Player sheet access is restricted to their visible faction pieces; opposing and hidden statistics stay private.
+Edits use revision guards and update other screens live. `scripts/smoke-token-sheets.mjs` verifies the full flow,
+art/reload persistence, party pacing, hot swapping with the renderer still mounted, and mobile layout.
+
+Appearance allows a self-contained **GLB miniature** (10 MB limit), a model from the world's existing library,
 or a faction-colored 2D indicator. Models float slightly above sampled terrain. Hover adds a silhouette border without tinting model materials.
 Picking uses cached model bounds and an 8px margin, avoiding per-frame triangle raycasts on dense GLBs. HUD indicators and names remain readable at
 every zoom; pieces sharing a hex get separate slots and can also be selected from the hex's contents or drawer. Overview uses 2D indicators sized to their projected hex; exploration restores assigned

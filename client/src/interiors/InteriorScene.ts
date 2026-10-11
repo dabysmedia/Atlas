@@ -24,10 +24,10 @@ export class InteriorScene {
     this.miniatures.configure(this.renderer);this.miniatures.group.scale.setScalar(.065);this.scene.add(this.miniatures.group);this.reset();
   }
   private release(object:THREE.Object3D){object.traverse(o=>{const m=o as THREE.Mesh;if(!m.isMesh&&!((o as THREE.LineSegments).isLineSegments))return;m.geometry.dispose();for(const material of [m.material].flat()){for(const value of Object.values(material))if(value instanceof THREE.Texture)value.dispose();material.dispose();}});}
-  async load(){
-    if(!this.interior.asset)return;
+  async load(assetUrl?:string){
+    if(!this.interior.asset&&!assetUrl)return;
     const loader=new GLTFLoader().setDRACOLoader(this.draco).setKTX2Loader(this.ktx).setMeshoptDecoder(MeshoptDecoder);
-    const gltf=await loader.loadAsync(`/api/worlds/${this.interior.worldId}/interiors/${this.interior.id}/asset?v=${this.interior.asset.version}`);
+    const gltf=await loader.loadAsync(assetUrl??`/api/worlds/${this.interior.worldId}/interiors/${this.interior.id}/asset?v=${this.interior.asset!.version}`);
     if(this.disposed){this.release(gltf.scene);return;}
     const model=gltf.scene,box=new THREE.Box3().setFromObject(model),size=box.getSize(new THREE.Vector3());
     if(box.isEmpty()||!Number.isFinite(size.length())||size.x<.001||size.z<.001){this.release(model);throw Error('This GLB needs a visible map surface with width and depth.');}

@@ -215,6 +215,8 @@ export const factions = pgTable('factions', {
   description: text('description').notNull().default(''),
   /** Emblem key from the client's small sigil set (null shows the plain diamond). */
   sigil: text('sigil'),
+  /** Bundled settlement architecture; null infers from the faction name. */
+  settlementArtStyle: text('settlement_art_style'),
   isParty: boolean('is_party').notNull().default(false),
   /** Exactly one signature meter per faction (null until the GM picks one). */
   signatureMeterId: uuid('signature_meter_id').references(() => meterDefinitions.id, { onDelete: 'set null' }),

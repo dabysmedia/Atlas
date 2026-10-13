@@ -1,3 +1,4 @@
+import { settlementArtStyleFor } from '../../shared/settlementArt.js';
 /**
  * Imports the owner's setting document (server/assets/lore/the-new-world-island.md) as an ordinary world:
  * linked wiki pages, the seven factions with their signature meters, and an unclaimed island grid.
@@ -385,7 +386,7 @@ export async function seedNewWorld(db: Db, opts: { name?: string } = {}) {
     const core = all.filter((d) => d.kind !== 'signature');
     for (const [i, f] of FACTIONS.entries()) {
       const [row] = await tx.insert(factions).values({
-        worldId: world.id, name: f.name, color: f.color, sigil: f.sigil, description: f.description,
+        worldId: world.id, name: f.name, color: f.color, sigil: f.sigil, description: f.description, settlementArtStyle: settlementArtStyleFor({name:f.name}),
         signatureMeterId: defs[i].id, wikiPageId: ids[f.page],
       }).returning();
       for (const d of [...core, defs[i]]) {

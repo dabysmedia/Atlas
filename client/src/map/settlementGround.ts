@@ -3,14 +3,18 @@ import type { TokenKind } from '../types';
 
 const tiles = new Map<string, HTMLCanvasElement>();
 /** Top-down settlement art is a terrain tile, clipped to the full hex and draped by the 3D renderer. */
-export function settlementGround(kind: TokenKind, color: string, orientation: Orientation) {
-  const key = `${kind}/${color}/${orientation}`;
+export function settlementGround(kind: TokenKind, color: string, orientation: Orientation, art?: HTMLImageElement) {
+  const key = `${kind}/${color}/${orientation}/${art?.src??'generic'}`;
   const cached = tiles.get(key); if (cached) return cached;
-  if (tiles.size > 100) tiles.clear();
-  const canvas = document.createElement('canvas'); canvas.width = canvas.height = 256;
+  if (tiles.size > 64) tiles.clear();
+  const canvas = document.createElement('canvas'); canvas.width = canvas.height = art ? 512 : 256;
   const g = canvas.getContext('2d')!;
-  g.translate(128, 128); g.scale(3.2, 3.2);
+  g.translate(canvas.width/2, canvas.height/2); g.scale(canvas.width/80, canvas.height/80);
   g.beginPath(); for (let i=0;i<6;i++) { const c=corner(i,40,orientation); i ? g.lineTo(c.x,c.y) : g.moveTo(c.x,c.y); } g.closePath(); g.clip();
+  if(art) {
+    g.drawImage(art,-40,-40,80,80);
+    tiles.set(key,canvas);return canvas;
+  }
   const military = kind === 'military_base' || kind === 'outpost';
   const rural = kind === 'village' || kind === 'hamlet';
   g.fillStyle = military ? '#655c48' : rural ? '#666746' : '#777365'; g.fillRect(-40,-40,80,80);

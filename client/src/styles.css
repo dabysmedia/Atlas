@@ -1450,3 +1450,5 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 .settlement-lots .rubble{background:rgba(180,80,70,.18);text-decoration:line-through}
 
 .settlement-hex-context { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:12px; color:var(--muted); font-size:12px; }
+
+.settlement-art-preview{display:flex;align-items:center;gap:16px;margin:10px 0;color:var(--muted);font-size:12px}.settlement-art-preview img{width:110px;height:110px;object-fit:contain}

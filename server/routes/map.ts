@@ -71,7 +71,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
         .from(claims).innerJoin(hexes, eq(hexes.id, claims.hexId)).where(eq(hexes.mapId, map.id)),
       db.select().from(tokens).where(eq(tokens.mapId, map.id)),
       db.select().from(settlements).where(eq(settlements.worldId, w.id)),
-      db.select({ id: factions.id, name: factions.name, color: factions.color, isParty: factions.isParty }).from(factions).where(eq(factions.worldId, w.id)),
+      db.select({ id: factions.id, name: factions.name, color: factions.color, isParty: factions.isParty, settlementArtStyle: factions.settlementArtStyle }).from(factions).where(eq(factions.worldId, w.id)),
       db.select({ id: campaigns.id, name: campaigns.name }).from(campaigns).where(eq(campaigns.worldId, w.id)),
       db.select(artMeta).from(mapArt).where(eq(mapArt.mapId, map.id)),
       db.select(modelMeta).from(mapModel).where(eq(mapModel.mapId, map.id)),

@@ -8,6 +8,7 @@ import {
 import { badRequest, logEvent, notFound, setMeter } from '../history.js';
 import { bandFor } from '../../shared/meters.js';
 import { getWorld, Uuid } from './worlds.js';
+import { SETTLEMENT_ART_KEYS, settlementArtStyleFor } from '../../shared/settlementArt.js';
 import { changed } from '../live.js';
 
 type P = { w: string; id: string; m: string };
@@ -55,6 +56,7 @@ export function factionRoutes(app: FastifyInstance, db: Db) {
     description: z.string().max(5000).optional(),
     sigil: z.string().max(40).nullable().optional(),
     isParty: z.boolean().optional(),
+    settlementArtStyle: z.enum(SETTLEMENT_ART_KEYS).nullable().optional(),
     signatureMeterId: Uuid.nullable().optional(),
     wikiPageId: Uuid.nullable().optional(),
   });
@@ -63,7 +65,7 @@ export function factionRoutes(app: FastifyInstance, db: Db) {
     const body = FactionBody.parse(req.body);
     await checkSignature(db, w.id, body.signatureMeterId);
     const f = await db.transaction(async (tx) => {
-      const [f] = await tx.insert(factions).values({ ...body, worldId: w.id }).returning();
+      const [f] = await tx.insert(factions).values({ ...body, settlementArtStyle: body.settlementArtStyle===undefined ? settlementArtStyleFor({name:body.name}) : body.settlementArtStyle, worldId: w.id }).returning();
       // Start every applicable meter at its default so values exist (and are traceable) from day one.
       const defs = await tx.select().from(meterDefinitions).where(eq(meterDefinitions.worldId, w.id));
       for (const d of defs.filter((d) => appliesTo(d, f))) {
@@ -88,8 +90,8 @@ export function factionRoutes(app: FastifyInstance, db: Db) {
         const existing = await tx.query.meterValues.findFirst({ where: and(eq(meterValues.factionId, f.id), eq(meterValues.meterId, body.signatureMeterId)) });
         if (def && !existing) await setMeter(tx, { worldId: w.id, factionId: f.id, factionName: row.name, meterId: def.id, value: def.defaultValue, cause: `Adopted ${def.name} as signature` });
       }
-      // The map holds only a faction's name and color: patched there, rather than every screen refetching the map.
-      changed(req, { patches: [{ op: 'faction', faction: { id: row.id, name: row.name, color: row.color } }] });
+      // Patch the faction identity and architecture into every open map.
+      changed(req, { patches: [{ op: 'faction', faction: { id: row.id, name: row.name, color: row.color, settlementArtStyle: row.settlementArtStyle } }] });
       return row;
     });
   });

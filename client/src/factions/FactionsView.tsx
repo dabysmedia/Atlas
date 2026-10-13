@@ -11,6 +11,7 @@ import { isLowTone } from '../../../shared/meters';
 import { usePageIndex } from '../wiki/usePages';
 import { Dialog } from '../components/Dialog';
 import { toast, toastError } from '../components/toast';
+import { SETTLEMENT_ART_STYLES } from '../../../shared/settlementArt';
 import { FactionSigil, SIGILS } from './FactionSigil';
 
 const PALETTE = ['#c0392b', '#3b6fd4', '#2e9e6a', '#8e44ad', '#d68910', '#16a3b8', '#b8466e', '#7f8c8d', '#c2a83e', '#5d6dbe'];
@@ -85,9 +86,10 @@ function NewFactionDialog({ open, onClose, meters, onCreated }: { open: boolean;
   const [name, setName] = useState('');
   const [color, setColor] = useState(PALETTE[2]);
   const [sig, setSig] = useState('');
+  const [architecture,setArchitecture]=useState('');
   const create = useMutation({
-    mutationFn: () => api(`/api/worlds/${world.id}/factions`, { body: { name, color, signatureMeterId: sig || null } }),
-    onSuccess: () => { onCreated(); onClose(); setName(''); toast('Faction founded'); },
+    mutationFn: () => api(`/api/worlds/${world.id}/factions`, { body: { name, color, signatureMeterId: sig || null, ...(architecture?{settlementArtStyle:architecture}:{}) } }),
+    onSuccess: () => { onCreated(); onClose(); setName(''); setArchitecture(''); toast('Faction founded'); },
     onError: toastError,
   });
   const sigs = meters.filter((m) => m.kind === 'signature');
@@ -113,6 +115,7 @@ function NewFactionDialog({ open, onClose, meters, onCreated }: { open: boolean;
           </select>
           {!sigs.length && <div className="faint" style={{ fontSize: 12, marginTop: 4 }}>Add signature meters (Zeal, Grandeur…) under Meter definitions.</div>}
         </div>
+        <label className="field">Settlement architecture<select className="select" value={architecture} onChange={e=>setArchitecture(e.target.value)}><option value="">Automatic from faction name</option>{SETTLEMENT_ART_STYLES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}<option value="generic">Generic settlement art</option></select></label>
         <div className="actions">
           <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
           <button className="btn primary" disabled={!name.trim() || create.isPending}>Create</button>
@@ -140,8 +143,8 @@ function FactionRow({ faction, meters, tables, open, onToggle }: { faction: Fact
       await api(`/api/worlds/${world.id}/factions/${faction.id}`, { method: 'PATCH', body: p });
       if ('signatureMeterId' in p) qc.invalidateQueries({ queryKey: qk.factions(world.id) });
       // The map shows the name and color: patch them in rather than read the whole map again.
-      if ('color' in p || 'name' in p) {
-        const lite = { ...('name' in p ? { name: p.name } : {}), ...('color' in p ? { color: p.color } : {}) };
+      if ('color' in p || 'name' in p || 'settlementArtStyle' in p) {
+        const lite = { ...('settlementArtStyle' in p ? {settlementArtStyle:p.settlementArtStyle} : {}), ...('name' in p ? { name: p.name } : {}), ...('color' in p ? { color: p.color } : {}) };
         qc.setQueryData<MapData>(qk.map(world.id), (d) => (d ? { ...d, factions: d.factions.map((f) => (f.id === faction.id ? { ...f, ...lite } : f)) } : d));
       }
     } catch (e) { toastError(e); qc.invalidateQueries({ queryKey: qk.factions(world.id) }); qc.invalidateQueries({ queryKey: qk.map(world.id) }); }
@@ -218,6 +221,7 @@ function FactionRow({ faction, meters, tables, open, onToggle }: { faction: Fact
                   {sigs.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
               </label>
+              <label className="row" style={{gap:8}}><span className="label" style={{margin:0}}>Settlement architecture</span><select className="select" aria-label="Settlement architecture" style={{width:'auto'}} value={faction.settlementArtStyle??''} onChange={e=>patch({settlementArtStyle:e.target.value||null})}><option value="">Automatic from faction name</option>{SETTLEMENT_ART_STYLES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}<option value="generic">Generic settlement art</option></select></label>
               <div className="spacer" />
               {faction.wikiPageId
                 ? <button className="btn ghost sm" title="Open wiki page" onClick={() => navigate(`/w/${world.id}/wiki/${faction.wikiPageId}`)}><BookOpen size={14} /> Wiki</button>

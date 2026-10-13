@@ -540,11 +540,9 @@ export class HexMapRenderer3D extends HexMapRenderer {
       for (const token of group) {
         const p = this.tokenPos(token); if (!p) continue;
         const foot = this.worldToScreen(p.x,p.y);
-        // Actual projection accounts for perspective, terrain height, and the current camera angle.
-        const edges = [this.worldToScreen(p.x + HEX_SIZE * 0.82,p.y), this.worldToScreen(p.x,p.y + HEX_SIZE * 0.82)];
-        const hexRadius = Math.min(...edges.map(e => Math.hypot(e.x-foot.x,e.y-foot.y)));
-        const slotFit = group.length > 1 ? 0.38 * 0.9 * Math.sin(Math.PI / group.length) / 0.82 : 0.8;
-        const radius = Math.max(1,Math.min(18,hexRadius * slotFit));
+        // HUD badges have a fixed screen size. Perspective only moves their map anchor;
+        // a foreshortened hex must never shrink a distant or steeply viewed token.
+        const radius = 18;
         const modeled = this.miniatureMode() && this.miniatures.has(token.id);
         let modelBottom = foot.y;
         let left=Infinity,top=Infinity,right=-Infinity,bottom=-Infinity;

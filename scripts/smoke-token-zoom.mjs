@@ -35,7 +35,7 @@ try {
     else if(ratio<1.45)assert(alpha>0&&alpha<1,'nameplates fade gradually with zoom');
     else assert.equal(alpha,1,'exploration shows names fully');
     for(const p of state.positions){assert(p.drift<.001,'one shared world position');assert(p.fit<=40*Math.sqrt(3)/2,'footprint stays in its hex');assert(Math.abs(p.lift-5)<=.61);}
-    if(!modeled) for(const tile of state.tiles) for(const other of state.tiles) if(tile.id!==other.id) assert(Math.hypot(tile.x-other.x,tile.y-other.y)>=tile.radius+other.radius,'overview glyphs do not overlap');
+    for(const tile of state.tiles) assert.equal(tile.radius,18,'HUD badges keep the same screen size at every zoom and in shared hexes');
     for(const tile of state.tiles){assert(Math.hypot(tile.x-tile.foot.x,tile.y-tile.foot.y)<.001,'2D marker anchor matches terrain');if(modeled)assert(tile.plate.y>=tile.modelBottom+8);}
     const picks=await page.evaluate(()=>{const r=window.__atlasMap;return r.pieceTiles.map(t=>{r.hoveredTokenId=t.token.id;const p=t.plate,x=t.modeled?p.x+p.width/2:t.x,y=t.modeled?p.y+p.height-2:t.y;const picked=r.tokenAt(x,y)?.id;return {id:t.token.id,picked};});});assert(picks.every(t=>t.id===t.picked),`each shared-hex piece is selectable at ratio ${ratio}: ${JSON.stringify(picks)}`);
     const pinned=await page.evaluate(()=>{const r=window.__atlasMap;r.layoutPieces();return r.pieceTiles.every(t=>!t.plate||Math.abs(t.plate.x+t.plate.width/2-t.x)<.001&&Math.abs(t.plate.y-(t.modeled?t.modelBottom+10:t.y+t.radius+5))<.001);});assert(pinned,'names remain pinned to their own icons/models');
@@ -53,6 +53,14 @@ try {
   for(const angle of [0,Math.PI/2,Math.PI,Math.PI*1.5]) {
     const clear=await page.evaluate(angle=>{const r=window.__atlasMap;r.yaw=r.yawT=angle;r.tiltBias=r.tiltBiasT=.4;r.frame(performance.now(),false);r.layoutPieces();return r.pieceTiles.filter(t=>t.modeled).every(t=>t.plate.y>=t.modelBottom+8);},angle);assert(clear);
   }
+  // Ordinary HUD tokens must not inherit the ground's perspective compression.
+  const badge=await api(`${path}/tokens`,'POST',{kind:'unit',name:'Constant-size badge',hexId:neighbor.id,factionId:faction.id});
+  await page.waitForFunction(id=>window.__atlasMap.tokens.some(t=>t.id===id),badge.id);
+  for(const angle of [0,Math.PI/2,Math.PI,Math.PI*1.5]) for(const pan of [[0,0],[100,-100],[-100,100]]) {
+    const state=await page.evaluate(({id,hexId,angle,pan})=>{const r=window.__atlasMap,h=r.hexById(hexId);r.saved=null;r.tiltBias=r.tiltBiasT=1.32;r.yaw=r.yawT=angle;r.setCamera({x:h.cx+pan[0],y:h.cy+pan[1],zoom:r.minZoom()*4});r.frame(performance.now(),false);r.layoutPieces();const t=r.pieceTiles.find(t=>t.token.id===id);return {radius:t.radius,modeled:t.modeled,tilt:r.tiltNow,picked:r.tokenAt(t.x,t.y)?.id,pinned:Math.abs(t.plate.x+t.plate.width/2-t.x)<.001};},{id:badge.id,hexId:neighbor.id,angle,pan});
+    assert.equal(state.radius,18,'badge size survives maximum tilt, rotation, and panning');assert.equal(state.modeled,false);assert(state.tilt>1.3,'exercise maximum tilt');assert.equal(state.picked,badge.id);assert(state.pinned,'nameplate stays attached');
+  }
+  await page.screenshot({path:`${shots}/maximum-tilt-badges.png`});
   await page.setViewportSize({width:390,height:844});await inspect(4);await page.screenshot({path:`${shots}/mobile-models.png`});
   const after=await api(`${path}/map`);assert.deepEqual(after.hexes.sort((a,b)=>a.id.localeCompare(b.id)),before.hexes.sort((a,b)=>a.id.localeCompare(b.id)));
   assert.deepEqual(errors,[]);console.log(JSON.stringify({overview2D:true,overviewLabelsHidden:true,exploration3D:true,repeatZoom:true,positionsMatch:true,footprintsFit:true,platesClear:true,namesPinned:true,hoverOnTop:true,sharedHexPicking:true,hexesUnchanged:true,errors}));

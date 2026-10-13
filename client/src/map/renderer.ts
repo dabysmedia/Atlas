@@ -11,6 +11,7 @@
  */
 import { axialToOffset, corner, DIRS, HEX_SIZE, hexLabel, hexToPixel, key, pixelToHex, type Orientation } from '../../../shared/hex';
 import type { ArtPlacement, Claim, FactionLite, Hex, HexStateType, TerrainType, Token, TokenKind, Settlement } from '../types';
+import { settlementGround } from './settlementGround';
 import { TerrainPainter, type PaintHex } from './painter';
 import { MARKER_RADIUS, markerSprite } from './markers';
 import { isMajorCity, isNotableKind } from '../../../shared/markers';
@@ -522,7 +523,7 @@ export class HexMapRenderer {
 
   tokenAt(sx: number, sy: number): Token | undefined {
     for (const t of [...this.tokens].sort((a, b) => order(b) - order(a))) {
-      if (this.floatingPlace(t)) continue;
+      if (t.settlementId || this.floatingPlace(t)) continue;
       if (this.tokenVisibility(t) < 0.05) continue;
       const pos = this.tokenPos(t);
       if (!pos) continue;
@@ -816,7 +817,7 @@ export class HexMapRenderer {
       if (detail > 0.55) {
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         for (const c of visible) for (const h of c.hexes) {
-          if (!h.name || !inView(h) || this.tokens.some((t) => t.hexId === h.id && (t.kind === 'city' || t.kind === 'outpost'))) continue;
+          if (!h.name || !inView(h) || this.settlements.some(s=>s.hexIds.includes(h.id))) continue;
           ctx.globalAlpha = smoothstep(0.55, 0.9, detail);
           drawCaption(ctx, h.name, h.cx, h.cy + HEX_SIZE * 0.62, z, 10.5, '#f4ecd8');
         }
@@ -840,7 +841,7 @@ export class HexMapRenderer {
       if (!token || this.tokenVisibility(token)<0.01) continue;
       const selected=this.selectedTokenId===token.id;
       ctx.save();ctx.strokeStyle=this.factionColor.get(settlement.factionId??'')??'#d6b06a';ctx.lineWidth=(selected?2.6:1.3)/z;
-      for (const id of settlement.hexIds) {const h=this.byId.get(id);if(!h||this.showFog&&this.fog&&!this.fog.has(id))continue;ctx.save();ctx.translate(h.cx,h.cy);ctx.globalAlpha=selected?.8:.35;ctx.stroke(this.hexPath);ctx.globalAlpha=selected?.13:.045;ctx.fillStyle=ctx.strokeStyle;ctx.fill(this.hexPath);ctx.restore();}ctx.restore();
+      for (const id of settlement.hexIds) {const h=this.byId.get(id);if(!h||!inView(h)||this.showFog&&this.fog&&!this.fog.has(id))continue;ctx.save();ctx.translate(h.cx,h.cy);if(!(this.settlementUsesModel(token)&&h.id===token.hexId)){ctx.globalAlpha=token.visibleToPlayers?1:.65;ctx.drawImage(settlementGround(token.kind,ctx.strokeStyle as string,this.o),-HEX_SIZE,-HEX_SIZE,HEX_SIZE*2,HEX_SIZE*2);}ctx.globalAlpha=selected?.8:.35;ctx.stroke(this.hexPath);ctx.globalAlpha=selected?.13:.045;ctx.fillStyle=ctx.strokeStyle;ctx.fill(this.hexPath);ctx.restore();}ctx.restore();
     }
     if (this.settlementInfluence.size) {ctx.save();ctx.fillStyle='rgba(143,232,226,.18)';ctx.strokeStyle='#8fe8e2';ctx.lineWidth=1/z;for(const id of this.settlementInfluence){const h=this.byId.get(id);if(h&&!(this.showFog&&this.fog&&!this.fog.has(id))){ctx.save();ctx.translate(h.cx,h.cy);ctx.fill(this.hexPath);ctx.stroke(this.hexPath);ctx.restore();}}ctx.restore();}
     if (this.settlementSelection.size) {ctx.save();ctx.strokeStyle='#8fe8e2';ctx.fillStyle='rgba(143,232,226,.16)';ctx.lineWidth=2/z;for(const id of this.settlementSelection){const h=this.byId.get(id);if(h){ctx.save();ctx.translate(h.cx,h.cy);ctx.fill(this.hexPath);ctx.stroke(this.hexPath);ctx.restore();}}ctx.restore();}
@@ -1112,7 +1113,8 @@ export class HexMapRenderer {
     if (!t.hexId) return null;
     const h = this.byId.get(t.hexId);
     if (!h) return null;
-    const here = this.tokens.filter((x) => x.hexId === t.hexId && x.id !== this.dragToken?.token.id);
+    if(t.settlementId)return {x:h.cx,y:h.cy};
+    const here = this.tokens.filter((x) => !x.settlementId && x.hexId === t.hexId && x.id !== this.dragToken?.token.id);
     const fixed = here.filter((x) => isNotableKind(x.kind));
     const movers = here.filter((x) => !isNotableKind(x.kind)).sort((a, b) => a.id.localeCompare(b.id));
     if (fixed.includes(t)) {
@@ -1135,6 +1137,8 @@ export class HexMapRenderer {
   protected tokenAlpha(_x: number, _y: number) { return 1; }
   /** Drawing and hit testing share mode visibility. */
   protected tokenVisibility(_token: Token) { return 1; }
+  /** A loaded settlement model replaces the ground tile on its anchor hex. */
+  protected settlementUsesModel(_token: Token) { return false; }
   /** The 3D view gives notable places their own shared drawing/picking layout. */
   protected floatingPlace(_token: Token) { return false; }
 
@@ -1144,7 +1148,7 @@ export class HexMapRenderer {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     const plates: { text: string; x: number; y: number; kind: TokenKind; color: string; side: boolean; alpha: number }[] = [];
     for (const t of ordered) {
-      if (this.floatingPlace(t)) continue;
+      if (t.settlementId || this.floatingPlace(t)) continue;
       const visibility = this.tokenVisibility(t);
       if (visibility < 0.01) continue;
       const p = this.tokenPos(t);
@@ -1187,6 +1191,13 @@ export class HexMapRenderer {
           && this.tokens.some((x) => x.hexId === t.hexId && (x.kind === 'city' || x.kind === 'outpost'));
         plates.push({ text: t.name, x: beside ? s.x + r + 6 : s.x, y: beside ? s.y : s.y + r + 11 + (lift ? lift * 0.55 : 0), kind: t.kind, color, side: beside, alpha: fade });
       }
+    }
+    for(const settlement of this.settlements) {
+      const token=this.tokens.find(t=>t.settlementId===settlement.id);
+      const h=settlement.hexIds.map(id=>this.byId.get(id)).find(h=>h&&!(this.showFog&&this.fog&&!this.fog.has(h.id)));
+      if(!token||!h||this.floatingPlace(token))continue;
+      const s=this.worldToScreen(h.cx,h.cy);
+      plates.push({text:settlement.name,x:s.x,y:s.y+20,kind:token.kind,color:this.factionColor.get(settlement.factionId??'')??'#d6b06a',side:false,alpha:token.visibleToPlayers?1:.65});
     }
     // Name plates on top of every marker.
     ctx.textBaseline = 'middle';

@@ -39,7 +39,7 @@ import { GridProjection, GRID_GLSL } from './gridProjection';
 import { isNotableKind, isMajorCity } from '../../../shared/markers';
 import { FactionLabels, type LabelPlace, type LabelSpot } from './labels3d';
 import type { CardAnchor, FactionArea } from '../map/FactionCard';
-import { drawPlaceGlyph, placeDiamond, settlementBadge } from '../map/markers';
+import { drawPlaceGlyph, placeDiamond } from '../map/markers';
 import { drawTokenNameplate, tokenNameplateSize } from './tokenNameplate';
 import { markerSprite } from '../map/markers';
 import { Miniatures } from './miniatures';
@@ -518,7 +518,9 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected tokenLift(kind: TokenKind, r: number) { return r * (kind === 'city' || kind === 'outpost' ? 1.15 : 1.35); }
   protected floatingPlace(_token: Token) { return true; }
   /** Both HUD indicators and miniatures use the same positions within their hex. */
+  protected settlementUsesModel(token: Token) { return this.settlementModelMode && this.miniatures.has(token.id); }
   protected slotPos(token: Token) {
+    if (token.settlementId && token.hexId) {const hex=this.byId.get(token.hexId);return hex?{x:hex.cx,y:hex.cy}:null;}
     if (isNotableKind(token.kind)) return super.slotPos(token);
     if (!token.hexId) return null;
     const hex = this.byId.get(token.hexId); if (!hex) return null;
@@ -527,6 +529,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     const radius = peers.length > 1 ? HEX_SIZE * 0.38 : 0;
     return { x: hex.cx + Math.cos(angle) * radius, y: hex.cy + Math.sin(angle) * radius };
   }
+  private settlementModelMode=false;
   private miniatureMode() { return this.cam.zoom / this.minZoom() >= 1.45; }
   private nameplateAlpha() { return 1 - this.overviewAlpha(); }
   private layoutPieces() {
@@ -574,7 +577,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected layoutPlaces() {
     const groups = new Map<string, Token[]>();
     for (const token of this.tokens) {
-      if (!isNotableKind(token.kind) || !token.hexId || this.tokenVisibility(token) < 0.01) continue;
+      if (token.settlementId || !isNotableKind(token.kind) || !token.hexId || this.tokenVisibility(token) < 0.01) continue;
       const key = this.dragToken?.token.id === token.id ? `drag:${token.id}` : token.hexId;
       const group = groups.get(key) ?? [];
       group.push(token); groups.set(key, group);
@@ -642,12 +645,13 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.layoutPlaces();
     for (const tile of [...this.placeTiles].reverse()) {
       if (tile.alpha < 0.05) continue;
-      if (!(this.miniatureMode() && this.miniatures.has(tile.token.id)) && (tile.token.settlementId ? Math.abs(sx-tile.x)<=24 && Math.abs(sy-tile.y)<=25 : Math.abs(sx - tile.x) + Math.abs(sy - tile.y) <= 23)) return tile.token;
+      if (!(this.miniatureMode() && this.miniatures.has(tile.token.id)) && Math.abs(sx - tile.x) + Math.abs(sy - tile.y) <= 23) return tile.token;
     }
     for (const tile of [...this.placeTiles].reverse()) {
       if (tile.alpha < 0.05) continue;
       if (sx >= tile.nx && sx <= tile.nx + tile.width && sy >= tile.ny - 7 && sy <= tile.ny + tile.height - 7) return tile.token;
     }
+    for(const name of this.settlementNames)if(Math.abs(sx-name.x)<=name.width/2&&Math.abs(sy-name.y)<=10)return name.token;
     return super.tokenAt(sx, sy);
   }
 
@@ -718,10 +722,10 @@ export class HexMapRenderer3D extends HexMapRenderer {
       }
       if (this.selectedTokenId === tile.token.id && !(this.miniatureMode() && this.miniatures.has(tile.token.id))) {
         ctx.strokeStyle = '#8fe8e2'; ctx.lineWidth = 2; ctx.shadowColor = '#8fe8e2'; ctx.shadowBlur = 8;
-        ctx.beginPath(); if(tile.token.settlementId) ctx.roundRect(tile.x-26,tile.y-27,52,50,5); else { ctx.moveTo(tile.x, tile.y - 26); ctx.lineTo(tile.x + 26, tile.y); ctx.lineTo(tile.x, tile.y + 26); ctx.lineTo(tile.x - 26, tile.y); ctx.closePath(); } ctx.stroke(); ctx.shadowBlur = 0;
+        ctx.beginPath(); ctx.moveTo(tile.x, tile.y - 26); ctx.lineTo(tile.x + 26, tile.y); ctx.lineTo(tile.x, tile.y + 26); ctx.lineTo(tile.x - 26, tile.y); ctx.closePath(); ctx.stroke(); ctx.shadowBlur = 0;
       }
       if (!(this.miniatureMode() && this.miniatures.has(tile.token.id))) {
-        const sprite = tile.token.settlementId ? settlementBadge(tile.token.kind,tile.color,this.dpr,this.settlements.some(s=>s.id===tile.token.settlementId&&(s.data.profile as {capital?:boolean})?.capital)) : placeDiamond(tile.token.kind, tile.color, this.dpr, isMajorCity(tile.token));
+        const sprite = placeDiamond(tile.token.kind, tile.color, this.dpr, isMajorCity(tile.token));
         ctx.drawImage(sprite, tile.x - 28, tile.y - 28, 56, 56);
       }
       ctx.font = "600 12px 'EB Garamond Variable', Georgia, serif";
@@ -731,6 +735,26 @@ export class HexMapRenderer3D extends HexMapRenderer {
         ctx.strokeText(line, tile.nx + 20, tile.ny + index * 14); ctx.fillText(line, tile.nx + 20, tile.ny + index * 14);
       });
       drawPlaceGlyph(ctx, tile.token.kind, isMajorCity(tile.token), tile.nx + 7, tile.ny, 12, tile.color);
+    }
+    ctx.restore();
+    this.drawSettlementNames();
+  }
+  /** Settlement names sit at the ground footprint, outside the elevated POI layout. */
+  private settlementNames: {token:Token;x:number;y:number;width:number}[]=[];
+  private drawSettlementNames() {
+    const ctx=this.ctx;this.settlementNames=[];ctx.save();ctx.setTransform(this.dpr,0,0,this.dpr,0,0);
+    ctx.font="600 12px 'EB Garamond Variable', Georgia, serif";ctx.textAlign='center';ctx.textBaseline='middle';
+    for(const settlement of this.settlements){
+      const token=this.tokens.find(t=>t.settlementId===settlement.id);if(!token)continue;
+      const hexes=settlement.hexIds.map(id=>this.byId.get(id)).filter(h=>h&&!(this.showFog&&this.fog&&!this.fog.has(h.id)));
+      if(!hexes.length)continue;
+      const h=hexes.find(h=>h!.id===token.hexId)??hexes[0];
+      const ground=this.groundScreen(h!.cx,h!.cy,{x:0,y:0});
+      if(ground.x<0||ground.y<0||ground.x>this.w||ground.y>this.h)continue;
+      const width=Math.min(180,ctx.measureText(settlement.name).width+16),y=ground.y+20;
+      ctx.globalAlpha=token.visibleToPlayers?1:.65;ctx.fillStyle='rgba(9,21,29,.78)';ctx.beginPath();ctx.roundRect(ground.x-width/2,y-10,width,20,3);ctx.fill();
+      ctx.fillStyle=this.selectedTokenId===token.id?'#8fe8e2':'#f4ead4';ctx.fillText(settlement.name,ground.x,y,width-10);
+      this.settlementNames.push({token,x:ground.x,y,width});
     }
     ctx.restore();
   }
@@ -1106,6 +1130,9 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.selectionMask.mesh.material.uniforms.uTime.value = now;
     this.updateGrid();
     this.applyLight(now);
+    const modelMode=this.miniatureMode();
+    if(modelMode!==this.settlementModelMode){this.settlementModelMode=modelMode;this.dirty=true;}
+    this.miniatures.update(this.tokens, t => this.tokenPos(t), (x, y) => this.groundAt(x, y), () => this.invalidate(), { now, hovered: this.hoveredTokenId, selected: this.selectedTokenId, dragging: this.dragToken?.token.id ?? null, still: this.stills });
     this.updateOverlay(now, false);
     this.updateNeon(now);
     this.fitShadow();
@@ -1115,7 +1142,6 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.miniatures.group.visible = this.miniatureMode();
     if (this.pointer && !this.stills) this.hoveredTokenId = this.tokenAt(this.pointer.x, this.pointer.y)?.id ?? null;
     else this.hoveredTokenId = null;
-    this.miniatures.update(this.tokens, t => this.tokenPos(t), (x, y) => this.groundAt(x, y), () => this.invalidate(), { now, hovered: this.hoveredTokenId, selected: this.selectedTokenId, dragging: this.dragToken?.token.id ?? null, still: this.stills });
     this.gl.render(this.scene, this.camera);
     this.layoutLabels(now);
     this.drawHud(now);

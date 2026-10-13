@@ -13,6 +13,7 @@ import { emptyHexPresentation, RESOURCE_KINDS, type HexPresentation, type HexRes
 import { Diamond, MarkerIcon, Prop } from './PanelPrimitives';
 import { AddMapMarker } from './AddMapMarker';
 import { usePlayer } from './PieceDrawer';
+import { settlementAtHex } from './settlementHex';
 import { placeDiamond } from './markers';
 
 type HexFields = Pick<Hex, 'name' | 'terrain' | 'state' | 'notes' | 'wikiPageId'>;
@@ -75,7 +76,8 @@ export function HexDossier({ hex, data, fogCampaignId, explored, label, onClose,
   const TerrainIcon = terrainIcon(props.terrain), accent = terrain?.color ?? world.accent;
   const claims = data.claims.filter(c => c.hexId === hex.id), control = claims.find(c => c.kind === 'control'), others = claims.filter(c => c.kind !== 'control');
   const controlling = data.factions.find(f => f.id === control?.factionId), campaign = data.campaigns.find(c => c.id === fogCampaignId);
-  const present = data.tokens.filter(t => t.hexId === hex.id || t.settlementId && data.settlements.some(s=>s.id===t.settlementId && s.hexIds.includes(hex.id))), places = present.filter(t => isNotableKind(t.kind)), pieces = present.filter(t => !isNotableKind(t.kind));
+  const settlement=settlementAtHex(data,hex.id);
+  const present = data.tokens.filter(t => !t.settlementId && t.hexId === hex.id), places = present.filter(t => isNotableKind(t.kind)), pieces = present.filter(t => !isNotableKind(t.kind));
   const patchDraft = (patch: Partial<HexPresentation>) => setDraft(d => d ? { ...d, ...patch } : d);
   const patchHex = (patch: Partial<HexFields>) => setDraft(d => d ? { ...d, hex: { ...d.hex, ...patch } } : d);
   const patchResource = (id: string, patch: Partial<HexResource>) => setDraft(d => d ? { ...d, resources: d.resources.map(r => r.id === id ? { ...r, ...patch } : r) } : d);
@@ -150,6 +152,7 @@ export function HexDossier({ hex, data, fogCampaignId, explored, label, onClose,
       <div className="hex-hero-title"><span className="hex-eyebrow">{terrain?.name ?? props.terrain}</span><h2>{props.name || `Hex ${label}`}</h2><div className="hex-hero-status"><i style={{ background: state?.color ?? accent }} />{state?.name ?? props.state}{campaign && <><span className="dot" />{explored ? 'Explored' : 'Unexplored'}</>}</div></div>
     </div>
     <div className={`hex-dossier-body scroll ${edit ? 'editing' : ''}`}>
+      {settlement&&<button className="btn ghost" disabled={edit&&dirty} onClick={()=>onFocus({kind:'hex',id:hex.id})}>Return to {settlement.settlement.name}</button>}
       {details.isPending && <p className="faint" role="status">Opening the atlas…</p>}
       {details.isError && <div className="hex-empty">{details.error instanceof ApiError && details.error.status === 404 ? 'These details have not been discovered.' : <><p>Details could not be loaded.</p><button className="btn ghost sm" onClick={() => details.refetch()}>Retry</button></>}</div>}
       {conflict && <p className="sheet-conflict" role="alert">This hex changed on another screen. Cancel to load the latest details before editing again.</p>}

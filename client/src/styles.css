@@ -1448,3 +1448,5 @@ input.panel-title::placeholder { color: rgba(240,212,150,0.55); }
 .settlement-lots .built{background:rgba(214,176,106,.12);border-style:solid}
 .settlement-lots .residential{background:rgba(89,175,145,.18)}
 .settlement-lots .rubble{background:rgba(180,80,70,.18);text-decoration:line-through}
+
+.settlement-hex-context { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:12px; color:var(--muted); font-size:12px; }

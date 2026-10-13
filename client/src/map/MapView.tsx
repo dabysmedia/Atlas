@@ -1,4 +1,6 @@
-import { FoundSettlement } from './SettlementPanel';
+import { settlementAtHex } from './settlementHex';
+import { profileFor, SETTLEMENT_TYPES } from '../../../shared/settlements';
+import { FoundSettlement, SettlementPanel } from './SettlementPanel';
 import { TokenInspector } from './TokenInspector';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
@@ -225,12 +227,11 @@ export function MapView() {
   useEffect(() => {
     const r = rendererRef.current;
     if (!r) return;
-    const previousFaction = r.focusFactionId;
     r.selectedId = focus?.kind === 'hex' ? focus.id : null;
-    r.selectedTokenId = focus?.kind === 'token' ? focus.id : null;
+    r.selectedTokenId = focus?.kind === 'token' ? focus.id : focus?.kind === 'hex' && data ? settlementAtHex(data,focus.id)?.token.id ?? null : null;
     r.focusFactionId = focus?.kind === 'faction' ? focus.id : null;
-    if (!is3d(r) || previousFaction !== r.focusFactionId) r.invalidate();
-  }, [focus, gen]);
+    r.invalidate();
+  }, [focus, data, gen]);
   useEffect(() => {
     const r = rendererRef.current; if (!r) return;
     const token = data?.tokens.find(t => t.id === (placing?.id ?? (focus?.kind === 'token' ? focus.id : null)));
@@ -532,7 +533,7 @@ export function MapView() {
       if (t === 'select') {
         if (toolRef.current.placing) { mode = 'maybe-click'; return; }
         const tok = r().tokenAt(p.x, p.y);
-        if (tok?.settlementId) { setFocus({kind:'token',id:tok.id}); mode='none'; return; }
+        if (tok?.settlementId) { const h=r().hexAt(p.x,p.y); const settlement=dataRef.current?.settlements.find(s=>s.id===tok.settlementId); setFocus({kind:'hex',id:h&&settlement?.hexIds.includes(h.id)?h.id:tok.hexId!}); mode='none'; return; }
         if (tok) { if (toolRef.current.player && tok.factionId !== dataRef.current?.playerFactionId) { setFocus({ kind: 'token', id: tok.id }); mode = 'none'; return; } dragTok = tok; r().selectedTokenId = tok.id; r().moveHexIds = canMoveToken(tok, toolRef.current.player, dataRef.current?.playerFactionId) ? tokenDestinations(tok, dataRef.current?.hexes ?? []) : new Set(); r().invalidate(); mode = 'token'; hold(); return; }
         mode = 'maybe-click';
       } else {
@@ -739,9 +740,10 @@ export function MapView() {
     const ctrl = data.claims.find((c) => c.hexId === hoverHex.id && c.kind === 'control');
     const f = ctrl ? data.factions.find((x) => x.id === ctrl.factionId) : undefined;
     const t = world.terrainTypes.find((x) => x.key === hoverHex.terrain);
-    const toks = data.tokens.filter((x) => x.hexId === hoverHex.id);
+    const settlement = settlementAtHex(data,hoverHex.id);
+    const toks = data.tokens.filter((x) => !x.settlementId && x.hexId === hoverHex.id);
     const contested = data.claims.some((c) => c.hexId === hoverHex.id && c.kind === 'contested');
-    return { hex: hoverHex, faction: f, terrain: t, tokens: toks, contested };
+    return { hex: hoverHex, settlement, faction: settlement ? data.factions.find(f=>f.id===settlement.settlement.factionId) : f, terrain: t, tokens: toks, contested };
   }, [hoverHex, data, world.terrainTypes]);
 
   const r = rendererRef.current;
@@ -754,6 +756,8 @@ export function MapView() {
   };
   const focusHex = focus?.kind === 'hex' && data ? data.hexes.find((h) => h.id === focus.id) : undefined;
   const focusToken = focus?.kind === 'token' && data ? data.tokens.find((t) => t.id === focus.id) : undefined;
+  const settlementToken = focusHex && data ? settlementAtHex(data,focusHex.id)?.token : focusToken?.settlementId ? focusToken : undefined;
+  const settlementHex = focusHex ?? data?.hexes.find(h=>h.id===settlementToken?.hexId);
   const territoryCounts = useMemo(() => {
     const m = new Map<string, number>();
     data?.claims.forEach((c) => { if (c.kind === 'control') m.set(c.factionId, (m.get(c.factionId) ?? 0) + 1); });
@@ -999,8 +1003,9 @@ export function MapView() {
 
       {hover && hoverInfo && !focus && !align && (
         <div className="tooltip" style={{ left: hover.x, top: hover.y }}>
-          <div className="tt-title">{hoverInfo.hex.name || hoverInfo.terrain?.name || hoverInfo.hex.terrain}<span className="faint">{r?.label(hoverInfo.hex)}</span></div>
-          {hoverInfo.hex.name && <div className="row" style={{ gap: 6 }}><span className="swatch" style={{ background: hoverInfo.terrain?.color }} />{hoverInfo.terrain?.name}</div>}
+          <div className="tt-title">{hoverInfo.settlement?.settlement.name || hoverInfo.hex.name || hoverInfo.terrain?.name || hoverInfo.hex.terrain}<span className="faint">{r?.label(hoverInfo.hex)}</span></div>
+          {hoverInfo.settlement && <div className="muted">{SETTLEMENT_TYPES.find(t=>t.key===profileFor(hoverInfo.settlement!.settlement).type)?.label}</div>}
+          {!hoverInfo.settlement && hoverInfo.hex.name && <div className="row" style={{ gap: 6 }}><span className="swatch" style={{ background: hoverInfo.terrain?.color }} />{hoverInfo.terrain?.name}</div>}
           {hoverInfo.faction && <div className="row" style={{ gap: 6 }}><Diamond color={hoverInfo.faction.color} size={8} />{hoverInfo.faction.name}</div>}
           {hoverInfo.contested && <div className="tone-warn">Contested</div>}
           {hoverInfo.tokens.map((t) => <div key={t.id} className="muted">{t.name}</div>)}
@@ -1019,13 +1024,17 @@ export function MapView() {
 
       <AnimatePresence>
         {placing && <div className="piece-place-hint panel" role="status">{placing.deployCopy ? `Choose a hex for another ${placing.name}` : placing.hexId ? `Choose the next adjacent hex for ${placing.name}` : `Choose a hex to deploy ${placing.name}`}<button className="iconbtn" aria-label="Cancel token placement" onClick={() => setPlacing(null)}><X size={14} /></button></div>}
-        {data && focusToken && player && !placing && <TokenInspector token={focusToken} data={data} onClose={() => setFocus(null)} onMove={() => { setPlacing(focusToken); setDrawerOpen(false); }} onLocate={() => { const p = r?.tokenPos(focusToken); if (p && r) centerOn(p.x,p.y,r.target.zoom); }}/> }
-        {data && focusHex && !align && !placing && (
+        {data && focusToken && !settlementToken && player && !placing && <TokenInspector token={focusToken} data={data} onClose={() => setFocus(null)} onMove={() => { setPlacing(focusToken); setDrawerOpen(false); }} onLocate={() => { const p = r?.tokenPos(focusToken); if (p && r) centerOn(p.x,p.y,r.target.zoom); }}/> }
+        {data && settlementToken && !focus?.hexRecords && !align && !placing && <SettlementPanel key={`settlement-${settlementToken.id}`} token={settlementToken} data={data} hex={settlementHex} onFocus={setFocus} onHexDetails={()=>{if(settlementHex)setFocus({kind:'hex',id:settlementHex.id,hexRecords:true});}} interiorFooter={settlementHex?interiors.sidebar(settlementHex.id):undefined} onClose={()=>setFocus(null)} onInfluence={setSettlementInfluence}
+          onFootprint={s=>{setSettlementHexIds(s.hexIds);setEditingFootprint(s);setTool('settlement');setFocus(null);setDrawerOpen(false);}}
+          onLocate={()=>{const p=r?.tokenPos(settlementToken);if(p&&r)centerOn(p.x,p.y,Math.max(r.target.zoom,1.5));}}
+          snap={(()=>{const h=settlementHex&&r?.hexById(settlementHex.id);return h?snapAt(h.cx,h.cy,2.1):()=>null;})()}/>}
+        {data && focusHex && (!settlementToken || focus?.hexRecords) && !align && !placing && (
           <HexPanel key={`hex-${focusHex.id}`} hex={focusHex} data={data} fogCampaignId={fogCamp} explored={fogQ.data?.includes(focusHex.id) ?? false}
             interiorFooter={interiors.sidebar(focusHex.id)} label={r?.label(focusHex) ?? ''} onClose={() => setFocus(null)} onFocus={setFocus}
             snap={(() => { const h = r?.hexById(focusHex.id); return h ? snapAt(h.cx, h.cy, 2.1) : () => null; })()} />
         )}
-        {data && focusToken && !align && !player && !placing && (
+        {data && focusToken && !settlementToken && !align && !player && !placing && (
           <TokenPanel key={`tok-${focusToken.id}`} token={focusToken} data={data} onClose={() => setFocus(null)} onFocus={setFocus}
             onInfluence={setSettlementInfluence}
             onFootprint={s=>{setSettlementHexIds(s.hexIds);setEditingFootprint(s);setTool('settlement');setFocus(null);setDrawerOpen(false);}}

@@ -1,8 +1,8 @@
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { Db } from '../db/index.js';
-import { campaignFog, campaigns, interiorPositions, claims, factions, hexes, mapArt, mapModel, maps, settlements, tokens, type ArtPlacement } from '../db/schema.js';
+import type { Db, DbOrTx } from '../db/index.js';
+import { campaignFog, campaigns, interiorPositions, claims, factions, hexes, mapArt, mapModel, maps, settlements, settlementHexes, tokens, type ArtPlacement } from '../db/schema.js';
 import { badRequest, logEvent, notFound, worldDay } from '../history.js';
 import { getWorld, Uuid } from './worlds.js';
 import { gridBounds, hexLabel, type Orientation } from '../../shared/hex.js';
@@ -13,11 +13,13 @@ import { changed } from '../live.js';
 import { TOKEN_KIND_KEYS, settlementSize } from '../../shared/markers.js';
 import { visibleTokens, accessFor, forbidden } from '../tokenAccess.js';
 import { validateTokenRefs } from './pieces.js';
+import { defaultProfile } from '../../shared/settlements.js';
+import { lockSettlements, validateFootprint } from './settlements.js';
 import { ensureSheets } from '../rules.js';
 
 type P = { w: string; id: string };
 
-export async function rootMap(db: Db, worldId: string) {
+export async function rootMap(db: DbOrTx, worldId: string) {
   const m = await db.query.maps.findFirst({ where: and(eq(maps.worldId, worldId), isNull(maps.parentHexId)) });
   if (!m) throw notFound('Map');
   return m;
@@ -74,10 +76,12 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
       db.select(artMeta).from(mapArt).where(eq(mapArt.mapId, map.id)),
       db.select(modelMeta).from(mapModel).where(eq(mapModel.mapId, map.id)),
     ]);
+    const footprints = settlementRows.length ? await db.select().from(settlementHexes).where(inArray(settlementHexes.settlementId, settlementRows.map(s => s.id))) : [];
+    const places = settlementRows.map(s => ({ ...s, hexIds: footprints.filter(h => h.settlementId === s.id).map(h => h.hexId), ...(req.userRole === 'player' ? { notes: '' } : {}) }));
     const shown = await visibleTokens(db, req, w.id, tokenRows);
     await ensureSheets(db,w.id);
     const access = req.userRole === 'player' ? await accessFor(db, req.userId!, w.id) : null;
-    return { map: { ...map, art: artRows[0] ?? null, model: modelRows[0] ?? null }, hexes: req.userRole === 'player' ? hexRows.map(h => ({ ...h, notes: '' })) : hexRows, claims: claimRows, tokens: shown, settlements: req.userRole === 'player' ? settlementRows.filter(s => shown.some(t => t.settlementId === s.id)) : settlementRows, factions: factionRows, campaigns: access ? campaignRows.filter(c => c.id === access.campaignId) : campaignRows, playerFactionId: access?.factionId ?? null, playerCampaignId: access?.campaignId ?? null };
+    return { map: { ...map, art: artRows[0] ?? null, model: modelRows[0] ?? null }, hexes: req.userRole === 'player' ? hexRows.map(h => ({ ...h, notes: '' })) : hexRows, claims: claimRows, tokens: shown, settlements: req.userRole === 'player' ? places.filter(s => shown.some(t => t.settlementId === s.id)) : places, factions: factionRows, campaigns: access ? campaignRows.filter(c => c.id === access.campaignId) : campaignRows, playerFactionId: access?.factionId ?? null, playerCampaignId: access?.campaignId ?? null };
   });
 
   const HexPatch = z.object({
@@ -255,17 +259,21 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     if (body.mainParty && await db.query.tokens.findFirst({ where: and(eq(tokens.factionId, body.factionId!), eq(tokens.mainParty, true)) })) throw badRequest('This faction already has its main party token.');
     const map = await rootMap(db, w.id);
     if (body.hexId) await worldHexes(db, w.id, [body.hexId]);
-    let settlementId: string | undefined;
-    if (settlementSize(body.kind)) {
-      const [s] = await db.insert(settlements).values({
-        worldId: w.id, name: body.name, size: settlementSize(body.kind), factionId: body.factionId ?? null,
-      }).returning();
-      settlementId = s.id;
-    }
-    const [row] = await db.insert(tokens).values({ ...body, worldId: w.id, mapId: map.id, settlementId, trail: body.hexId ? [{ hexId: body.hexId, day: w.currentDay, at: new Date().toISOString() }] : [] }).returning();
+    const row = await db.transaction(async tx => {
+      let settlementId: string | undefined;
+      if (settlementSize(body.kind)) {
+        await lockSettlements(tx, w.id);
+        if (body.hexId) await validateFootprint(tx,w.id,[body.hexId]);
+        const [s] = await tx.insert(settlements).values({ worldId: w.id, name: body.name, size: settlementSize(body.kind), factionId: body.factionId ?? null, data: { profile: defaultProfile(body.kind) } }).returning();
+        settlementId = s.id;
+        if (body.hexId) await tx.insert(settlementHexes).values({settlementId,hexId:body.hexId});
+      }
+      const [row] = await tx.insert(tokens).values({ ...body, worldId: w.id, mapId: map.id, settlementId, trail: body.hexId ? [{ hexId: body.hexId, day: w.currentDay, at: new Date().toISOString() }] : [] }).returning();
+      return row;
+    });
     await ensureSheets(db,w.id,row.id);
     // Settlement types bring a details row, so screens refetch the map for both.
-    changed(req, settlementId ? { scopes: ['map'] } : { patches: [{ op: 'token', token: row }] });
+    changed(req, row.settlementId ? { scopes: ['map'] } : { patches: [{ op: 'token', token: row }] });
     await logEvent(db, { worldId: w.id, kind: 'token.created', summary: `${cap(body.kind)} "${body.name}" placed`, payload: { tokenId: row.id, hexId: body.hexId } });
     return row;
   });
@@ -277,6 +285,9 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     const tok = await db.query.tokens.findFirst({ where: and(eq(tokens.id, Uuid.parse(id)), eq(tokens.worldId, w.id)) });
     if (!tok) throw notFound('Token');
     const body = TokenPatch.parse(req.body);
+    if (tok.settlementId && body.factionId !== undefined && body.factionId !== tok.factionId) throw badRequest('Change the ruling faction on the settlement sheet.');
+    if (tok.settlementId && (body.hexId !== undefined && body.hexId !== tok.hexId || body.kind !== undefined && body.kind !== tok.kind)) throw badRequest('Edit the settlement footprint or type in its settlement sheet.');
+
     if (tok.mainParty && (body.hexId === null || body.visibleToPlayers === false || body.mainParty === false || (body.kind !== undefined && body.kind !== 'party') || (body.factionId !== undefined && body.factionId !== tok.factionId))) throw badRequest('The main party must remain on the map, visible and assigned to its faction.');
     if (body.mainParty && (!(body.hexId ?? tok.hexId) || (body.visibleToPlayers ?? tok.visibleToPlayers) === false)) throw badRequest('Choose a starting hex and keep the main party visible.');
     await validateTokenRefs(db, w.id, { ...tok, ...body });
@@ -284,8 +295,12 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     // Direct GM repositioning is recorded as a break, never an invented path.
     const trail = body.hexId !== undefined && body.hexId !== tok.hexId ? [...tok.trail, { hexId: null, day: w.currentDay, at: new Date().toISOString() }, ...(body.hexId ? [{ hexId: body.hexId, day: w.currentDay, at: new Date().toISOString() }] : [])] : tok.trail;
     const row = await db.transaction(async tx => {
+      if (tok.settlementId) await lockSettlements(tx,w.id);
       await tx.select().from(tokens).where(eq(tokens.id,tok.id)).for('update');
       if(body.hexId !== undefined && body.hexId !== tok.hexId && await tx.query.interiorPositions.findFirst({where:eq(interiorPositions.tokenId,tok.id)})) throw badRequest('Leave the interior before moving on the world map.');
+      if (tok.settlementId && (body.name || body.factionId !== undefined)) {
+        await tx.update(settlements).set({ ...(body.name ? {name:body.name} : {}), ...(body.factionId !== undefined ? {factionId:body.factionId} : {}), revision:sql`${settlements.revision}+1` }).where(eq(settlements.id,tok.settlementId));
+      }
       const [updated]=await tx.update(tokens).set({ ...body, trail, updatedAt: new Date() }).where(eq(tokens.id,tok.id)).returning();return updated;
     });
     if (body.hexId !== undefined && body.hexId !== tok.hexId) {
@@ -296,8 +311,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
         payload: { tokenId: tok.id, from: tok.hexId, to: body.hexId },
       });
     }
-    if (body.name && tok.settlementId) await db.update(settlements).set({ name: body.name }).where(eq(settlements.id, tok.settlementId));
-    changed(req, { patches: [{ op: 'token', token: row }], scopes: body.name && tok.settlementId ? ['map'] : [] });
+    changed(req, { patches: [{ op: 'token', token: row }], scopes: tok.settlementId ? ['map'] : [] });
     return row;
   });
 
@@ -308,7 +322,7 @@ export function mapRoutes(app: FastifyInstance, db: Db) {
     if (!tok) throw notFound('Token');
     if (tok.mainParty) throw badRequest('The main party must remain on the map.');
     // Removing a settlement token removes the settlement (it cascades to the token).
-    if (tok.settlementId) await db.delete(settlements).where(eq(settlements.id, tok.settlementId));
+    if (tok.settlementId) await db.transaction(async tx=>{await lockSettlements(tx,w.id);await tx.delete(settlements).where(eq(settlements.id,tok.settlementId!));});
     else await db.delete(tokens).where(eq(tokens.id, tok.id));
     changed(req, tok.settlementId ? { scopes: ['map'] } : { patches: [{ op: 'tokenGone', id: tok.id }] });
     await logEvent(db, { worldId: w.id, kind: 'token.removed', summary: `${cap(tok.kind)} "${tok.name}" removed`, payload: { token: tok } });

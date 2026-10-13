@@ -22,6 +22,7 @@ import { __iconData as pickaxe } from 'lucide-react/dist/esm/icons/pickaxe.mjs';
 import { __iconData as tent } from 'lucide-react/dist/esm/icons/tent.mjs';
 import { __iconData as anchor } from 'lucide-react/dist/esm/icons/anchor.mjs';
 import { __iconData as gem } from 'lucide-react/dist/esm/icons/gem.mjs';
+import { isSettlementKind } from '../../../shared/settlements';
 import type { TokenKind } from '../types';
 
 type IconNode = [string, Record<string, string>][];
@@ -46,6 +47,7 @@ function iconPath(node: IconNode): Path2D {
 }
 
 const ICONS: Record<TokenKind, Path2D> = {
+  hamlet: iconPath(house.node as IconNode), metropolis: iconPath(castle.node as IconNode), military_base: iconPath(shield.node as IconNode),
   city: iconPath(castle.node as IconNode),
   outpost: iconPath(towerControl.node as IconNode),
   party: iconPath(compass.node as IconNode),
@@ -63,7 +65,7 @@ const MAJOR_CITY_ICON = iconPath(crown.node as IconNode);
 export const FLAG_ICON = iconPath(flag.node as IconNode);
 
 /** On-screen radius in CSS px for each kind, at the reference zoom. */
-export const MARKER_RADIUS: Record<TokenKind, number> = { city: 17, outpost: 13, party: 14, unit: 12, character: 11, marker: 10,
+export const MARKER_RADIUS: Record<TokenKind, number> = { hamlet: 14, metropolis: 18, military_base: 16, city: 17, outpost: 13, party: 14, unit: 12, character: 11, marker: 10,
   town: 14, village: 12, dungeon: 13, ruins: 13, fortress: 15, tower: 13, temple: 13, cave: 12, mine: 12, camp: 12, port: 13, landmark: 12 };
 
 const cache = new Map<string, HTMLCanvasElement>();
@@ -106,6 +108,7 @@ function shade(hex: string, amt: number) {
  * Settlements are shields-in-a-ring, movers are round medallions, the party is a gilded compass.
  */
 export function markerSprite(kind: TokenKind, color: string, r: number, dpr: number, major = false): { canvas: HTMLCanvasElement; pad: number } {
+  if (isSettlementKind(kind)) { const canvas=settlementBadge(kind,color,dpr,major); return {canvas,pad:0}; }
   const px = Math.max(4, Math.round(r * dpr));
   const pad = Math.ceil(px * 0.6);
   const k = `${kind}|${color}|${px}|${major}`;
@@ -173,4 +176,16 @@ function outline(g: CanvasRenderingContext2D, kind: TokenKind, r: number) {
     g.quadraticCurveTo(-w * 0.95, bot * 0.75, -w, mid);
     g.closePath();
   } else g.arc(0, 0, r, 0, Math.PI * 2);
+}
+
+/** A walled skyline plaque, deliberately wider and flatter than a POI diamond. */
+export function settlementBadge(kind: TokenKind,color:string,dpr:number,capital=false) {
+  const k=`settlement|${kind}|${color}|${dpr}|${capital}`;
+  const cached=cache.get(k);if(cached)return cached;
+  const c=document.createElement('canvas');c.width=c.height=Math.ceil(56*dpr);
+  const g=c.getContext('2d')!;g.scale(dpr,dpr);g.translate(28,28);
+  g.shadowColor='rgba(0,0,0,.8)';g.shadowBlur=5;g.fillStyle='rgba(9,21,29,.96)';g.strokeStyle=color;g.lineWidth=1.8;
+  g.beginPath();g.moveTo(-23,18);g.lineTo(-23,-6);g.lineTo(-18,-6);g.lineTo(-18,-14);g.lineTo(-12,-14);g.lineTo(-12,-6);g.lineTo(-6,-6);g.lineTo(-6,-18);g.lineTo(0,-24);g.lineTo(6,-18);g.lineTo(6,-6);g.lineTo(12,-6);g.lineTo(12,-14);g.lineTo(18,-14);g.lineTo(18,-6);g.lineTo(23,-6);g.lineTo(23,18);g.closePath();g.fill();g.shadowBlur=0;g.stroke();
+  g.fillStyle=color;g.fillRect(-22,14,44,3);drawPlaceGlyph(g,kind,capital,0,3,21,'#f4ead4');
+  cache.set(k,c);return c;
 }

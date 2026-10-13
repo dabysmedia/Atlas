@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
 import { wikiPages, wikiLinks, mapModel, maps, appMeta, worlds } from '../server/db/schema';
 import { WEATHER_KINDS, rollWeather, type WeatherKind } from '../shared/weather';
+import { defaultProfile } from '../shared/settlements';
 import { TOKEN_KINDS, isNotableKind } from '../shared/markers';
 
 const URL = process.env.TEST_DATABASE_URL ?? 'postgres://postgres@localhost:5432/atlas_test';
@@ -332,13 +333,52 @@ describe('worlds', () => {
   });
 });
 
+describe('settlement geography and sheets',()=>{
+  it('creates, edits and removes a multihex settlement atomically while preserving geography and lore',async()=>{
+    const w=(await call('POST','/api/worlds',{name:'Settlement QA',cols:6,rows:6})).body,path=`/api/worlds/${w.id}`;
+    const before=(await call('GET',`${path}/map`)).body;
+    const a=before.hexes.find((h:any)=>h.q===1&&h.r===1),b=before.hexes.find((h:any)=>h.q===2&&h.r===1),c=before.hexes.find((h:any)=>h.q===3&&h.r===1),far=before.hexes.find((h:any)=>h.q===5&&h.r===0);
+    const faction=(await call('POST',`${path}/factions`,{name:'Rulers'})).body;
+    const foreign=(await call('POST','/api/worlds',{name:'Foreign settlements',cols:4,rows:4})).body;
+    const other=(await call('POST',`/api/worlds/${foreign.id}/factions`,{name:'Foreign faction'})).body;
+    const create=(name:string,hexIds:string[],factionId=faction.id)=>call('POST',`${path}/settlements`,{name,type:'military_base',factionId,hexIds});
+    expect((await create('Detached',[a.id,far.id])).status).toBe(400);
+    expect((await create('Foreign',[a.id],other.id)).status).toBe(400);
+    const created=await create('Watchgate',[a.id,b.id,a.id]);expect(created.status).toBe(200);
+    const {settlement,token}=created.body;expect(settlement.hexIds).toEqual([a.id,b.id]);expect(token.settlementId).toBe(settlement.id);expect(token.modelId).toBeNull();
+    const overlaps=await Promise.all([create('Overlap one',[b.id]),create('Overlap two',[a.id])]);expect(overlaps.map(r=>r.status)).toEqual([400,400]);
+    expect((await call('POST',`${path}/tokens`,{kind:'city',name:'Older endpoint overlap',hexId:a.id})).status).toBe(400);
+    const endpoint=`${path}/settlements/${settlement.id}`,profile={...defaultProfile('city'),capital:true,description:'A walled river city',government:'Council',leader:'Marshal',services:'Healers and markets'};
+    expect((await call('PATCH',endpoint,{profile})).status).toBe(400);
+    let edited=await call('PATCH',endpoint,{revision:settlement.revision,name:'Watchgate City',size:'city',population:8200,profile,notes:'GM secret',hexIds:[b.id,c.id],anchorHexId:c.id});expect(edited.status).toBe(200);
+    expect((await call('PATCH',endpoint,{revision:settlement.revision,population:1})).status).toBe(409);
+    expect((await call('PATCH',endpoint,{revision:edited.body.revision,factionId:other.id})).status).toBe(400);
+    expect((await call('PATCH',`${path}/tokens/${token.id}`,{hexId:a.id})).status).toBe(400);
+    const after=(await call('GET',`${path}/map`)).body,updated=after.tokens.find((t:any)=>t.id===token.id);
+    expect(updated).toMatchObject({name:'Watchgate City',kind:'city',hexId:c.id,factionId:faction.id});
+    expect(after.hexes).toEqual(before.hexes);expect(after.claims).toEqual(before.claims);
+    const next=(await create('Second capital',[a.id])).body;
+    expect((await call('PATCH',`${path}/settlements/${next.settlement.id}`,{revision:next.settlement.revision,profile:{...defaultProfile(),capital:true}})).status).toBe(400);
+    const camp=await call('POST',`${path}/tokens`,{kind:'camp',name:'A POI within town',hexId:b.id});expect(camp.status).toBe(200);expect(camp.body.settlementId).toBeNull();
+    const player=(await call('POST',`${path}/players`,{username:`settlement-player-${Date.now()}`,password:'settlement-pass-123',factionId:faction.id})).body;
+    const login=await app.inject({method:'POST',url:'/api/auth/login',payload:{username:player.username,password:'settlement-pass-123'}}),playerCookie=String(login.headers['set-cookie']).split(';')[0];
+    const playerMap=await app.inject({method:'GET',url:`${path}/map`,headers:{cookie:playerCookie}});expect(playerMap.json().settlements.find((s:any)=>s.id===settlement.id).notes).toBe('');
+    const denied=await app.inject({method:'PATCH',url:endpoint,headers:{cookie:playerCookie},payload:{population:1}});expect(denied.statusCode).toBe(403);
+    expect((await call('DELETE',`${path}/tokens/${token.id}`)).status).toBe(200);
+    const gone=(await call('GET',`${path}/map`)).body;expect(gone.hexes).toEqual(before.hexes);expect(gone.settlements.some((s:any)=>s.id===settlement.id)).toBe(false);expect(gone.tokens.some((t:any)=>t.id===camp.body.id)).toBe(true);
+    expect((await create('Reclaimed',[b.id,c.id])).status).toBe(200);
+    await call('DELETE',`${path}`);await call('DELETE',`/api/worlds/${foreign.id}`);
+  });
+});
+
 describe('notable places', () => {
   it('persists every place type and major-city designation without changing hexes', async () => {
-    const w = (await call('POST', '/api/worlds', { name: 'Places test', cols: 4, rows: 4 })).body;
+    const w = (await call('POST', '/api/worlds', { name: 'Places test', cols: 6, rows: 4 })).body;
     const before = (await call('GET', `/api/worlds/${w.id}/map`)).body;
+    let placeIndex=0;
     for (const type of TOKEN_KINDS.filter(t => isNotableKind(t.kind))) {
       const res = await call('POST', `/api/worlds/${w.id}/tokens`, {
-        kind: type.kind, name: `Test ${type.label}`, hexId: before.hexes[0].id,
+        kind: type.kind, name: `Test ${type.label}`, hexId: before.hexes[placeIndex++].id,
         data: { majorCity: type.kind === 'city', unresolved: true },
       });
       expect(res.status).toBe(200);
@@ -352,8 +392,8 @@ describe('notable places', () => {
     }
     const after = (await call('GET', `/api/worlds/${w.id}/map`)).body;
     expect(after.hexes).toEqual(before.hexes);
-    expect(after.tokens).toHaveLength(14);
-    expect(after.settlements.map((s: { size: string }) => s.size).sort()).toEqual(['city', 'outpost', 'town', 'village']);
+    expect(after.tokens).toHaveLength(TOKEN_KINDS.filter(t=>isNotableKind(t.kind)).length);
+    expect(after.settlements.map((s: { size: string }) => s.size).sort()).toEqual(['city', 'metropolis', 'outpost', 'town', 'village', 'village', 'village']);
     expect((await call('POST', `/api/worlds/${w.id}/tokens`, { kind: 'unknown', name: 'No' })).status).toBe(400);
     expect((await call('POST', `/api/worlds/${w.id}/tokens`, { kind: 'city', name: 'No', data: { majorCity: 'yes' } })).status).toBe(400);
     await call('DELETE', `/api/worlds/${w.id}`);

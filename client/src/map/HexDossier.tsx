@@ -75,7 +75,7 @@ export function HexDossier({ hex, data, fogCampaignId, explored, label, onClose,
   const TerrainIcon = terrainIcon(props.terrain), accent = terrain?.color ?? world.accent;
   const claims = data.claims.filter(c => c.hexId === hex.id), control = claims.find(c => c.kind === 'control'), others = claims.filter(c => c.kind !== 'control');
   const controlling = data.factions.find(f => f.id === control?.factionId), campaign = data.campaigns.find(c => c.id === fogCampaignId);
-  const present = data.tokens.filter(t => t.hexId === hex.id), places = present.filter(t => isNotableKind(t.kind)), pieces = present.filter(t => !isNotableKind(t.kind));
+  const present = data.tokens.filter(t => t.hexId === hex.id || t.settlementId && data.settlements.some(s=>s.id===t.settlementId && s.hexIds.includes(hex.id))), places = present.filter(t => isNotableKind(t.kind)), pieces = present.filter(t => !isNotableKind(t.kind));
   const patchDraft = (patch: Partial<HexPresentation>) => setDraft(d => d ? { ...d, ...patch } : d);
   const patchHex = (patch: Partial<HexFields>) => setDraft(d => d ? { ...d, hex: { ...d.hex, ...patch } } : d);
   const patchResource = (id: string, patch: Partial<HexResource>) => setDraft(d => d ? { ...d, resources: d.resources.map(r => r.id === id ? { ...r, ...patch } : r) } : d);

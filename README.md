@@ -40,6 +40,35 @@ The hub delivers in-process, which suits the single Railway replica. Its `LiveBu
 `LISTEN/NOTIFY` or Redis would go for more than one. Player sockets receive cache invalidations rather than raw
 GM patches, and never receive ephemeral drag coordinates. Their map reads filter hidden tokens and campaign fog.
 
+## Settlements
+
+Choose **Settlements** in the map tool dock (shortcut **6**), click or paint connected hexes, then **Create settlement**.
+Choose a type and ruling faction, name the place, and found it. Supported types are hamlet, village, town, city,
+metropolis, outpost, and military base. The tool's directory opens existing settlements; **Edit hex footprint**
+adds or removes hexes later. A hex can belong to one newly designated settlement, and can also contain ordinary POIs.
+Existing settlement records and their original locations survive the migration, including older overlapping locations.
+
+Settlements use a faction-colored skyline plaque rather than a POI diamond. **Appearance** can upload or select a
+GLB miniature (10 MB maximum); the model replaces the badge once ready in the detailed view, with a badge fallback
+in overview or if loading fails. Settlement miniatures rest on the terrain without the moving tokens' idle wobble.
+
+The sheet separates **settlement type** (civilian or military identity) from **Kingmaker tier** (village, town, city,
+metropolis). **Development** records structures in four-lot urban blocks, residential lots, rubble, consumption
+modifiers, and activity item bonuses. It calculates settlement level, consumption, maximum item bonus, influence,
+and housing-related Unrest using the [Kingmaker settlement rules](https://2e.aonprd.com/Rules.aspx?ID=1819).
+Map hex footprint does not imply an urban block count or population. Exact population and level overrides are editable.
+Structure names, types, and effects are entered from the campaign's rules; this is not a structure compendium or an automated kingdom turn.
+
+Additional fields cover government, leaders, demographics, languages, religions, services, trade, threats, defenses,
+water/walled borders, island bridges, founding day, linked wiki lore, and private GM notes. Each faction can have one
+capital. **Show influence** highlights claimed hexes within range (all claimed territory for capital structure benefits).
+Designation and ruler changes do not rewrite terrain or transfer faction control; manage control with the Control tool.
+Faction inspectors summarize population, settlement consumption, and housing Unrest contributions.
+
+Players can read visible settlement sheets and models but cannot edit them or read GM notes. Changes sync to other
+screens, use revision checks to protect sheets from concurrent overwrites, and are recorded in the chronicle.
+Removing a settlement removes its footprint and structures while keeping the hexes, claims, POIs, and wiki pages.
+
 ## Hex interiors
 
 Select a hex and use **Interiors → Link** at the bottom of its sidebar. Name the interior, choose a

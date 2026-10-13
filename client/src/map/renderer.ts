@@ -10,7 +10,7 @@
  * The camera eases toward a target every frame; zoom stays anchored to the cursor.
  */
 import { axialToOffset, corner, DIRS, HEX_SIZE, hexLabel, hexToPixel, key, pixelToHex, type Orientation } from '../../../shared/hex';
-import type { ArtPlacement, Claim, FactionLite, Hex, HexStateType, TerrainType, Token, TokenKind } from '../types';
+import type { ArtPlacement, Claim, FactionLite, Hex, HexStateType, TerrainType, Token, TokenKind, Settlement } from '../types';
 import { TerrainPainter, type PaintHex } from './painter';
 import { MARKER_RADIUS, markerSprite } from './markers';
 import { isMajorCity, isNotableKind } from '../../../shared/markers';
@@ -104,6 +104,9 @@ export class HexMapRenderer {
   showFog = false;
 
   hoverId: string | null = null;
+  settlements: Settlement[] = [];
+  settlementInfluence = new Set<string>();
+  settlementSelection = new Set<string>();
   selectedId: string | null = null;
   selectedTokenId: string | null = null;
   hoveredTokenId: string | null = null;
@@ -831,6 +834,16 @@ export class HexMapRenderer {
       ctx.fill(this.hexPath); ctx.stroke(this.hexPath); ctx.restore();
     }
 
+    // Draw settlement footprints on the ground in both flat and draped terrain views.
+    for (const settlement of this.settlements) {
+      const token=this.tokens.find(t=>t.settlementId===settlement.id);
+      if (!token || this.tokenVisibility(token)<0.01) continue;
+      const selected=this.selectedTokenId===token.id;
+      ctx.save();ctx.strokeStyle=this.factionColor.get(settlement.factionId??'')??'#d6b06a';ctx.lineWidth=(selected?2.6:1.3)/z;
+      for (const id of settlement.hexIds) {const h=this.byId.get(id);if(!h||this.showFog&&this.fog&&!this.fog.has(id))continue;ctx.save();ctx.translate(h.cx,h.cy);ctx.globalAlpha=selected?.8:.35;ctx.stroke(this.hexPath);ctx.globalAlpha=selected?.13:.045;ctx.fillStyle=ctx.strokeStyle;ctx.fill(this.hexPath);ctx.restore();}ctx.restore();
+    }
+    if (this.settlementInfluence.size) {ctx.save();ctx.fillStyle='rgba(143,232,226,.18)';ctx.strokeStyle='#8fe8e2';ctx.lineWidth=1/z;for(const id of this.settlementInfluence){const h=this.byId.get(id);if(h&&!(this.showFog&&this.fog&&!this.fog.has(id))){ctx.save();ctx.translate(h.cx,h.cy);ctx.fill(this.hexPath);ctx.stroke(this.hexPath);ctx.restore();}}ctx.restore();}
+    if (this.settlementSelection.size) {ctx.save();ctx.strokeStyle='#8fe8e2';ctx.fillStyle='rgba(143,232,226,.16)';ctx.lineWidth=2/z;for(const id of this.settlementSelection){const h=this.byId.get(id);if(h){ctx.save();ctx.translate(h.cx,h.cy);ctx.fill(this.hexPath);ctx.stroke(this.hexPath);ctx.restore();}}ctx.restore();}
     if (this.brushIds.size) {
       ctx.strokeStyle = 'rgba(255,255,255,0.9)';
       ctx.lineWidth = 2 / z;

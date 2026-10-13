@@ -24,6 +24,7 @@ import { fileRoutes } from './routes/files.js';
 import { interiorRoutes } from './routes/interiors.js';
 import { pieceRoutes } from './routes/pieces.js';
 import { hexPresentationRoutes } from './routes/hexPresentation.js';
+import { settlementRoutes } from './routes/settlements.js';
 import { rulesRoutes } from './routes/rules.js';
 import { ensureSheets } from './rules.js';
 import { accessFor, forbidden } from './tokenAccess.js';
@@ -91,6 +92,7 @@ export async function buildApp(opts: { databaseUrl: string; secureCookies?: bool
     interiorRoutes(api, db);
     fileRoutes(api, db);
     factionRoutes(api, db);
+    settlementRoutes(api, db);
     chronicleRoutes(api, db);
   });
 

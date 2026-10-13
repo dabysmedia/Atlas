@@ -21,7 +21,7 @@ type Patch =
   | { op: 'claimGone'; id: string }
   | { op: 'token'; token: Token }
   | { op: 'tokenGone'; id: string }
-  | { op: 'faction'; faction: { id: string; name: string; color: string } }
+  | { op: 'faction'; faction: { id: string; name: string; color: string; settlementArtStyle?: string | null } }
   | { op: 'fog'; campaignId: string; hexIds: string[]; explored: boolean }
   | { op: 'art'; art: MapArt | null }
   | { op: 'model'; model: MapModel | null }

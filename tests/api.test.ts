@@ -1178,3 +1178,26 @@ describe('uploaded file manager', () => {
     await call('DELETE',path);
   });
 });
+
+
+describe('faction settlement architecture', () => {
+  it('persists automatic and custom styles, survives renames, and exposes changes to map clients', async () => {
+    const w=(await call('POST','/api/worlds',{name:'Faction architecture',cols:4,rows:4})).body,path=`/api/worlds/${w.id}`;
+    try {
+      const mendoza=(await call('POST',`${path}/factions`,{name:'Casa de Mendoza'})).body;
+      expect(mendoza.settlementArtStyle).toBe('mendoza');
+      expect((await call('PATCH',`${path}/factions/${mendoza.id}`,{name:'Sun Coast Company'})).body.settlementArtStyle).toBe('mendoza');
+      const custom=(await call('POST',`${path}/factions`,{name:'Free scholars',settlementArtStyle:'dupont'})).body;
+      expect(custom.settlementArtStyle).toBe('dupont');
+      const canopy=(await call('POST',`${path}/factions`,{name:'The Canopy People'})).body;
+      expect(canopy.settlementArtStyle).toBe('canopy');
+      expect((await call('PATCH',`${path}/factions/${custom.id}`,{settlementArtStyle:'qadir'})).status).toBe(200);
+      let map=(await call('GET',`${path}/map`)).body;
+      expect(map.factions.find((f:any)=>f.id===custom.id).settlementArtStyle).toBe('qadir');
+      expect(map.factions.find((f:any)=>f.id===mendoza.id).settlementArtStyle).toBe('mendoza');
+      expect((await call('PATCH',`${path}/factions/${custom.id}`,{settlementArtStyle:'nonexistent'})).status).toBe(400);
+      expect((await call('PATCH',`${path}/factions/${mendoza.id}`,{settlementArtStyle:'generic'})).body.settlementArtStyle).toBe('generic');
+      expect((await call('PATCH',`${path}/factions/${custom.id}`,{settlementArtStyle:null})).body.settlementArtStyle).toBeNull();
+    } finally { await call('DELETE',path); }
+  });
+});

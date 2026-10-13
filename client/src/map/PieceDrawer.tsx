@@ -8,6 +8,7 @@ import type { MapData, Token } from '../types';
 import { useWorld } from '../world';
 import { toastError } from '../components/toast';
 import { MarkerIcon } from './panels';
+import { settlementArtUrl, settlementUsesExistingTrees } from '../../../shared/settlementArt';
 import { settlementGround } from './settlementGround';
 import { TokenPreview } from './TokenPreview';
 import { AddToken } from './AddToken';
@@ -82,13 +83,14 @@ export function PieceControls({ token, data, onMove, mode = 'all' }: { token: To
     try { await api(`/api/worlds/${world.id}/tokens/${token.id}`, { method: 'PATCH', body }); } catch (e) { toastError(e); }
     finally { await qc.invalidateQueries({ queryKey: qk.map(world.id) }); }
   };
+  const trees=!!token.settlementId&&settlementUsesExistingTrees(data.factions.find(f=>f.id===token.factionId));
   const canMove = !player || token.factionId === data.playerFactionId && ['party', 'unit', 'character', 'marker'].includes(token.kind);
   return <div className="piece-controls">
     {mode !== 'appearance' && canMove && !token.hexId && <button className="btn" onClick={onMove}><Footprints size={14} />{token.hexId ? 'Move to next hex' : 'Deploy on a hex'}</button>}
     {mode !== 'appearance' && canMove && token.hexId && <p className="faint">Select the token, then click a highlighted hex or drag it there.</p>}
     {!player && mode !== 'journey' && <>
       <label className="toggle"><input type="checkbox" aria-label="Visible to players" disabled={token.mainParty || visibility !== null} checked={visibility ?? token.visibleToPlayers} onChange={e => { const visible = e.target.checked; setVisibility(visible); void patch({ visibleToPlayers: visible }).finally(() => setVisibility(null)); }} />{(visibility ?? token.visibleToPlayers) ? <Eye size={14} /> : <EyeOff size={14} />} Visible to players</label>
-      <div className="field">Appearance<div className="token-appearance-grid"><button className={`token-preset ${!token.modelId?'on':''}`} aria-label={token.settlementId?"Use 2D ground art":"Use 2D indicator"} aria-pressed={!token.modelId} onClick={()=>void patch({modelId:null})}>{token.settlementId?<GroundArtPreview token={token} data={data}/>:<MarkerIcon kind={token.kind} color={data.factions.find(f=>f.id===token.factionId)?.color??'#d6b06a'} size={30}/>}<span>{token.settlementId?'2D ground art':'2D indicator'}</span></button>{models.data?.map(m=><button key={m.id} className={`token-preset ${token.modelId===m.id?'on':''}`} aria-label={`Use miniature ${m.name}`} aria-pressed={token.modelId===m.id} onClick={()=>void patch({modelId:m.id})}><TokenPreview token={{...token,modelId:m.id,name:m.name}} color={data.factions.find(f=>f.id===token.factionId)?.color??'#d6b06a'}/><span>{m.name.replace(/\.glb$/i,'')}</span></button>)}</div></div>
+      <div className="field">Appearance<div className="token-appearance-grid"><button className={`token-preset ${!token.modelId?'on':''}`} aria-label={trees?"Use existing map trees":token.settlementId?"Use 2D ground art":"Use 2D indicator"} aria-pressed={!token.modelId} onClick={()=>void patch({modelId:null})}>{token.settlementId?<GroundArtPreview token={token} data={data}/>:<MarkerIcon kind={token.kind} color={data.factions.find(f=>f.id===token.factionId)?.color??'#d6b06a'} size={30}/>}<span>{trees?'Existing map trees':token.settlementId?'2D ground art':'2D indicator'}</span></button>{models.data?.map(m=><button key={m.id} className={`token-preset ${token.modelId===m.id?'on':''}`} aria-label={`Use miniature ${m.name}`} aria-pressed={token.modelId===m.id} onClick={()=>void patch({modelId:m.id})}><TokenPreview token={{...token,modelId:m.id,name:m.name}} color={data.factions.find(f=>f.id===token.factionId)?.color??'#d6b06a'}/><span>{m.name.replace(/\.glb$/i,'')}</span></button>)}</div></div>
       {token.modelId && <div className={miniatureStatus?.state === 'error' ? 'miniature-error' : 'faint'} role="status">{!token.hexId ? 'Miniature will load when deployed.' : miniatureStatus?.state === 'ready' ? '3D miniature ready' : miniatureStatus?.state === 'error' ? <>{miniatureStatus.message}<button className="btn ghost sm" onClick={() => retryMiniature(token.worldId, token.modelId!)}>Retry miniature</button></> : 'Loading 3D miniature…'}</div>}
       <label className="btn"><Box size={14} />{busy ? 'Uploading…' : 'Upload GLB miniature'}<input type="file" accept=".glb" hidden disabled={busy} onChange={async e => {
         const file = e.target.files?.[0]; e.target.value = ''; if (!file) return; setBusy(true);
@@ -104,7 +106,9 @@ export function PieceControls({ token, data, onMove, mode = 'all' }: { token: To
 }
 
 function GroundArtPreview({token,data}:{token:Token;data:MapData}) {
-  const ref=useRef<HTMLCanvasElement>(null), color=data.factions.find(f=>f.id===token.factionId)?.color??'#d6b06a';
+  const faction=data.factions.find(f=>f.id===token.factionId), color=faction?.color??'#d6b06a';
+  const ref=useRef<HTMLCanvasElement>(null), url=settlementArtUrl(faction,token.kind), [failed,setFailed]=useState<string|null>(null);
   useLayoutEffect(()=>{const canvas=ref.current;if(canvas){const ctx=canvas.getContext('2d')!;ctx.clearRect(0,0,256,256);ctx.drawImage(settlementGround(token.kind,color,data.map.layout.orientation),0,0);}},[token.kind,color,data.map.layout.orientation]);
-  return <canvas ref={ref} width={256} height={256} aria-hidden="true" style={{width:40,height:40}}/>;
+  if(settlementUsesExistingTrees(faction)) return <span aria-label="Existing map trees" style={{fontSize:26}}>♧</span>;
+  return <>{url&&failed!==url&&<img src={url} alt="" width={40} height={40} onError={()=>setFailed(url)}/>}<canvas ref={ref} width={256} height={256} aria-hidden="true" style={{width:40,height:40,display:url&&failed!==url?'none':undefined}}/></>;
 }

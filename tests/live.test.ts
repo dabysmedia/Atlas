@@ -144,13 +144,13 @@ describe('broadcasts', () => {
     await b.next((m) => m.t === 'presence');
     await self.next((m) => m.t === 'presence');
     const f = (await call('GET', `/api/worlds/${worldA}/factions`)).body[0];
-    expect((await call('PATCH', `/api/worlds/${worldA}/factions/${f.id}`, { name: 'Renamed Company' }, 'tab-1')).status).toBe(200);
+    expect((await call('PATCH', `/api/worlds/${worldA}/factions/${f.id}`, { name: 'Renamed Company', settlementArtStyle: 'dupont' }, 'tab-1')).status).toBe(200);
     const m = await a.next(isChange(worldA));
     expect(m).not.toHaveProperty('origin');
-    // The map only needs the faction's name and color, so it is patched rather than refetched.
+    // The faction's identity and architecture are patched into other maps without a refetch.
     expect(m.t === 'change' && m.scopes).toContain('factions');
     expect(m.t === 'change' && m.scopes).not.toContain('map');
-    expect(m.t === 'change' && m.patches).toEqual([{ op: 'faction', faction: { id: f.id, name: 'Renamed Company', color: f.color } }]);
+    expect(m.t === 'change' && m.patches).toEqual([{ op: 'faction', faction: { id: f.id, name: 'Renamed Company', color: f.color, settlementArtStyle: 'dupont' } }]);
     await quiet();
     expect(b.msgs.filter((x) => x.t === 'change')).toHaveLength(0);
     expect(self.msgs.filter((x) => x.t === 'change')).toHaveLength(0);

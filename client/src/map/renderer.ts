@@ -11,7 +11,9 @@
  */
 import { axialToOffset, corner, DIRS, HEX_SIZE, hexLabel, hexToPixel, key, pixelToHex, type Orientation } from '../../../shared/hex';
 import type { ArtPlacement, Claim, FactionLite, Hex, HexStateType, TerrainType, Token, TokenKind, Settlement } from '../types';
+import { SettlementArtwork } from './settlementArtwork';
 import { settlementGround } from './settlementGround';
+import { settlementUsesExistingTrees } from '../../../shared/settlementArt';
 import { TerrainPainter, type PaintHex } from './painter';
 import { MARKER_RADIUS, markerSprite } from './markers';
 import { isMajorCity, isNotableKind } from '../../../shared/markers';
@@ -58,6 +60,7 @@ export type Layers = {
 };
 
 export class HexMapRenderer {
+  private settlementArtwork=new SettlementArtwork(()=>this.invalidate());
   canvas: HTMLCanvasElement;
   protected ctx: CanvasRenderingContext2D;
   protected dpr = 1;
@@ -145,7 +148,7 @@ export class HexMapRenderer {
     document.fonts?.ready.then(() => this.invalidate());
   }
 
-  destroy() { cancelAnimationFrame(this.raf); this.painter.clear(); }
+  destroy() { cancelAnimationFrame(this.raf); this.painter.clear(); this.settlementArtwork.destroy(); }
 
   resize(w: number, h: number) {
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -841,7 +844,20 @@ export class HexMapRenderer {
       if (!token || this.tokenVisibility(token)<0.01) continue;
       const selected=this.selectedTokenId===token.id;
       ctx.save();ctx.strokeStyle=this.factionColor.get(settlement.factionId??'')??'#d6b06a';ctx.lineWidth=(selected?2.6:1.3)/z;
-      for (const id of settlement.hexIds) {const h=this.byId.get(id);if(!h||!inView(h)||this.showFog&&this.fog&&!this.fog.has(id))continue;ctx.save();ctx.translate(h.cx,h.cy);if(!(this.settlementUsesModel(token)&&h.id===token.hexId)){ctx.globalAlpha=token.visibleToPlayers?1:.65;ctx.drawImage(settlementGround(token.kind,ctx.strokeStyle as string,this.o),-HEX_SIZE,-HEX_SIZE,HEX_SIZE*2,HEX_SIZE*2);}ctx.globalAlpha=selected?.8:.35;ctx.stroke(this.hexPath);ctx.globalAlpha=selected?.13:.045;ctx.fillStyle=ctx.strokeStyle;ctx.fill(this.hexPath);ctx.restore();}ctx.restore();
+      const faction=this.factions.find(f=>f.id===settlement.factionId);
+      for (const id of settlement.hexIds) {
+        const h=this.byId.get(id);
+        if(!h||!inView(h)||this.showFog&&this.fog&&!this.fog.has(id))continue;
+        ctx.save();ctx.translate(h.cx,h.cy);
+        if(!settlementUsesExistingTrees(faction)&&!(this.settlementUsesModel(token)&&h.id===token.hexId)) {
+          ctx.globalAlpha=token.visibleToPlayers?1:.65;
+          const art=this.settlementArtwork.image(faction,token.kind);
+          ctx.drawImage(settlementGround(token.kind,ctx.strokeStyle as string,this.o,art),-HEX_SIZE,-HEX_SIZE,HEX_SIZE*2,HEX_SIZE*2);
+        }
+        ctx.globalAlpha=selected?.8:.35;ctx.stroke(this.hexPath);
+        ctx.globalAlpha=selected?.13:.045;ctx.fillStyle=ctx.strokeStyle;ctx.fill(this.hexPath);ctx.restore();
+      }
+      ctx.restore();
     }
     if (this.settlementInfluence.size) {ctx.save();ctx.fillStyle='rgba(143,232,226,.18)';ctx.strokeStyle='#8fe8e2';ctx.lineWidth=1/z;for(const id of this.settlementInfluence){const h=this.byId.get(id);if(h&&!(this.showFog&&this.fog&&!this.fog.has(id))){ctx.save();ctx.translate(h.cx,h.cy);ctx.fill(this.hexPath);ctx.stroke(this.hexPath);ctx.restore();}}ctx.restore();}
     if (this.settlementSelection.size) {ctx.save();ctx.strokeStyle='#8fe8e2';ctx.fillStyle='rgba(143,232,226,.16)';ctx.lineWidth=2/z;for(const id of this.settlementSelection){const h=this.byId.get(id);if(h){ctx.save();ctx.translate(h.cx,h.cy);ctx.fill(this.hexPath);ctx.stroke(this.hexPath);ctx.restore();}}ctx.restore();}

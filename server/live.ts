@@ -32,7 +32,7 @@ export type Patch =
   | { op: 'token'; token: Row }
   | { op: 'tokenGone'; id: string }
   /** A faction's name and color, as the map shows them. */
-  | { op: 'faction'; faction: { id: string; name: string; color: string } }
+  | { op: 'faction'; faction: { id: string; name: string; color: string; settlementArtStyle?: string | null } }
   | { op: 'fog'; campaignId: string; hexIds: string[]; explored: boolean }
   | { op: 'art'; art: Row | null }
   | { op: 'model'; model: Row | null }

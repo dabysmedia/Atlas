@@ -8,6 +8,7 @@ import type { MapData, Token } from '../types';
 import { useWorld } from '../world';
 import { toastError } from '../components/toast';
 import { MarkerIcon } from './panels';
+import { settlementGround } from './settlementGround';
 import { TokenPreview } from './TokenPreview';
 import { AddToken } from './AddToken';
 import { useMiniatureStatus, retryMiniature } from '../map3d/modelStatus';
@@ -87,7 +88,7 @@ export function PieceControls({ token, data, onMove, mode = 'all' }: { token: To
     {mode !== 'appearance' && canMove && token.hexId && <p className="faint">Select the token, then click a highlighted hex or drag it there.</p>}
     {!player && mode !== 'journey' && <>
       <label className="toggle"><input type="checkbox" aria-label="Visible to players" disabled={token.mainParty || visibility !== null} checked={visibility ?? token.visibleToPlayers} onChange={e => { const visible = e.target.checked; setVisibility(visible); void patch({ visibleToPlayers: visible }).finally(() => setVisibility(null)); }} />{(visibility ?? token.visibleToPlayers) ? <Eye size={14} /> : <EyeOff size={14} />} Visible to players</label>
-      <div className="field">Appearance<div className="token-appearance-grid"><button className={`token-preset ${!token.modelId?'on':''}`} aria-label="Use 2D indicator" aria-pressed={!token.modelId} onClick={()=>void patch({modelId:null})}><MarkerIcon kind={token.kind} color={data.factions.find(f=>f.id===token.factionId)?.color??'#d6b06a'} size={30}/><span>2D indicator</span></button>{models.data?.map(m=><button key={m.id} className={`token-preset ${token.modelId===m.id?'on':''}`} aria-label={`Use miniature ${m.name}`} aria-pressed={token.modelId===m.id} onClick={()=>void patch({modelId:m.id})}><TokenPreview token={{...token,modelId:m.id,name:m.name}} color={data.factions.find(f=>f.id===token.factionId)?.color??'#d6b06a'}/><span>{m.name.replace(/\.glb$/i,'')}</span></button>)}</div></div>
+      <div className="field">Appearance<div className="token-appearance-grid"><button className={`token-preset ${!token.modelId?'on':''}`} aria-label={token.settlementId?"Use 2D ground art":"Use 2D indicator"} aria-pressed={!token.modelId} onClick={()=>void patch({modelId:null})}>{token.settlementId?<GroundArtPreview token={token} data={data}/>:<MarkerIcon kind={token.kind} color={data.factions.find(f=>f.id===token.factionId)?.color??'#d6b06a'} size={30}/>}<span>{token.settlementId?'2D ground art':'2D indicator'}</span></button>{models.data?.map(m=><button key={m.id} className={`token-preset ${token.modelId===m.id?'on':''}`} aria-label={`Use miniature ${m.name}`} aria-pressed={token.modelId===m.id} onClick={()=>void patch({modelId:m.id})}><TokenPreview token={{...token,modelId:m.id,name:m.name}} color={data.factions.find(f=>f.id===token.factionId)?.color??'#d6b06a'}/><span>{m.name.replace(/\.glb$/i,'')}</span></button>)}</div></div>
       {token.modelId && <div className={miniatureStatus?.state === 'error' ? 'miniature-error' : 'faint'} role="status">{!token.hexId ? 'Miniature will load when deployed.' : miniatureStatus?.state === 'ready' ? '3D miniature ready' : miniatureStatus?.state === 'error' ? <>{miniatureStatus.message}<button className="btn ghost sm" onClick={() => retryMiniature(token.worldId, token.modelId!)}>Retry miniature</button></> : 'Loading 3D miniature…'}</div>}
       <label className="btn"><Box size={14} />{busy ? 'Uploading…' : 'Upload GLB miniature'}<input type="file" accept=".glb" hidden disabled={busy} onChange={async e => {
         const file = e.target.files?.[0]; e.target.value = ''; if (!file) return; setBusy(true);
@@ -100,4 +101,10 @@ export function PieceControls({ token, data, onMove, mode = 'all' }: { token: To
       const h = data.hexes.find(h => h.id === v.hexId); return <li key={i}>{h ? h.name || `Hex ${h.q}, ${h.r}` : 'Trail break / off-map'} <span className="faint">· Day {v.day}</span></li>;
     })}</ol></details>}
   </div>;
+}
+
+function GroundArtPreview({token,data}:{token:Token;data:MapData}) {
+  const ref=useRef<HTMLCanvasElement>(null), color=data.factions.find(f=>f.id===token.factionId)?.color??'#d6b06a';
+  useLayoutEffect(()=>{const canvas=ref.current;if(canvas){const ctx=canvas.getContext('2d')!;ctx.clearRect(0,0,256,256);ctx.drawImage(settlementGround(token.kind,color,data.map.layout.orientation),0,0);}},[token.kind,color,data.map.layout.orientation]);
+  return <canvas ref={ref} width={256} height={256} aria-hidden="true" style={{width:40,height:40}}/>;
 }

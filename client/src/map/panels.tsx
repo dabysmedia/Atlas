@@ -25,7 +25,7 @@ export { TOKEN_KINDS } from '../../../shared/markers';
 
 const KIND_LABEL = Object.fromEntries(TOKEN_KINDS.map((k) => [k.kind, k.label])) as Record<TokenKind, string>;
 
-export type Focus = { kind: 'hex' | 'token' | 'faction'; id: string };
+export type Focus = { kind: 'hex' | 'token' | 'faction'; id: string; hexRecords?: boolean };
 
 /** Notes that read as text and become an editor on click; autosave while typing. */
 function Notes({ value, onSave, placeholder }: { value: string; onSave: (v: string) => void; placeholder: string }) {

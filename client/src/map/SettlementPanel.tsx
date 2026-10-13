@@ -1,19 +1,22 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Building2, Crown, Pencil, Plus, Trash2, Crosshair } from 'lucide-react';
 import { api, qk } from '../api';
 import { useWorld } from '../world';
-import type { MapData, Settlement, Token } from '../types';
-import { distance } from '../../../shared/hex';
+import type { Hex, MapData, Settlement, Token } from '../types';
+import { distance, hexLabel } from '../../../shared/hex';
 import { KINGMAKER, ProfileSchema, profileFor, SETTLEMENT_TYPES, settlementStats, tierFor, TIERS, type SettlementProfile, type SettlementStructure } from '../../../shared/settlements';
 import { Panel, PanelArt, Section } from './PanelPrimitives';
 import { PieceControls, usePlayer } from './PieceDrawer';
 import { Dialog } from '../components/Dialog';
 import { toastError } from '../components/toast';
 import { usePageIndex } from '../wiki/usePages';
+import { isNotableKind, TOKEN_KINDS } from '../../../shared/markers';
+import type { Focus } from './panels';
 import { Link } from 'react-router-dom';
 
-export function SettlementPanel({ token, data, onClose, snap, onLocate, onFootprint, onInfluence }: {
+export function SettlementPanel({ token, data, onClose, snap, onLocate, onFootprint, onInfluence, hex, onFocus, onHexDetails, interiorFooter }: {
+  hex?: Hex; onFocus?: (f: Focus) => void; onHexDetails?: () => void; interiorFooter?: ReactNode;
   token: Token; data: MapData; onClose: () => void; snap: () => string | null; onLocate: () => void; onFootprint: (s: Settlement) => void; onInfluence: (ids: string[]) => void;
 }) {
   const settlement=data.settlements.find(s=>s.id===token.settlementId)!;
@@ -23,6 +26,8 @@ export function SettlementPanel({ token, data, onClose, snap, onLocate, onFootpr
   const [draft,setDraft]=useState<Settlement>({...settlement,size:tierFor(settlement.size)}), [profile,setProfile]=useState(profileFor(settlement));
   const p=editing?profile:profileFor(settlement), s=editing?draft:settlement, stats=settlementStats(s.size,p);
   const footprint=data.hexes.filter(h=>settlement.hexIds.includes(h.id));
+  const selectedHex=hex ?? footprint.find(h=>h.id===token.hexId) ?? footprint[0];
+  const localTokens=data.tokens.filter(t=>!t.settlementId&&t.hexId===selectedHex?.id);
   const claimed=new Set(data.claims.filter(c=>c.kind==='control'&&c.factionId===settlement.factionId).map(c=>c.hexId));
   const influenced=data.hexes.filter(h=>claimed.has(h.id)&&(p.capital||footprint.some(f=>distance(f,h)<=stats.influence))).map(h=>h.id);
   const faction=data.factions.find(f=>f.id===s.factionId), color=faction?.color ?? '#d6b06a';
@@ -34,10 +39,11 @@ export function SettlementPanel({ token, data, onClose, snap, onLocate, onFootpr
   const numberField=(k:'level'|'kingdomLevel'|'foundedDay'|'consumptionAdjustment'|'waterBorders'|'walledBorders',label:string,min:number,max:number,nullable=false)=><label className="field">{label}<input className="input" type="number" min={min} max={max} placeholder={nullable?'Automatic / unknown':''} value={p[k]??''} onChange={e=>field(k,e.target.value===''&&nullable?null:Number(e.target.value))}/></label>;
   const updateStructure=(id:string,change:Partial<SettlementStructure>)=>field('structures',p.structures.map(s=>s.id===id?{...s,...change}:s));
   return <Panel onClose={onClose} className="settlement-panel">
-    <PanelArt snap={snap} deps={[token.id,settlement.revision]} onClose={onClose} tint={color}><span className="art-chip"><Building2 size={15}/>{p.capital?'Capital settlement':'Settlement'}</span></PanelArt>
+    <PanelArt snap={snap} deps={[token.id,settlement.revision,selectedHex?.id]} onClose={onClose} tint={color}><span className="art-chip"><Building2 size={15}/>{p.capital?'Capital settlement':'Settlement'}</span></PanelArt>
     <div className="panel-head"><div className="panel-title static">{settlement.name}</div><div className="panel-sub"><span>{SETTLEMENT_TYPES.find(t=>t.key===p.type)?.label}</span><span className="dot"/><span>{settlement.hexIds.length} hex{settlement.hexIds.length===1?'':'es'}</span>{p.capital&&<Crown size={14}/>}</div></div>
-    <div className="settlement-tabs" role="tablist" aria-label="Settlement sheet">{['overview','development','details','appearance'].map(t=><button key={t} role="tab" aria-selected={tab===t} className={`btn ghost sm ${tab===t?'on':''}`} onClick={()=>setTab(t)}>{t[0].toUpperCase()+t.slice(1)}</button>)}</div>
+    <div className="settlement-tabs" role="tablist" aria-label="Settlement sheet">{['overview','development','locations','details','appearance'].map(t=><button key={t} role="tab" aria-selected={tab===t} className={`btn ghost sm ${tab===t?'on':''}`} onClick={()=>setTab(t)}>{t[0].toUpperCase()+t.slice(1)}</button>)}</div>
     <div className="panel-body scroll">
+      {selectedHex&&<div className="settlement-hex-context"><span>Hex {hexLabel(selectedHex.q,selectedHex.r,data.map.layout.orientation)} · {SETTLEMENT_TYPES.find(t=>t.key===p.type)?.label} district</span>{onHexDetails&&<button className="btn ghost sm" onClick={onHexDetails}>Hex records</button>}</div>}
       {!player&&<div className="row settlement-edit-actions">{editing?<><button className="btn" disabled={busy||!draft.name.trim()} onClick={save}>{busy?'Saving…':'Save settlement'}</button><button className="btn ghost" disabled={busy} onClick={()=>setEditing(false)}>Cancel edits</button></>:<><button className="btn" onClick={begin}><Pencil size={14}/>Edit settlement</button><button className="btn ghost" onClick={()=>onFootprint(settlement)}>Edit hex footprint</button></>}</div>}
       {tab==='overview'&&<>
         {editing&&<div className="settlement-form"><label className="field">Settlement name<input className="input" value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})}/></label><label className="field">Settlement type<select className="select" aria-label="Settlement type" value={p.type} onChange={e=>field('type',e.target.value as SettlementProfile['type'])}>{SETTLEMENT_TYPES.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select></label><label className="field">Kingmaker tier<select className="select" value={tierFor(s.size)} onChange={e=>setDraft({...draft,size:e.target.value})}>{TIERS.map(t=><option key={t} value={t}>{t}</option>)}</select></label><label className="field">Ruling faction<select className="select" value={s.factionId??''} onChange={e=>setDraft({...draft,factionId:e.target.value||null})}><option value="">Independent / unknown</option>{data.factions.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}</select></label><label className="field">Population<input className="input" type="number" min="0" max="2000000000" value={s.population??''} placeholder="Unknown" onChange={e=>setDraft({...draft,population:e.target.value===''?null:Number(e.target.value)})}/></label><label className="toggle"><input type="checkbox" checked={p.capital} onChange={e=>field('capital',e.target.checked)}/><Crown size={14}/>Faction capital</label></div>}
@@ -62,8 +68,14 @@ export function SettlementPanel({ token, data, onClose, snap, onLocate, onFootpr
         {!!Object.keys(stats.bonuses).length&&<Section title="Activity item bonuses">{Object.entries(stats.bonuses).map(([activity,bonus])=><div className="prop" key={activity}><span>{activity}</span><b>+{bonus}</b></div>)}</Section>}
         <a className="link-like" href="https://2e.aonprd.com/Rules.aspx?ID=1819" target="_blank" rel="noreferrer">Kingmaker settlement rules</a>
       </>}
+      {tab==='locations'&&<>
+        <Section title="Settlement hexes"><div className="row" style={{flexWrap:'wrap'}}>{footprint.map(h=><button key={h.id} className={`btn ghost sm ${selectedHex?.id===h.id?'on':''}`} onClick={()=>onFocus?.({kind:'hex',id:h.id})}>Hex {hexLabel(h.q,h.r,data.map.layout.orientation)}</button>)}</div></Section>
+        <Section title="Places in this district">{localTokens.filter(t=>isNotableKind(t.kind)).map(t=><button key={t.id} className="btn ghost" onClick={()=>onFocus?.({kind:'token',id:t.id})}>{TOKEN_KINDS.find(k=>k.kind===t.kind)?.label} · {t.name}</button>)}{!localTokens.some(t=>isNotableKind(t.kind))&&<p className="faint">No points of interest recorded in this district.</p>}</Section>
+        {!!localTokens.some(t=>!isNotableKind(t.kind))&&<Section title="People and pieces">{localTokens.filter(t=>!isNotableKind(t.kind)).map(t=><button key={t.id} className="btn ghost" onClick={()=>onFocus?.({kind:'token',id:t.id})}>{t.name}</button>)}</Section>}
+        {interiorFooter}
+      </>}
       {tab==='details'&&<><Section title="Life and economy">{(['services','trade','demographics','languages','religions','threats','defenses'] as const).map(k=>textField(k,k[0].toUpperCase()+k.slice(1)))}{!editing&&!['services','trade','demographics','languages','religions','threats','defenses'].some(k=>p[k as keyof SettlementProfile])&&<p className="faint">No local details recorded yet.</p>}</Section>{editing&&numberField('foundedDay','Founded on campaign day',0,2000000000,true)}{p.foundedDay!==null&&!editing&&<p className="faint">Founded on day {p.foundedDay}</p>}<Section title="Lore">{editing?<label className="field">Wiki page<select className="select" value={s.wikiPageId??''} onChange={e=>setDraft({...draft,wikiPageId:e.target.value||null})}><option value="">No linked page</option>{pages.data?.map(page=><option key={page.id} value={page.id}>{page.title}</option>)}</select></label>:s.wikiPageId?<Link className="btn ghost" to={`/w/${world.id}/wiki/${s.wikiPageId}`}>Open settlement lore</Link>:<p className="faint">No linked lore page.</p>}</Section>{!player&&<Section title="GM notes">{editing?<textarea className="textarea" aria-label="Settlement GM notes" rows={5} value={s.notes} onChange={e=>setDraft({...draft,notes:e.target.value})}/>:<p className="settlement-prose">{s.notes||'No private notes.'}</p>}</Section>}</>}
-      {tab==='appearance'&&<Section title="Map appearance"><PieceControls token={token} data={data} onMove={()=>{}} mode="appearance"/><p className="faint">The default skyline badge distinguishes settlements from POI diamonds. A 3D model replaces the badge when loaded; its name remains visible.</p></Section>}
+      {tab==='appearance'&&<Section title="Map appearance"><PieceControls token={token} data={data} onMove={()=>{}} mode="appearance"/><p className="faint">The default ground art covers every settlement hex with streets and buildings. Villages have fields and homes; military settlements have fortified compounds. A 3D model replaces the art on the anchor hex when loaded; the name remains visible.</p></Section>}
       {!player&&!editing&&<div className="panel-actions"><button className="btn ghost danger" onClick={()=>setRemove(true)}><Trash2 size={14}/>Remove settlement</button></div>}
     </div>
     <Dialog open={remove} onClose={()=>setRemove(false)} title={`Remove ${settlement.name}?`}><p>The sheet, structures, and footprint will be removed. Terrain, faction control, and linked lore are kept.</p><div className="actions"><button className="btn ghost" onClick={()=>setRemove(false)}>Keep</button><button className="btn danger-solid" disabled={busy} onClick={async()=>{setBusy(true);try{await api(`/api/worlds/${world.id}/tokens/${token.id}`,{method:'DELETE'});await refresh();onClose();}catch(e){toastError(e);}finally{setBusy(false);}}}>Remove settlement</button></div></Dialog>

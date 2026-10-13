@@ -30,7 +30,7 @@ export class Miniatures {
     const ease = 1 - Math.exp(-dt * 14);
     const byId = new Map(tokens.map(t => [t.id,t]));
     const peers = new Map<string,number>();
-    for (const token of tokens) if (token.hexId) { const key = `${token.hexId}/${isNotableKind(token.kind)}`; peers.set(key,(peers.get(key) ?? 0)+1); }
+    for (const token of tokens) if (token.hexId && !token.settlementId) { const key = `${token.hexId}/${isNotableKind(token.kind)}`; peers.set(key,(peers.get(key) ?? 0)+1); }
     const wanted = new Set(tokens.filter(t => t.hexId && t.modelId).map(t => t.id));
     for (const [id, piece] of this.pieces) if (!wanted.has(id) || byId.get(id)?.modelId !== piece.modelId) { this.group.remove(piece.object); this.pieces.delete(id); }
     for (const token of tokens) {
@@ -63,7 +63,7 @@ export class Miniatures {
       }
       const p = pos(token);
       if (p) {
-        const count = peers.get(`${token.hexId}/${isNotableKind(token.kind)}`) ?? 1;
+        const count = token.settlementId ? 1 : peers.get(`${token.hexId}/${isNotableKind(token.kind)}`) ?? 1;
         const radius = count > 1 ? HEX_SIZE * 0.38 : 0;
         const maxFootprint = count > 1 ? Math.min(HEX_SIZE * 1.64 - radius * 2, radius * 3.6 * Math.sin(Math.PI / count)) : HEX_SIZE * 1.64;
         const hover = token.id === interaction.hovered;

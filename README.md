@@ -48,8 +48,8 @@ metropolis, outpost, and military base. The tool's directory opens existing sett
 adds or removes hexes later. A hex can belong to one newly designated settlement, and can also contain ordinary POIs.
 Existing settlement records and their original locations survive the migration, including older overlapping locations.
 
-Settlements use a faction-colored skyline plaque rather than a POI diamond. **Appearance** can upload or select a
-GLB miniature (10 MB maximum); the model replaces the badge once ready in the detailed view, with a badge fallback
+Settlements convert their occupied hexes into settlement districts, with faction-colored ground art covering each hex. Clicking any district opens the settlement sheet; **Locations** lists district POIs and local maps, and **Hex records** opens the underlying geographic dossier. **Appearance** can upload or select a
+GLB miniature (10 MB maximum); the model replaces the anchor hex ground art once ready in the detailed view. Ground art remains
 in overview or if loading fails. Settlement miniatures rest on the terrain without the moving tokens' idle wobble.
 
 The sheet separates **settlement type** (civilian or military identity) from **Kingmaker tier** (village, town, city,

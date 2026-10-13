@@ -39,7 +39,7 @@ import { GridProjection, GRID_GLSL } from './gridProjection';
 import { isNotableKind, isMajorCity } from '../../../shared/markers';
 import { FactionLabels, type LabelPlace, type LabelSpot } from './labels3d';
 import type { CardAnchor, FactionArea } from '../map/FactionCard';
-import { drawPlaceGlyph, placeDiamond } from '../map/markers';
+import { drawPlaceGlyph, placeDiamond, settlementBadge } from '../map/markers';
 import { drawTokenNameplate, tokenNameplateSize } from './tokenNameplate';
 import { markerSprite } from '../map/markers';
 import { Miniatures } from './miniatures';
@@ -642,7 +642,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     this.layoutPlaces();
     for (const tile of [...this.placeTiles].reverse()) {
       if (tile.alpha < 0.05) continue;
-      if (Math.abs(sx - tile.x) + Math.abs(sy - tile.y) <= 23) return tile.token;
+      if (!(this.miniatureMode() && this.miniatures.has(tile.token.id)) && (tile.token.settlementId ? Math.abs(sx-tile.x)<=24 && Math.abs(sy-tile.y)<=25 : Math.abs(sx - tile.x) + Math.abs(sy - tile.y) <= 23)) return tile.token;
     }
     for (const tile of [...this.placeTiles].reverse()) {
       if (tile.alpha < 0.05) continue;
@@ -658,7 +658,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     const hud = this.ctx;
     hud.save(); hud.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     // Every deployed token uses its actual recent visits, with no routes across placement breaks.
-    for (const token of this.tokens.filter(t => this.showTokenTrails && t.hexId)) {
+    for (const token of this.tokens.filter(t => this.showTokenTrails && t.hexId && !t.settlementId)) {
       const visits = recentTokenTrail(token.trail ?? [], id => this.byId.get(id));
       const color = new THREE.Color(token.color ?? this.factionColor.get(token.factionId ?? '') ?? '#d6b06a');
       const css = color.getStyle();
@@ -716,12 +716,14 @@ export class HexMapRenderer3D extends HexMapRenderer {
         tether.addColorStop(0, 'rgba(214,176,106,0.08)'); tether.addColorStop(1, 'rgba(214,176,106,0.5)');
         ctx.strokeStyle = tether; ctx.beginPath(); ctx.moveTo(tile.gx, tile.gy); ctx.lineTo(tile.x, tile.y + 22); ctx.stroke();
       }
-      if (this.selectedTokenId === tile.token.id) {
+      if (this.selectedTokenId === tile.token.id && !(this.miniatureMode() && this.miniatures.has(tile.token.id))) {
         ctx.strokeStyle = '#8fe8e2'; ctx.lineWidth = 2; ctx.shadowColor = '#8fe8e2'; ctx.shadowBlur = 8;
-        ctx.beginPath(); ctx.moveTo(tile.x, tile.y - 26); ctx.lineTo(tile.x + 26, tile.y); ctx.lineTo(tile.x, tile.y + 26); ctx.lineTo(tile.x - 26, tile.y); ctx.closePath(); ctx.stroke(); ctx.shadowBlur = 0;
+        ctx.beginPath(); if(tile.token.settlementId) ctx.roundRect(tile.x-26,tile.y-27,52,50,5); else { ctx.moveTo(tile.x, tile.y - 26); ctx.lineTo(tile.x + 26, tile.y); ctx.lineTo(tile.x, tile.y + 26); ctx.lineTo(tile.x - 26, tile.y); ctx.closePath(); } ctx.stroke(); ctx.shadowBlur = 0;
       }
-      const sprite = placeDiamond(tile.token.kind, tile.color, this.dpr, isMajorCity(tile.token));
-      ctx.drawImage(sprite, tile.x - 28, tile.y - 28, 56, 56);
+      if (!(this.miniatureMode() && this.miniatures.has(tile.token.id))) {
+        const sprite = tile.token.settlementId ? settlementBadge(tile.token.kind,tile.color,this.dpr,this.settlements.some(s=>s.id===tile.token.settlementId&&(s.data.profile as {capital?:boolean})?.capital)) : placeDiamond(tile.token.kind, tile.color, this.dpr, isMajorCity(tile.token));
+        ctx.drawImage(sprite, tile.x - 28, tile.y - 28, 56, 56);
+      }
       ctx.font = "600 12px 'EB Garamond Variable', Georgia, serif";
       ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
       ctx.strokeStyle = 'rgba(6,12,17,0.95)'; ctx.lineWidth = 3; ctx.fillStyle = this.selectedTokenId === tile.token.id ? '#8fe8e2' : '#f4ead4';
@@ -733,7 +735,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
     ctx.restore();
   }
   protected tokenVisibility(token: Token) {
-    return isNotableKind(token.kind) && !isMajorCity(token) ? 1 - this.overviewAlpha() : 1;
+    return isNotableKind(token.kind) && !token.settlementId && !isMajorCity(token) ? 1 - this.overviewAlpha() : 1;
   }
 
   /** Markers behind a ridge from where the camera stands are shown faintly. */
@@ -1023,7 +1025,7 @@ export class HexMapRenderer3D extends HexMapRenderer {
   protected rebuildGlows() {
     for (const s of [...this.glows.children]) { this.glows.remove(s); ((s as THREE.Sprite).material as THREE.Material).dispose(); }
     for (const t of this.tokens) {
-      if (t.kind !== 'city' && t.kind !== 'outpost') continue;
+      if (!t.settlementId) continue;
       // Where it rests, not where a glide happens to be: glows are only rebuilt when the rows change.
       const p = this.slotPos(t);
       if (!p) continue;

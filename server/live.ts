@@ -163,7 +163,8 @@ export const ROUTE_SCOPES: Record<string, Scope[]> = {
   'POST /api/worlds/:w/campaigns': ['campaigns', 'map', 'events'],
   'PATCH /api/worlds/:w/campaigns/:id': ['campaigns', 'map'],
   'DELETE /api/worlds/:w/campaigns/:id': ['campaigns', 'map', 'fog', 'events'],
-  'PATCH /api/worlds/:w/settlements/:id': ['map'],
+  'POST /api/worlds/:w/settlements': ['map', 'events'],
+  'PATCH /api/worlds/:w/settlements/:id': ['map', 'events'],
   // chronicle
   'POST /api/worlds/:w/events': ['events'],
 };

@@ -326,12 +326,18 @@ export const settlements = pgTable('settlements', {
   name: text('name').notNull(),
   size: text('size').notNull().default('town'), // hamlet | village | town | city | metropolis | outpost
   population: integer('population'),
+  revision: integer('revision').notNull().default(1),
   factionId: uuid('faction_id').references(() => factions.id, { onDelete: 'set null' }),
   wikiPageId: uuid('wiki_page_id').references(() => wikiPages.id, { onDelete: 'set null' }),
   notes: text('notes').notNull().default(''),
   data: jsonb('data').notNull().default({}),
   createdAt: created(),
 }, (t) => [index('settlements_world_idx').on(t.worldId)]);
+
+export const settlementHexes = pgTable('settlement_hexes', {
+  settlementId: uuid('settlement_id').notNull().references(() => settlements.id, { onDelete: 'cascade' }),
+  hexId: uuid('hex_id').notNull().references(() => hexes.id, { onDelete: 'cascade' }),
+}, t => [primaryKey({ columns: [t.settlementId, t.hexId] }), index('settlement_hexes_hex_idx').on(t.hexId)]);
 
 // ---------------------------------------------------------------- roll tables
 /** A faction's table for a meter band (e.g. Morale: Fractured). */

@@ -73,11 +73,11 @@ export class Miniatures {
         // Reserve room for the hover growth so a miniature stays inside its shared-hex slot.
         piece.object.scale.setScalar(Math.min(1, maxFootprint / Math.max(piece.object.userData.footprint * 1.12, 0.001)) * grow);
         const time = interaction.now / 1000 + piece.phase;
-        const atRest = !interaction.still && interaction.dragging !== token.id;
+        const atRest = !token.settlementId && !interaction.still && interaction.dragging !== token.id;
         piece.object.rotation.set(atRest ? Math.sin(time * 0.8) * 0.012 : 0, atRest ? Math.sin(time * 0.65) * 0.025 : 0, atRest ? Math.cos(time * 0.7) * 0.012 : 0);
         piece.outline.visible = !interaction.still && (hover || token.id === interaction.selected);
         // tokenPos already includes the shared-hex slot and any movement interpolation.
-        piece.object.position.set(p.x, ground(p.x, p.y) + 5 + (atRest ? Math.sin(time * 1.1) * 0.6 : 0), p.y);
+        piece.object.position.set(p.x, ground(p.x, p.y) + (token.settlementId ? 0 : 5) + (atRest ? Math.sin(time * 1.1) * 0.6 : 0), p.y);
         piece.object.updateMatrix(); piece.bounds.copy(piece.localBounds).applyMatrix4(piece.object.matrix);
       }
     }

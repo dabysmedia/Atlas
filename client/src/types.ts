@@ -39,7 +39,7 @@ export type Token = {
   mainParty: boolean; modelId: string | null; trail: { hexId: string | null; day: number; at: string }[];
 };
 export type Settlement = {
-  id: string; name: string; size: string; population: number | null; factionId: string | null; wikiPageId: string | null; notes: string;
+  id: string; hexIds: string[]; revision: number; data: Record<string, unknown>; name: string; size: string; population: number | null; factionId: string | null; wikiPageId: string | null; notes: string;
 };
 export type FactionLite = { id: string; name: string; color: string; isParty?: boolean };
 export type CampaignLite = { id: string; name: string };

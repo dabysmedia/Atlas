@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Db } from '../db/index.js';
 import {
-  campaigns, claims, factions, meterChanges, meterDefinitions, meterValues, rollTableEntries, rollTables, settlements, tokens,
+  campaigns, claims, factions, meterChanges, meterDefinitions, meterValues, rollTableEntries, rollTables,
 } from '../db/schema.js';
 import { badRequest, logEvent, notFound, setMeter } from '../history.js';
 import { bandFor } from '../../shared/meters.js';
@@ -317,24 +317,7 @@ export function factionRoutes(app: FastifyInstance, db: Db) {
     return { ok: true };
   });
 
-  const SettlementPatch = z.object({
-    name: z.string().trim().min(1).max(120).optional(), size: z.string().max(40).optional(),
-    population: z.number().int().min(0).nullable().optional(), factionId: Uuid.nullable().optional(),
-    wikiPageId: Uuid.nullable().optional(), notes: z.string().max(20_000).optional(),
-  });
-  app.patch('/api/worlds/:w/settlements/:id', async (req) => {
-    const { w: wid, id } = req.params as P;
-    const w = await getWorld(db, wid);
-    const body = SettlementPatch.parse(req.body);
-    const [row] = await db.update(settlements).set(body).where(and(eq(settlements.id, Uuid.parse(id)), eq(settlements.worldId, w.id))).returning();
-    if (!row) throw notFound('Settlement');
-    // Keep the map token in step with the settlement it represents.
-    const tokenSet: Partial<typeof tokens.$inferInsert> = {};
-    if (body.name) tokenSet.name = body.name;
-    if (body.factionId !== undefined) tokenSet.factionId = body.factionId;
-    if (Object.keys(tokenSet).length) await db.update(tokens).set(tokenSet).where(eq(tokens.settlementId, row.id));
-    return row;
-  });
+
 }
 
 async function checkSignature(db: Db, worldId: string, meterId: string | null | undefined) {

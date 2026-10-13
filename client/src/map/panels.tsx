@@ -16,6 +16,8 @@ import { bandFor } from '../../../shared/meters';
 import { useDraft } from '../live';
 import { TOKEN_KINDS, isNotableKind, isMajorCity } from '../../../shared/markers';
 import { PieceControls } from './PieceDrawer';
+import { profileFor, settlementStats } from '../../../shared/settlements';
+import { SettlementPanel } from './SettlementPanel';
 import { TokenInspector } from './TokenInspector';
 import { Panel, PanelArt, Section, Prop, Diamond, MarkerIcon } from './PanelPrimitives';
 export { Diamond, MarkerIcon } from './PanelPrimitives';
@@ -64,11 +66,12 @@ export { HexDossier as HexPanel } from './HexDossier';
 
 // ---------------------------------------------------------------- token
 export function TokenPanel(props: Parameters<typeof MarkerPanel>[0]) {
+  if (props.token.settlementId && props.data.settlements.some(s=>s.id===props.token.settlementId)) return <SettlementPanel {...props}/>;
   return isNotableKind(props.token.kind) ? <MarkerPanel {...props}/> : <TokenInspector {...props}/>;
 }
 function MarkerPanel({ token, data, onClose, onFocus, onLocate, snap, onMove }: {
   token: Token; data: MapData; onClose: () => void; onFocus: (f: Focus) => void; onLocate: () => void; snap: () => string | null;
-  onMove: () => void;
+  onMove: () => void; onFootprint: (s: Settlement) => void; onInfluence: (ids: string[]) => void;
 }) {
   const { world, qc, patch, touch } = useMapCache();
   const navigate = useNavigate();
@@ -196,6 +199,8 @@ export function FactionPanel({ factionId, data, onClose, onFocus, snap }: {
   const held = data.claims.filter((c) => c.factionId === factionId && c.kind === 'control').length;
   const contested = new Set(data.claims.filter((c) => c.factionId === factionId && c.kind === 'contested').map((c) => c.hexId)).size;
   const places = data.tokens.filter((t) => t.factionId === factionId);
+  const holdings=data.settlements.filter(s=>s.factionId===factionId);
+  const development=holdings.map(s=>settlementStats(s.size,profileFor(s)));
   const defs = meters.data ?? [];
   const shown = f ? f.meters.map((m) => ({ m, def: defs.find((d) => d.id === m.meterId) })).filter((x) => x.def && (x.def.kind !== 'signature' || x.def.id === f.signatureMeterId)) : [];
   shown.sort((a, b) => (a.def!.id === f?.signatureMeterId ? -1 : b.def!.id === f?.signatureMeterId ? 1 : a.def!.sortOrder - b.def!.sortOrder));
@@ -227,6 +232,8 @@ export function FactionPanel({ factionId, data, onClose, onFocus, snap }: {
           })}
           {!f && <div className="faint">Loading…</div>}
         </Section>
+        {!!holdings.length && <Section title="Settlements"><div className="settlement-stat-grid"><div><small>Settlements</small><strong>{holdings.length}</strong></div><div><small>Recorded population</small><strong>{holdings.reduce((n,s)=>n+(s.population??0),0).toLocaleString()}</strong></div><div><small>Settlement consumption</small><strong>{development.reduce((n,s)=>n+s.consumption,0)}</strong></div><div><small>Unrest per turn (housing)</small><strong>{development.reduce((n,s)=>n+s.unrest,0)}</strong></div></div><p className="faint">Settlement contributions only. Apply these during your kingdom turn.</p></Section>}
+
         {!!places.length && (
           <Section title="Holdings">
             {places.map((t) => (

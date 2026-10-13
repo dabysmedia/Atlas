@@ -1,14 +1,15 @@
+import { FoundSettlement } from './SettlementPanel';
 import { TokenInspector } from './TokenInspector';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  Archive, Box, Brush, CloudFog, Eye, EyeOff, Flag, Grid3x3, Image as ImageIcon, Layers, Mountain, MousePointer2, Move,
+  Archive, Building2, Box, Brush, CloudFog, Eye, EyeOff, Flag, Grid3x3, Image as ImageIcon, Layers, Mountain, MousePointer2, Move,
   RotateCcw, Shield, Stamp, Trash2, Upload, X,
 } from 'lucide-react';
 import { api, ApiError, clientHeaders, pendingWrites, qk } from '../api';
-import type { ArchivedModel, ArtPlacement, Claim, Hex, MapArt, MapData, MapModel, Token } from '../types';
+import type { ArchivedModel, ArtPlacement, Claim, Hex, MapArt, MapData, MapModel, Settlement, Token } from '../types';
 import { useWorld } from '../world';
 import { cameraPref, fogCampaign, layerPrefs, panelPrefs, partyTrailPref } from '../prefs';
 import { HEX_SIZE, HexMapRenderer, type Camera, type Layers as RLayers } from './renderer';
@@ -31,13 +32,14 @@ import { canMoveToken, tokenDestinations } from './tokenMovement';
 const HAS_WEBGL2 = typeof document !== 'undefined' && webgl2Available();
 if (HAS_WEBGL2) void load3d().catch(() => {});
 
-type Tool = 'select' | 'terrain' | 'state' | 'claim' | 'fog';
+type Tool = 'select' | 'terrain' | 'state' | 'claim' | 'fog' | 'settlement';
 const TOOLS: ToolDef<Tool>[] = [
   { id: 'select', label: 'Inspect and move', short: 'Inspect', icon: MousePointer2, keyHint: '1' },
   { id: 'terrain', label: 'Paint terrain', short: 'Terrain', icon: Brush, keyHint: '2' },
   { id: 'state', label: 'Paint hex state', short: 'State', icon: Stamp, keyHint: '3' },
   { id: 'claim', label: 'Paint faction control', short: 'Control', icon: Shield, keyHint: '4' },
   { id: 'fog', label: 'Reveal or hide party fog', short: 'Fog', icon: Eye, keyHint: '5' },
+  { id: 'settlement', label: 'Designate settlements', short: 'Settlements', icon: Building2, keyHint: '6' },
 ];
 
 /** Cameras survive tab switches within the session; localStorage carries them across visits. */
@@ -65,7 +67,12 @@ export function MapView() {
   const r3 = () => (is3d(rendererRef.current) ? rendererRef.current : null);
   const [focus, setFocus] = useState<Focus | null>(null);
   const [tool, setTool] = useState<Tool>('select');
-  const [brush, setBrush] = useState<Record<Tool, string>>({ select: '', terrain: 'plains', state: 'settled', claim: '', fog: 'reveal' });
+  const [brush, setBrush] = useState<Record<Tool, string>>({ select: '', terrain: 'plains', state: 'settled', claim: '', fog: 'reveal', settlement: 'add' });
+  const [settlementHexIds,setSettlementHexIds]=useState<string[]>([]);
+  const [settlementInfluence,setSettlementInfluence]=useState<string[]>([]);
+  const [founding,setFounding]=useState(false);
+  const [editingFootprint,setEditingFootprint]=useState<Settlement|null>(null);
+  const [footprintBusy,setFootprintBusy]=useState(false);
   const [radius, setRadius] = useState(0);
   const [hover, setHover] = useState<{ x: number; y: number; hexId: string } | null>(null);
   const [campaignId, setCampaignId] = useState<string | null | undefined>(() => fogCampaign(world.id).get());
@@ -212,6 +219,8 @@ export function MapView() {
     return () => window.clearInterval(id);
   }, [data, world.id, gen]);
 
+  useEffect(()=>{const r=rendererRef.current;if(r){r.settlements=data?.settlements??[];r.settlementInfluence=new Set(settlementInfluence);r.settlementSelection=tool==='settlement'?new Set(settlementHexIds):new Set();r.invalidate();}},[data,settlementHexIds,settlementInfluence,tool,gen]);
+  useEffect(()=>setSettlementInfluence([]),[focus?.id]);
   // Renderer state that follows React state.
   useEffect(() => {
     const r = rendererRef.current;
@@ -311,6 +320,7 @@ export function MapView() {
   const commitStroke = async (ids: string[]) => {
     if (!ids.length || !data) return;
     try {
+      if (tool === 'settlement') { setSettlementHexIds(previous=>brush.settlement==='remove'?previous.filter(id=>!ids.includes(id)):[...new Set([...previous,...ids])]); return; }
       if (tool === 'terrain' || tool === 'state') {
         const field = tool;
         const value = brush[tool];
@@ -522,6 +532,7 @@ export function MapView() {
       if (t === 'select') {
         if (toolRef.current.placing) { mode = 'maybe-click'; return; }
         const tok = r().tokenAt(p.x, p.y);
+        if (tok?.settlementId) { setFocus({kind:'token',id:tok.id}); mode='none'; return; }
         if (tok) { if (toolRef.current.player && tok.factionId !== dataRef.current?.playerFactionId) { setFocus({ kind: 'token', id: tok.id }); mode = 'none'; return; } dragTok = tok; r().selectedTokenId = tok.id; r().moveHexIds = canMoveToken(tok, toolRef.current.player, dataRef.current?.playerFactionId) ? tokenDestinations(tok, dataRef.current?.hexes ?? []) : new Set(); r().invalidate(); mode = 'token'; hold(); return; }
         mode = 'maybe-click';
       } else {
@@ -657,7 +668,7 @@ export function MapView() {
       if ((e.target as HTMLElement)?.closest('.world-module, input, textarea, select, [contenteditable="true"]') || !rendererRef.current) return;
       if (e.code === 'Space') { space = e.type === 'keydown'; canvas.style.cursor = space ? 'grab' : ''; if (space) e.preventDefault(); return; }
       if (e.type !== 'keydown' || e.metaKey || e.ctrlKey || e.altKey) return;
-      const idx = ['1', '2', '3', '4', '5'].indexOf(e.key);
+      const idx = ['1', '2', '3', '4', '5', '6'].indexOf(e.key);
       if (idx >= 0 && (!toolRef.current.player || idx === 0)) setTool(TOOLS[idx].id);
       else if (e.key === 'Escape') { setFocus(null); setLayersOpen(false); setKeysOpen(false); setPlacing(null); }
       else if (e.key === '?') setKeysOpen((o) => !o);
@@ -767,6 +778,7 @@ export function MapView() {
       </div></div>}
       {mode === '3d' && modelState === 'loading' && <div className="map-raising"><Mountain size={13} /> Raising the island…</div>}
 
+      {data&&founding&&<FoundSettlement data={data} hexIds={settlementHexIds} onClose={()=>setFounding(false)} onCreated={id=>{setFounding(false);setSettlementHexIds([]);setTool('select');setFocus({kind:'token',id});}}/>}
       {/* Tool dock: the tool in hand, with its brushes tiling up above it. */}
       {data && !align && (
         <div className="dock-wrap">
@@ -776,6 +788,7 @@ export function MapView() {
                 transition={{ type: 'spring', stiffness: 420, damping: 32 }}>
                 <span className="brushbar-title">{TOOLS.find((t) => t.id === tool)?.label}</span>
                 <div className={`brush-list ${tool === 'claim' ? 'wide' : ''}`}>
+                  {tool === 'settlement' && <><select className="select" aria-label="Settlement directory" value="" onChange={e=>{if(e.target.value){setFocus({kind:'token',id:e.target.value});setTool('select');}}}><option value="">Settlements · {data.settlements.length}</option>{data.tokens.filter(t=>t.settlementId).map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select><span className="faint">{settlementHexIds.length} selected</span><button className={`brush ${brush.settlement==='add'?'on':''}`} onClick={()=>setBrush({...brush,settlement:'add'})}>Add hexes</button><button className={`brush ${brush.settlement==='remove'?'on':''}`} onClick={()=>setBrush({...brush,settlement:'remove'})}>Remove hexes</button><button className="btn sm" disabled={!settlementHexIds.length||footprintBusy} onClick={async()=>{if(!editingFootprint){setFounding(true);return;}setFootprintBusy(true);try{await api(`/api/worlds/${world.id}/settlements/${editingFootprint.id}`,{method:'PATCH',body:{revision:editingFootprint.revision,hexIds:settlementHexIds}});await mapQ.refetch();setTool('select');setEditingFootprint(null);setSettlementHexIds([]);}catch(e){toastError(e);}finally{setFootprintBusy(false);}}}>{editingFootprint?'Save footprint':'Create settlement'}</button><button className="btn ghost sm" onClick={()=>{setSettlementHexIds([]);setEditingFootprint(null);}}>Clear</button><span className="faint">Click or paint connected hexes. Space-drag to pan.</span></>}
                   {tool === 'terrain' && world.terrainTypes.map((t) => (
                     <button key={t.key} className={`brush ${brush.terrain === t.key ? 'on' : ''}`} onClick={() => setBrush({ ...brush, terrain: t.key })}>
                       <span className="swatch" style={{ background: t.color }} /><span className="brush-name">{t.name}</span>
@@ -813,7 +826,7 @@ export function MapView() {
               </motion.div>
             )}
           </AnimatePresence>
-          <ToolDock tools={player ? TOOLS.slice(0, 1) : TOOLS} tool={tool} onTool={setTool} />
+          <ToolDock tools={player ? TOOLS.slice(0, 1) : TOOLS} tool={tool} onTool={t=>{setTool(t);if(t==='settlement'&&!settlementHexIds.length&&focus?.kind==='hex')setSettlementHexIds([focus.id]);}} />
         </div>
       )}
       {/* Cards that open beside the control stack, including the wide token drawer. */}
@@ -1014,6 +1027,8 @@ export function MapView() {
         )}
         {data && focusToken && !align && !player && !placing && (
           <TokenPanel key={`tok-${focusToken.id}`} token={focusToken} data={data} onClose={() => setFocus(null)} onFocus={setFocus}
+            onInfluence={setSettlementInfluence}
+            onFootprint={s=>{setSettlementHexIds(s.hexIds);setEditingFootprint(s);setTool('settlement');setFocus(null);setDrawerOpen(false);}}
             onMove={() => { setTool('select'); setPlacing(focusToken); setDrawerOpen(false); }}
             onLocate={() => { const p = r?.tokenPos(focusToken); if (p && r) centerOn(p.x, p.y, Math.max(r.target.zoom, 1.5)); }}
             snap={(() => { const p = r?.tokenPos(focusToken); return p ? snapAt(p.x, p.y, 2.1) : () => null; })()} />

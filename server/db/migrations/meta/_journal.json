@@ -99,6 +99,13 @@
       "when": 1791754973661,
       "tag": "0013_hex_dossiers",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791800000000,
+      "tag": "0014_settlements",
+      "breakpoints": true
     }
   ]
 }
